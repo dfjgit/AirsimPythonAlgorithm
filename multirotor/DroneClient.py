@@ -5,6 +5,21 @@ import json
 import time
 from PIL import Image  # 仅保留PIL的Image导入，避免与tkinter冲突
 
+# 图像类型映射表，确保与AirSim的ImageType完全对应
+IMAGE_TYPE_MAPPING = {
+    "Scene",
+    "DepthPlanar",
+    "DepthPerspective",
+    "DepthVis",
+    "DisparityNormalized",
+    "Segmentation",
+    "SurfaceNormals",
+    "Infrared",
+    "OpticalFlow",
+    "OpticalFlowVis"
+}
+
+
 class DroneClient:
     def __init__(self, host='127.0.0.1', port=65432):
         self.host = host
@@ -120,7 +135,7 @@ class DroneClient:
 
 if __name__ == "__main__":
     # 创建客户端实例
-    client = DroneTestClient()
+    client = DroneClient()
     
     # 连接服务器
     if client.connect():
@@ -164,18 +179,18 @@ if __name__ == "__main__":
             time.sleep(6)  # 等待起飞完成
             
             # 查看起飞后的状态
-            client.send_command("get_state", {"vehicle_name": vehicle_name})
-            time.sleep(1)
+            # client.send_command("get_state", {"vehicle_name": vehicle_name})
+            # time.sleep(1)
             
-            # 移动到指定位置
+            # # 移动到指定位置
             print("\n===== 移动到目标位置 ====")
             client.send_command("move_to_position", {
                 "x": 10, "y": 0, "z": -5, 
-                "speed": 2, 
-                "timeout": 15,
+                "speed": 10, 
+                "timeout": 60,
                 "vehicle_name": vehicle_name
             })
-            time.sleep(6)  # 等待移动完成
+            # time.sleep(6)  # 等待移动完成
             
             # 获取当前位置
             client.send_command("get_state", {"vehicle_name": vehicle_name})
@@ -183,16 +198,20 @@ if __name__ == "__main__":
             
             # 测试图像获取
             print("\n===== 测试图像获取 ====")
+            time.sleep(2)
             image_types = ["Scene", "Segmentation", "DepthVis"]
             for img_type in image_types:
                 print(f"\n获取{img_type}类型图像...")
+                time.sleep(1)
                 response = client.send_command("get_image", {
                     "vehicle_name": vehicle_name, 
-                    "camera_name": "1", 
+                    "camera_name": "0", 
                     "image_type": img_type
                 })
                 client.save_image(response, vehicle_name, img_type)
             time.sleep(2)
+            
+            
             
 
             
@@ -214,10 +233,10 @@ if __name__ == "__main__":
             # time.sleep(6)
 
             # 降落并清理
-            print("\n===== 任务完成，准备降落 ====")
-            client.send_command("land", {"vehicle_name": "UAV1", "timeout": 20})
+            # print("\n===== 任务完成，准备降落 ====")
+            # client.send_command("land", {"vehicle_name": "UAV1", "timeout": 20})
             # client.send_command("land", {"vehicle_name": "UAV2", "timeout": 20})
-            time.sleep(6)
+            # time.sleep(6)
             
             # 上锁
             client.send_command("arm", {"arm": False, "vehicle_name": "UAV1"})

@@ -168,22 +168,28 @@ class DroneController:
         except Exception as e:
             logger.error(f"无人机{vehicle_name}移动操作失败: {str(e)}")
             return False
-
+        
     def get_image(self, vehicle_name: Optional[str] = None, camera_name: str = "0", 
-                 image_type: Any = airsim.ImageType.Scene) -> Optional[str]:
+                 image_type: Any = "Scene") -> Optional[str]:
         """获取指定相机图像并返回Base64编码"""
         vehicle_name = vehicle_name or self.default_vehicle
-        try:
-            logger.info(f"获取{vehicle_name}的{camera_name}相机图像中...")
+        try:           
             
-            if isinstance(image_type, str):
-                image_type = getattr(airsim.ImageType, image_type, airsim.ImageType.DepthVis)
-                
+            # if isinstance(image_type, str):
+            #     image_type = getattr(airsim.ImageType, image_type, airsim.ImageType.DepthVis)
+            
+            # 使用get方法获取值并提供默认值
+            image_newType = IMAGE_TYPE_MAPPING.get(image_type, None)
+            if image_newType is None:
+                image_newType = airsim.ImageType.Scene
+                logger.warning(f"未找到{image_type}对应的新类型，使用默认类型Scene")
+                 
+            logger.info(f"获取{vehicle_name}的{camera_name}相机{image_newType}类型图像中...")
             # 匹配示例中的图像获取方式
-            image_data = self.client.simGetImage(camera_name, image_type, vehicle_name=vehicle_name)
+            image_data = self.client.simGetImage(camera_name, image_newType, vehicle_name=vehicle_name)
             if image_data:
                 with Image.open(io.BytesIO(image_data)) as image:
-                    logger.info(f"图像信息 - 无人机: {vehicle_name}, 相机: {camera_name}, 类型: {image_type}, "
+                    logger.info(f"图像信息 - 无人机: {vehicle_name}, 相机: {camera_name}, 类型: {image_newType},"
                                 f"尺寸: {image.size}, 格式: {image.format}, 模式: {image.mode}")
                 return base64.b64encode(image_data).decode('utf-8')
             
@@ -438,7 +444,7 @@ if __name__ == "__main__":
     server = DroneSocketServer()
     try:
         server.start()
-    except KeyboardInterrupt:
+    except KeyboardInterrupt: #Ctrl+C停止服务器
         logger.info("收到中断信号，正在停止服务器...")
         server.stop()
     except Exception as e:
