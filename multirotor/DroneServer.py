@@ -17,7 +17,7 @@ from components.drone_controller import DroneController
 from components.data_storage import DataStorageManager
 from components.command_processor import CommandProcessor
 from components.socket_server import DroneSocketServer
-from components.unity_environment import DroneControllerWithEnv
+from components.unity_environment import DroneControllerProxy
 
 
 class DroneServer:
@@ -29,16 +29,13 @@ class DroneServer:
         # 初始化各个组件
         self.drone_controller = DroneController()
         self.data_manager = DataStorageManager()
-        self.command_processor = CommandProcessor(
-            drone_controller=self.drone_controller,
-            data_manager=self.data_manager
-        )
-        # 使用扩展的无人机控制器（包含环境数据处理功能）
-        self.extended_drone_controller = DroneControllerWithEnv(self.drone_controller)
         
-        # 重新初始化命令处理器，使用扩展的无人机控制器
+        # 使用无人机控制器代理类
+        self.drone_proxy = DroneControllerProxy(self.drone_controller)
+        
+        # 初始化命令处理器
         self.command_processor = CommandProcessor(
-            drone_controller=self.extended_drone_controller,
+            drone_controller=self.drone_proxy,
             data_manager=self.data_manager
         )
         

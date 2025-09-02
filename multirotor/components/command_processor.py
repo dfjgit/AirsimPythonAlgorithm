@@ -31,7 +31,7 @@ class CommandProcessor:
             vehicle_name = params.get("vehicle_name", self.drone_controller.default_vehicle)
 
             # 处理数据存储相关命令
-            if self.data_manager and cmd in ["store_data", "retrieve_data", "delete_data", "list_data_ids"]:
+            if self.data_manager and cmd in ["store_data", "retrieve_data", "delete_data", "list_data_ids", "clear_all_data"]:
                 return self._process_data_commands(cmd, params)
 
             # 处理无人机控制相关命令
@@ -139,5 +139,8 @@ class CommandProcessor:
             
         elif cmd == "list_data_ids":
             return self.data_manager.list_data_ids()
+            
+        elif cmd == "clear_all_data":
+            return self.data_manager.clear_all_data()
             
         return {"status": "error", "message": f"未知的数据命令: {cmd}"}
