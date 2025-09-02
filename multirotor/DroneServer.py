@@ -157,6 +157,9 @@ class DroneController:
                 logger.error(f"无人机{vehicle_name}未处于飞行状态，无法移动")
                 return False
 
+            if speed <= 0:
+                logger.error(f"无人机{vehicle_name}速度必须大于0")
+                return False
             # 执行移动（匹配示例中的API调用）
             self.client.moveToPositionAsync(
                 x, y, z, speed, vehicle_name=vehicle_name
@@ -174,9 +177,6 @@ class DroneController:
         """获取指定相机图像并返回Base64编码"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:           
-            
-            # if isinstance(image_type, str):
-            #     image_type = getattr(airsim.ImageType, image_type, airsim.ImageType.DepthVis)
             
             # 使用get方法获取值并提供默认值
             image_newType = IMAGE_TYPE_MAPPING.get(image_type, None)
@@ -239,6 +239,10 @@ class DroneSocketServer:
         self.running = False
         self.client_handlers: List[threading.Thread] = []
         self.lock = threading.Lock()
+        
+        # 新增：数据存储结构，用于数据转发功能
+        self.stored_data = {}  # 存储格式: {data_id: {content: ..., timestamp: ...}}
+        self.data_lock = threading.Lock()  # 用于多线程安全访问存储的数据
 
     def start(self) -> None:
         """启动Socket服务器"""
@@ -336,6 +340,81 @@ class DroneSocketServer:
                 return {"status": "error", "message": "命令不能为空"}
 
             vehicle_name = params.get("vehicle_name", self.drone.default_vehicle)
+
+            # 新增：数据转发相关命令处理
+            if cmd == "store_data":
+                # 存储数据：需要data_id和content参数
+                if "data_id" not in params:
+                    return {"status": "error", "message": "缺少data_id参数"}
+                if "content" not in params:
+                    return {"status": "error", "message": "缺少content参数"}
+                    
+                data_id = params["data_id"]
+                content = params["content"]
+                
+                # 使用锁确保线程安全
+                with self.data_lock:
+                    import time
+                    self.stored_data[data_id] = {
+                        "content": content,
+                        "timestamp": time.time()  # 记录存储时间戳
+                    }
+                
+                logger.info(f"已存储数据，ID: {data_id}")
+                return {
+                    "status": "success", 
+                    "message": f"数据已存储，ID: {data_id}",
+                    "data_id": data_id
+                }
+                
+            elif cmd == "retrieve_data":
+                # 获取数据：需要data_id参数
+                if "data_id" not in params:
+                    return {"status": "error", "message": "缺少data_id参数"}
+                    
+                data_id = params["data_id"]
+                
+                with self.data_lock:
+                    if data_id in self.stored_data:
+                        data = self.stored_data[data_id]
+                        return {
+                            "status": "success",
+                            "message": f"成功获取数据，ID: {data_id}",
+                            "data_id": data_id,
+                            "content": data["content"],
+                            "timestamp": data["timestamp"]
+                        }
+                    else:
+                        return {"status": "error", "message": f"未找到ID为{data_id}的数据"}
+                        
+            elif cmd == "delete_data":
+                # 删除数据：需要data_id参数
+                if "data_id" not in params:
+                    return {"status": "error", "message": "缺少data_id参数"}
+                    
+                data_id = params["data_id"]
+                
+                with self.data_lock:
+                    if data_id in self.stored_data:
+                        del self.stored_data[data_id]
+                        return {
+                            "status": "success",
+                            "message": f"已删除数据，ID: {data_id}",
+                            "data_id": data_id
+                        }
+                    else:
+                        return {"status": "error", "message": f"未找到ID为{data_id}的数据"}
+                        
+            elif cmd == "list_data_ids":
+                # 列出所有数据ID
+                with self.data_lock:
+                    data_ids = list(self.stored_data.keys())
+                    return {
+                        "status": "success",
+                        "message": f"共找到{len(data_ids)}条数据",
+                        "count": len(data_ids),
+                        "data_ids": data_ids
+                    }
 
             if cmd == "connect":
                 result = self.drone.connect()
