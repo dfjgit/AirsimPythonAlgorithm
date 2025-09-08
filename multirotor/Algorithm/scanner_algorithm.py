@@ -2,10 +2,9 @@ import json
 import os
 import math
 import time
-import json
-import Vector3
-from multirotor.Algorithm.scannerData import ScannerData
-from multirotor.Algorithm.HexGridDataModelData import HexGridDataModel, HexCellData
+from .Vector3 import Vector3
+from .scannerData import ScannerData
+from .HexGridDataModelData import HexGridDataModel, HexCellData
 
 class ScannerAlgorithm:
     def __init__(self, grid_model=None, scanner_data=None):
@@ -88,7 +87,7 @@ class ScannerAlgorithm:
             if cell.entropy > max_entropy:
                 max_entropy = cell.entropy
                 # 计算指向该蜂窝的方向向量
-                best_direction = Vector3.Vector3(cell.x - current_pos.x, 0, cell.z - current_pos.z)
+                best_direction = Vector3(cell.x - current_pos.x, 0, cell.z - current_pos.z)
                 if best_direction.magnitude() > 0.01:
                     best_direction = best_direction.normalized()
         
@@ -103,13 +102,14 @@ class ScannerAlgorithm:
     def calculate_repulsion_direction(self, data):
         """计算排斥力方向向量"""
         # 初始化排斥方向为零向量
-        collide_dir = Vector3.Vector3(0, 0, 0)
+        collide_dir = Vector3(0, 0, 0)
         
-        if data.otherScannerPositions:
+        # 检查ScannerData对象是否有otherScannerPositions属性
+        if hasattr(data, 'otherScannerPositions') and data.otherScannerPositions:
             # 计算其他扫描器的排斥力
             for scanner_pos in data.otherScannerPositions:
                 # 计算与其他扫描器的距离
-                distance = data.position.distance_to(scanner_pos)
+                distance = (data.position - scanner_pos).magnitude()
                 
                 # 如果距离过近，添加排斥力
                 if distance < data.minSafeDistance:
@@ -134,14 +134,15 @@ class ScannerAlgorithm:
     
     def calculate_leader_range_direction(self, data):
         """计算保持在Leader范围内的方向向量"""
-        leader_range_dir = Vector3.Vector3(0, 0, 0)
+        leader_range_dir = Vector3(0, 0, 0)
         
         # 检查是否有Leader
-        if data.leaderPosition is None:
+        # Vector3对象始终有值，所以我们检查其坐标是否都为0
+        if data.leaderPosition.x == 0 and data.leaderPosition.y == 0 and data.leaderPosition.z == 0:
             return leader_range_dir
         
         # 计算与Leader的距离
-        distance_to_leader = data.position.distance_to(data.leaderPosition)
+        distance_to_leader = (data.position - data.leaderPosition).magnitude()
         
         # 如果超出Leader的范围，生成指向Leader的方向向量
         if distance_to_leader > data.leaderScanRadius:
@@ -194,7 +195,7 @@ class ScannerAlgorithm:
             return
         
         # 四舍五入避免浮点数精度问题
-        rounded_center = Vector3.Vector3(
+        rounded_center = Vector3(
             round(cell_center.x * 100) / 100,
             0,
             round(cell_center.z * 100) / 100
@@ -277,20 +278,28 @@ class ScannerAlgorithm:
             data
         )
         
-        # 更新数据对象中的方向向量
+        # 更新数据对象中的所有方向向量
+        data.scoreDir = new_score_dir
+        data.pathDir = new_path_dir
+        data.collideDir = new_collide_dir
+        data.leaderRangeDir = new_leader_range_dir
+        data.directionRetentionDir = new_direction_retention_dir
         data.finalMoveDir = new_final_move_dir
         
         # 清理过期访问记录
         self.cleanup_visited_records(data.revisitCooldown, data.avoidRevisits)
         
-        # 返回最终的方向向量
-        return data.finalMoveDir
+        # 返回原始数据对象，包含所有计算后的方向向量
+        return data
 
 def main():
+    # 获取当前脚本所在目录
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # 输入输出文件路径
-    input_file = "python_input.json"
-    output_file = "python_output.json"
-    grid_data_file = "hex_grid_data.json"
+    input_file = os.path.join(current_dir, "testData", "python_input.json")
+    output_file = os.path.join(current_dir, "testData", "python_output.json")
+    grid_data_file = os.path.join(current_dir, "testData", "hex_grid_data.json")
     
     print(f"扫描器算法处理程序启动")
     print(f"输入文件: {input_file}")
@@ -324,6 +333,8 @@ def main():
         
     except Exception as e:
         print(f"处理过程中发生错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

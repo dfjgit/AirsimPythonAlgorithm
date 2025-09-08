@@ -1,6 +1,6 @@
 # // 数据模型类，用于 JSON 序列化
 import json
-import Vector3
+from .Vector3 import Vector3
 
 class HexCellData:
     """表示单个六边形蜂窝单元的数据类"""
