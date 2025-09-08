@@ -1,7 +1,1 @@
-# AirSim DroneServer 依赖项
-backports.ssl_match_hostname==3.7.0.1
-msgpack-python==0.5.6
-msgpack-rpc-python==0.4.1
-numpy==2.2.3
-opencv-python==4.11.0.86
-tornado==4.5.3
+setuptools~=59.6.0

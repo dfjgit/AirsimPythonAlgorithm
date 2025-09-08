@@ -13,11 +13,11 @@ logging.basicConfig(
 logger = logging.getLogger("DroneServer")
 
 # 导入拆分后的组件
-from components.drone_controller import DroneController
-from components.data_storage import DataStorageManager
-from components.command_processor import CommandProcessor
-from components.socket_server import DroneSocketServer
-from components.unity_environment import DroneControllerProxy
+from AirsimServer.drone_controller import DroneController
+from AirsimServer.data_storage import DataStorageManager
+from AirsimServer.command_processor import CommandProcessor
+from AirsimServer.socket_server import DroneSocketServer
+from AirsimServer.unity_environment import DroneControllerProxy
 
 
 class DroneServer:

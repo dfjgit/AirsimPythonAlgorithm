@@ -91,6 +91,22 @@ class CommandProcessor:
                 result = self.drone_controller.move_to_position(x, y, z, speed, vehicle_name)
                 return {"status": "success", "message": f"无人机{vehicle_name}已移动到({x},{y},{z})"} if result else \
                        {"status": "error", "message": f"无人机{vehicle_name}移动失败"}
+                        
+            elif cmd == "move_by_velocity":
+                required_params = ["vx", "vy", "vz"]
+                for param in required_params:
+                    if param not in params:
+                        return {"status": "error", "message": f"缺少速度参数: {param}"}
+                
+                try:
+                    vx, vy, vz = float(params["vx"]), float(params["vy"]), float(params["vz"])
+                    duration = float(params.get("duration", 3))
+                except ValueError:
+                    return {"status": "error", "message": "速度或持续时间参数不是有效的数字"}
+                    
+                result = self.drone_controller.move_by_velocity(vx, vy, vz, duration, vehicle_name)
+                return {"status": "success", "message": f"无人机{vehicle_name}移动向量({vx},{vy},{vz})，持续时间{duration}秒"} if result else \
+                       {"status": "error", "message": f"无人机{vehicle_name}速度移动失败"}
 
             elif cmd == "get_image":
                 camera_name = params.get("camera_name", "0")
