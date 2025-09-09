@@ -109,7 +109,8 @@ DroneServer是一个基于Socket通信的无人机控制服务器，提供了与
 **请求参数**: 
 ```json
 {
-  "vehicle_name": "UAV1"  // 可选，指定无人机名称
+  "vehicle_name": "UAV1",  // 可选，指定无人机名称
+  "timeout_sec": 30  // 可选，超时时间（秒），默认为30
 }
 ```
 
@@ -123,7 +124,8 @@ DroneServer是一个基于Socket通信的无人机控制服务器，提供了与
 **请求参数**: 
 ```json
 {
-  "vehicle_name": "UAV1"  // 可选，指定无人机名称
+  "vehicle_name": "UAV1",  // 可选，指定无人机名称
+  "timeout_sec": 30  // 可选，超时时间（秒），默认为30
 }
 ```
 
@@ -141,7 +143,8 @@ DroneServer是一个基于Socket通信的无人机控制服务器，提供了与
   "y": 20.0,  // Y坐标
   "z": -5.0,  // Z坐标（负值表示高度）
   "speed": 3.0,  // 可选，移动速度，默认为3
-  "vehicle_name": "UAV1"  // 可选，指定无人机名称
+  "vehicle_name": "UAV1",  // 可选，指定无人机名称
+  "timeout_sec": 30  // 可选，超时时间（秒），默认为30
 }
 ```
 
@@ -159,7 +162,8 @@ DroneServer是一个基于Socket通信的无人机控制服务器，提供了与
   "vy": 0.0,  // Y方向速度
   "vz": 0.0,  // Z方向速度
   "duration": 3.0,  // 可选，持续时间（秒），默认为3
-  "vehicle_name": "UAV1"  // 可选，指定无人机名称
+  "vehicle_name": "UAV1",  // 可选，指定无人机名称
+  "timeout_sec": 30  // 可选，超时时间（秒），默认为30
 }
 ```
 
@@ -219,7 +223,13 @@ DroneServer是一个基于Socket通信的无人机控制服务器，提供了与
 
 DroneServer提供了通用的数据存储与转发功能，允许客户端存储、检索和管理任意类型的数据。这些功能可以用于在不同客户端之间共享数据，或临时存储需要在多个操作之间保持的数据。
 
-#### 5.4.1 store_data - 存储数据
+#### 5.4.1 数据交互配置常量
+
+服务器使用以下常量进行特定类型的数据交互：
+- `UNITY_DATA_KEY = "unity_data"` - 用于存储和检索来自Unity环境的数据
+- `CALCULATED_MOVEMENT_KEY = "calculated_movement"` - 用于存储和检索计算出的移动路径数据
+
+#### 5.4.2 store_data - 存储数据
 
 **功能说明**: 将任意JSON格式的数据存储到服务器中，返回唯一标识符。
 
@@ -240,7 +250,7 @@ DroneServer提供了通用的数据存储与转发功能，允许客户端存储
 }
 ```
 
-#### 5.4.2 retrieve_data - 获取存储的数据
+#### 5.4.3 retrieve_data - 获取存储的数据
 
 **功能说明**: 根据数据标识检索之前存储的数据内容。
 
@@ -262,7 +272,7 @@ DroneServer提供了通用的数据存储与转发功能，允许客户端存储
 }
 ```
 
-#### 5.4.3 delete_data - 删除存储的数据
+#### 5.4.4 delete_data - 删除存储的数据
 
 **功能说明**: 删除指定标识的数据。
 
@@ -282,7 +292,7 @@ DroneServer提供了通用的数据存储与转发功能，允许客户端存储
 }
 ```
 
-#### 5.4.4 list_data_ids - 列出所有存储的数据ID
+#### 5.4.5 list_data_ids - 列出所有存储的数据ID
 
 **功能说明**: 获取当前服务器中存储的所有数据的标识列表。
 
@@ -298,7 +308,7 @@ DroneServer提供了通用的数据存储与转发功能，允许客户端存储
 }
 ```
 
-#### 5.4.5 clear_all_data - 清空所有存储的数据
+#### 5.4.6 clear_all_data - 清空所有存储的数据
 
 **功能说明**: 删除服务器中存储的所有数据（谨慎使用）。
 
@@ -387,6 +397,10 @@ def main():
         print(send_command(client, 'get_state', {'vehicle_name': 'UAV1'}))
         time.sleep(1)
         
+        # 获取图像
+        print(send_command(client, 'get_image', {'vehicle_name': 'UAV1'}))
+        time.sleep(1)
+        
         # 降落
         print(send_command(client, 'land', {'vehicle_name': 'UAV1'}))
         time.sleep(5)
@@ -414,3 +428,4 @@ if __name__ == '__main__':
 4. 图像数据以Base64编码格式返回，需要解码后使用
 5. 服务器支持多客户端同时连接，但同一时间对同一无人机的操作可能会产生冲突
 6. 对于长时间运行的操作，建议在客户端实现超时处理
+7. 使用数据存储功能时，可以利用预定义的数据交互配置常量进行特定类型的数据交换

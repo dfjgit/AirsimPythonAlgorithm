@@ -1,0 +1,164 @@
+from typing import List, Dict, Any
+from Vector3 import Vector3
+
+
+class ScannerRuntimeData:
+    """扫描器实时数据类，对应C#中的ScannerRuntimeData"""
+    # 方向向量（Python提供,Unity绘制）
+    scoreDir: Vector3
+    collideDir: Vector3
+    pathDir: Vector3
+    leaderRangeDir: Vector3
+    directionRetentionDir: Vector3
+    finalMoveDir: Vector3
+
+    # 当前位置和方向信息（Unity提供）
+    position: Vector3
+    forward: Vector3
+
+    # Leader信息（Unity提供）
+    leaderPosition: Vector3
+    leaderScanRadius: float
+
+    # 已访问蜂窝记录和其它扫描者坐标（Unity提供）
+    visitedCells: List[Vector3]
+    otherScannerPositions: List[Vector3]
+
+    def __init__(self):
+        # 初始化向量默认值
+        self.position = Vector3()
+        self.forward = Vector3(0, 0, 1)
+        self.scoreDir = Vector3()
+        self.collideDir = Vector3()
+        self.pathDir = Vector3()
+        self.leaderRangeDir = Vector3()
+        self.directionRetentionDir = Vector3()
+        self.finalMoveDir = Vector3()
+
+        # 初始化领导者信息
+        self.leaderPosition = Vector3()
+        self.leaderScanRadius = 0.0
+
+        # 初始化列表
+        self.visitedCells = []
+        self.otherScannerPositions = []
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典以便序列化"""
+        return {
+            # 方向向量
+            'scoreDir': self.scoreDir.to_dict(),
+            'collideDir': self.collideDir.to_dict(),
+            'pathDir': self.pathDir.to_dict(),
+            'leaderRangeDir': self.leaderRangeDir.to_dict(),
+            'directionRetentionDir': self.directionRetentionDir.to_dict(),
+            'finalMoveDir': self.finalMoveDir.to_dict(),
+
+            # 当前位置和方向
+            'position': self.position.to_dict(),
+            'forward': self.forward.to_dict(),
+
+            # Leader信息
+            'leaderPosition': self.leaderPosition.to_dict(),
+            'leaderScanRadius': self.leaderScanRadius,
+
+            # 已访问记录和其它扫描者坐标
+            'visitedCells': [cell.to_dict() for cell in self.visitedCells],
+            'otherScannerPositions': [pos.to_dict() for pos in self.otherScannerPositions]
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]):
+        """从字典创建ScannerRuntimeData实例"""
+        instance = cls()
+        
+        # 解析向量数据
+        vector_keys = [
+            ('position', 'position'),
+            ('forward', 'forward'),
+            ('scoreDir', 'scoreDir'),
+            ('collideDir', 'collideDir'),
+            ('pathDir', 'pathDir'),
+            ('leaderRangeDir', 'leaderRangeDir'),
+            ('directionRetentionDir', 'directionRetentionDir'),
+            ('finalMoveDir', 'finalMoveDir'),
+            ('leaderPosition', 'leaderPosition')
+        ]
+        for attr_name, json_key in vector_keys:
+            data_dict = data.get(json_key, {})
+            if isinstance(data_dict, dict):
+                setattr(instance, attr_name, Vector3.from_dict(data_dict))
+
+        # 解析领导者扫描半径
+        if 'leaderScanRadius' in data:
+            instance.leaderScanRadius = data['leaderScanRadius']
+
+        # 解析已访问蜂窝
+        if 'visitedCells' in data and isinstance(data['visitedCells'], list):
+            instance.visitedCells = [
+                Vector3.from_dict(cell_data) 
+                for cell_data in data['visitedCells']
+                if isinstance(cell_data, dict)
+            ]
+
+        # 解析其它扫描者坐标
+        if 'otherScannerPositions' in data and isinstance(data['otherScannerPositions'], list):
+            instance.otherScannerPositions = [
+                Vector3.from_dict(pos_data) 
+                for pos_data in data['otherScannerPositions']
+                if isinstance(pos_data, dict)
+            ]
+
+        return instance
+
+    def add_visited_cell(self, cell_position: Vector3) -> None:
+        """添加已访问的蜂窝位置（去重）"""
+        if not any(
+            cell.x == cell_position.x and
+            cell.y == cell_position.y and
+            cell.z == cell_position.z
+            for cell in self.visitedCells
+        ):
+            self.visitedCells.append(cell_position)
+
+    def clear_visited_cells(self) -> None:
+        """清空已访问的蜂窝记录"""
+        self.visitedCells.clear()
+
+    def get_visited_cell_count(self) -> int:
+        """获取已访问的蜂窝数量"""
+        return len(self.visitedCells)
+
+    def update_move_direction(self, new_direction: Vector3) -> None:
+        """更新移动方向（自动归一化）"""
+        if new_direction.magnitude > 0.001:
+            self.finalMoveDir = new_direction.normalized()
+
+    @property
+    def leader_distance(self) -> float:
+        """计算与领导者的距离"""
+        return (self.position - self.leaderPosition).magnitude
+
+    def is_leader_within_range(self, scanRadius: float) -> bool:
+        """检查领导者是否在扫描范围内"""
+        return self.leader_distance <= scanRadius
+
+    def copy(self):
+        """创建对象的深拷贝"""
+        new_data = ScannerRuntimeData()
+        # 深拷贝向量对象
+        vector_attrs = [attr for attr in dir(self) if isinstance(getattr(self, attr), Vector3)]
+        for attr in vector_attrs:
+            original_vec = getattr(self, attr)
+            setattr(new_data, attr, Vector3(original_vec.x, original_vec.y, original_vec.z))
+        # 拷贝其他属性
+        new_data.leaderScanRadius = self.leaderScanRadius
+        # 深拷贝列表
+        new_data.visitedCells = [Vector3(cell.x, cell.y, cell.z) for cell in self.visitedCells]
+        new_data.otherScannerPositions = [Vector3(pos.x, pos.y, pos.z) for pos in self.otherScannerPositions]
+        return new_data
+
+    def __str__(self):
+        return (f"ScannerRuntimeData(position={self.position}, "
+                f"visited_cells={len(self.visitedCells)}, "
+                f"other_scanners={len(self.otherScannerPositions)})")
