@@ -39,6 +39,7 @@ class DataStorageManager:
                 "timestamp": time.time()  # 记录存储时间戳
             }
         
+        # 只记录数据ID，不记录数据内容
         logger.info(f"已存储数据，ID: {data_id}")
         return {
             "status": "success", 

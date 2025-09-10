@@ -75,7 +75,9 @@ class BaseSocketServer:
 
                         try:
                             command = json.loads(data)
-                            logger.debug(f"收到命令 from {addr}: {command}")
+                            # 只记录命令类型，不记录完整数据内容
+                            cmd_type = command.get("command", "unknown")
+                            logger.debug(f"收到命令 from {addr}: 命令类型 = {cmd_type}")
                         except json.JSONDecodeError as e:
                             response = {"status": "error", "message": f"无效的JSON格式: {str(e)}"}
                             client_socket.sendall(json.dumps(response).encode('utf-8'))

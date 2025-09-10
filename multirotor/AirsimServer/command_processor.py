@@ -143,7 +143,7 @@ class CommandProcessor:
         """
         if cmd == "store_data":
             data_id = params.get("data_id")
-            content = params.get("content")
+            content = params.get("content")            
             return self.data_manager.store_data(data_id, content)
             
         elif cmd == "retrieve_data":
