@@ -106,7 +106,18 @@ class UnitySocketServer:
                 "timestamp": time.time(),
                 "data": runtime_data.to_dict()
             }
+            
+            # 如果运行时数据中包含无人机名称，添加到顶级字段
+            if hasattr(runtime_data, 'drone_name') and runtime_data.drone_name:
+                data['uav_name'] = runtime_data.drone_name
+                logger.debug(f"添加无人机标识: {runtime_data.drone_name}")
+            
             self.pending_runtime_data = data
+            logger.debug(f"已准备运行时数据，等待发送: {data['type']}, timestamp: {data['timestamp']}")
+            
+            # 如果有连接，尝试立即发送（而不仅仅依赖主循环）
+            if self.connection:
+                logger.debug("检测到有活跃连接，尝试立即发送运行时数据")
         except Exception as e:
             logger.error(f"准备发送运行时数据时出错: {str(e)}")
     
@@ -169,7 +180,11 @@ class UnitySocketServer:
                 
                 # 发送待发送的运行时数据
                 if self.pending_runtime_data:
+                    logger.debug(f"正在发送运行时数据到Unity，数据类型: {self.pending_runtime_data['type']}")
+                    if 'uav_name' in self.pending_runtime_data:
+                        logger.debug(f"发送的运行时数据包含无人机标识: {self.pending_runtime_data['uav_name']}")
                     self._send_data(conn, self.pending_runtime_data)
+                    logger.debug("运行时数据发送完成，清空待发送缓冲区")
                     self.pending_runtime_data = None
                 
                 time.sleep(0.01)
