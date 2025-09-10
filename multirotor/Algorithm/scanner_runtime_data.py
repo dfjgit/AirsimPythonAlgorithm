@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from Vector3 import Vector3
+from .Vector3 import Vector3
 
 
 class ScannerRuntimeData:
@@ -11,6 +11,8 @@ class ScannerRuntimeData:
     leaderRangeDir: Vector3
     directionRetentionDir: Vector3
     finalMoveDir: Vector3
+    direction: Vector3  # 添加direction属性
+    velocity: Vector3  # 添加velocity属性
 
     # 当前位置和方向信息（Unity提供）
     position: Vector3
@@ -19,14 +21,16 @@ class ScannerRuntimeData:
     # Leader信息（Unity提供）
     leaderPosition: Vector3
     leaderScanRadius: float
+    leader_velocity: Vector3  # 添加leader_velocity属性
 
     # 已访问蜂窝记录和其它扫描者坐标（Unity提供）
     visitedCells: List[Vector3]
     otherScannerPositions: List[Vector3]
 
-    def __init__(self):
+    def __init__(self, direction=None, position=None, velocity=None, 
+                 leader_position=None, leader_velocity=None, visited_cells=None):
         # 初始化向量默认值
-        self.position = Vector3()
+        self.position = position if position is not None else Vector3()
         self.forward = Vector3(0, 0, 1)
         self.scoreDir = Vector3()
         self.collideDir = Vector3()
@@ -34,13 +38,16 @@ class ScannerRuntimeData:
         self.leaderRangeDir = Vector3()
         self.directionRetentionDir = Vector3()
         self.finalMoveDir = Vector3()
+        self.direction = direction if direction is not None else Vector3(0, 0, 1)  # 初始化direction
+        self.velocity = velocity if velocity is not None else Vector3()  # 初始化velocity
 
         # 初始化领导者信息
-        self.leaderPosition = Vector3()
+        self.leaderPosition = leader_position if leader_position is not None else Vector3()
         self.leaderScanRadius = 0.0
+        self.leader_velocity = leader_velocity if leader_velocity is not None else Vector3()  # 初始化leader_velocity
 
         # 初始化列表
-        self.visitedCells = []
+        self.visitedCells = visited_cells.copy() if visited_cells is not None else []
         self.otherScannerPositions = []
 
     def to_dict(self) -> Dict[str, Any]:
@@ -126,18 +133,22 @@ class ScannerRuntimeData:
         self.visitedCells.clear()
 
     def get_visited_cell_count(self) -> int:
-        """获取已访问的蜂窝数量"""
+        """获取已访问蜂窝单元数量"""
         return len(self.visitedCells)
+
+    def get_visited_cells(self) -> List[Vector3]:
+        """获取已访问的蜂窝单元列表"""
+        return self.visitedCells.copy()
 
     def update_move_direction(self, new_direction: Vector3) -> None:
         """更新移动方向（自动归一化）"""
-        if new_direction.magnitude > 0.001:
+        if new_direction.magnitude() > 0.001:
             self.finalMoveDir = new_direction.normalized()
 
     @property
     def leader_distance(self) -> float:
         """计算与领导者的距离"""
-        return (self.position - self.leaderPosition).magnitude
+        return (self.position - self.leaderPosition).magnitude()
 
     def is_leader_within_range(self, scanRadius: float) -> bool:
         """检查领导者是否在扫描范围内"""

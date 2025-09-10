@@ -1,10 +1,9 @@
-import numpy as np
 import math
 import numpy as np
-from Vector3 import Vector3
-from HexGridDataModel import HexGridDataModel, HexCell
-from scanner_config_data import ScannerConfigData
-from scanner_runtime_data import ScannerRuntimeData
+from .Vector3 import Vector3
+from .HexGridDataModel import HexGridDataModel, HexCell
+from .scanner_config_data import ScannerConfigData
+from .scanner_runtime_data import ScannerRuntimeData
 from typing import List, Dict, Tuple, Optional, Set
 
 
@@ -20,7 +19,6 @@ class ScannerAlgorithm:
         self.entropy_coef = config_data.entropyCoefficient  # 熵系数
         self.neighbor_coef = config_data.leaderRangeCoefficient  # 邻居系数映射到领导者范围系数
         self.angle_coef = config_data.directionRetentionCoefficient  # 角度系数映射到方向保持系数
-        self.visited_coef = 1.0  # 默认值，配置中没有直接对应项
         self.distance_coef = config_data.distanceCoefficient  # 距离系数
         self.current_pos_coef = 0.5  # 默认值，配置中没有直接对应项
         self.max_velocity = config_data.moveSpeed  # 最大速度映射到移动速度
@@ -29,9 +27,9 @@ class ScannerAlgorithm:
         self.max_move_distance = config_data.moveSpeed  # 最大移动距离映射到移动速度
         self.min_move_distance = 0.1  # 默认值，配置中没有直接对应项
         
-        # 已访问记录清理参数
-        self.revisit_cooldown = config_data.revisitCooldown
-        self.avoid_revisits = config_data.avoidRevisits
+        # 去除已访问记录相关的参数和逻辑
+        # self.revisit_cooldown = config_data.revisitCooldown
+        # self.avoid_revisits = config_data.avoidRevisits
     
     def calculate_weights(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> Dict[Tuple[float, float], float]:
         """计算各个蜂窝单元的权重
@@ -46,15 +44,10 @@ class ScannerAlgorithm:
         weights = {}
         current_heading = runtime_data.direction.normalized() if runtime_data.direction.magnitude() > 1e-4 else Vector3(1, 0, 0)
         current_position = runtime_data.position
-        visited_cells = runtime_data.visited_cells
         
         for cell in grid_data.cells:
             cell_center = cell.center
             cell_entropy = cell.entropy
-            
-            # 检查是否已访问
-            cell_key = (round(cell_center.x, 2), round(cell_center.z, 2))
-            is_visited = cell_key in visited_cells
             
             # 计算从当前位置到单元中心的向量
             pos_to_cell = Vector3(
@@ -73,30 +66,31 @@ class ScannerAlgorithm:
             # 计算与当前航向的夹角
             angle_diff = math.acos(max(-1, min(1, current_heading.dot(pos_to_cell_normalized)))) if distance > 0.001 else 0
             
-            # 计算邻居单元的熵值总和
-            neighbor_entropy_sum = self._calculate_neighbor_entropy(grid_data, cell, visited_cells)
+            # 计算邻居单元的熵值总和，不考虑是否已访问
+            neighbor_entropy_sum = self._calculate_neighbor_entropy(grid_data, cell, None)
             
-            # 计算权重
+            # 计算权重，不考虑已访问状态
             weight = (
                 self.weight_coef * cell_entropy +
                 self.neighbor_coef * neighbor_entropy_sum -
                 self.angle_coef * angle_diff -
-                self.visited_coef * is_visited -
                 self.distance_coef * distance -
                 self.current_pos_coef * distance
             )
             
+            # 使用单元格中心坐标作为键
+            cell_key = (round(cell_center.x, 2), round(cell_center.z, 2))
             weights[cell_key] = weight
         
         return weights
     
-    def _calculate_neighbor_entropy(self, grid_data: HexGridDataModel, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> float:
+    def _calculate_neighbor_entropy(self, grid_data: HexGridDataModel, cell: HexCell, visited_cells: Set[Tuple[float, float]] = None) -> float:
         """计算邻居单元的熵值总和
         
         Args:
             grid_data: 网格数据对象
             cell: 当前蜂窝单元
-            visited_cells: 已访问单元集合
+            visited_cells: 已访问单元集合（不再使用）
         
         Returns:
             邻居单元熵值总和
@@ -124,9 +118,8 @@ class ScannerAlgorithm:
             # 查找邻居单元
             neighbor_cell = self._find_cell_at_position(grid_data, neighbor_pos)
             if neighbor_cell:
-                neighbor_key = (round(neighbor_cell.center.x, 2), round(neighbor_cell.center.z, 2))
-                if neighbor_key not in visited_cells:
-                    neighbor_entropy_sum += neighbor_cell.entropy
+                # 不考虑是否已访问，直接累加所有邻居的熵值
+                neighbor_entropy_sum += neighbor_cell.entropy
         
         return neighbor_entropy_sum
     
@@ -347,18 +340,14 @@ class ScannerAlgorithm:
         
         return new_position
     
-    def record_visited_cell(self, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> None:
-        """记录已访问的蜂窝单元
+    def record_visited_cell(self, cell: HexCell) -> None:
+        """记录一个已经访问过的蜂窝单元
         
         Args:
-            cell: 蜂窝单元
-            visited_cells: 已访问单元集合
+            cell: 要记录的蜂窝单元
         """
-        if not self.avoid_revisits:
-            return
-        
-        cell_key = (round(cell.center.x, 2), round(cell.center.z, 2))
-        visited_cells.add(cell_key)
+        # 根据用户要求，不再记录已访问单元
+        pass
     
     def update_runtime_data(self, grid_data: HexGridDataModel, 
                           runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
@@ -386,11 +375,7 @@ class ScannerAlgorithm:
         # 4. 计算新位置
         new_position = self.calculate_movement(new_direction, runtime_data.position, runtime_data.velocity, runtime_data)
         
-        # 5. 更新访问记录
-        # 找到新位置对应的蜂窝单元
-        nearest_cell = self._find_cell_at_position(grid_data, new_position)
-        if nearest_cell and nearest_cell.entropy < 0.1:  # 假设熵值低于阈值表示已探索
-            self.record_visited_cell(nearest_cell, runtime_data.visited_cells)
+        # 5. 不再更新访问记录（根据用户要求）
         
         # 6. 创建更新后的运行时数据
         updated_runtime_data = ScannerRuntimeData(
@@ -398,8 +383,8 @@ class ScannerAlgorithm:
             position=new_position,
             velocity=Vector3(0, 0, 0),  # 简化处理，实际应该根据运动模型更新
             leader_position=runtime_data.leader_position,
-            leader_velocity=runtime_data.leader_velocity,
-            visited_cells=runtime_data.visited_cells.copy()
+            leader_velocity=runtime_data.leader_velocity
+            # 不直接传递visited_cells，而是继续使用内部的visited_cell_set
         )
         
         return updated_runtime_data

@@ -13,6 +13,7 @@
     "avoidRevisits": true,
     "targetSearchRange": 20.0,
     "revisitCooldown": 10.0,
+    "altitude": 2.0,
     "name": "ScannerConfigData",
     "hideFlags": 0
 }

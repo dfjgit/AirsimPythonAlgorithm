@@ -1,7 +1,6 @@
 import json
 from typing import Dict, Any
-from Vector3 import Vector3
-import json
+from .Vector3 import Vector3
 
 
 class ScannerConfigData:
@@ -18,6 +17,7 @@ class ScannerConfigData:
     moveSpeed: float
     rotationSpeed: float
     scanRadius: float
+    altitude: float
 
     # 排斥力参数（Python配置）
     maxRepulsionDistance: float
@@ -28,9 +28,12 @@ class ScannerConfigData:
     targetSearchRange: float
     revisitCooldown: float
 
-    def __init__(self):
+    def __init__(self, config_file: str = None):
         # 设置默认值
         self._set_default_values()
+        # 如果提供了配置文件路径，则加载配置
+        if config_file:
+            self.load_from_file(config_file)
 
     def _set_default_values(self) -> None:
         """设置所有属性的默认值"""
@@ -46,6 +49,7 @@ class ScannerConfigData:
         self.moveSpeed = 2.0
         self.rotationSpeed = 120.0
         self.scanRadius = 5.0
+        self.altitude = 10.0  # 默认高度为10米
 
         # 距离参数默认值
         self.maxRepulsionDistance = 5.0
@@ -69,6 +73,7 @@ class ScannerConfigData:
         self.moveSpeed = self._get_float(json_data, 'moveSpeed', 2.0)
         self.rotationSpeed = self._get_float(json_data, 'rotationSpeed', 120.0)
         self.scanRadius = self._get_float(json_data, 'scanRadius', 5.0)
+        self.altitude = self._get_float(json_data, 'altitude', 10.0)
 
         self.maxRepulsionDistance = self._get_float(json_data, 'maxRepulsionDistance', 5.0)
         self.minSafeDistance = self._get_float(json_data, 'minSafeDistance', 2.0)
@@ -101,6 +106,7 @@ class ScannerConfigData:
             'moveSpeed': self.moveSpeed,
             'rotationSpeed': self.rotationSpeed,
             'scanRadius': self.scanRadius,
+            'altitude': self.altitude,
 
             # 距离参数
             'maxRepulsionDistance': self.maxRepulsionDistance,
@@ -156,4 +162,17 @@ class ScannerConfigData:
     def update_from_dict(self, data: Dict[str, Any]) -> None:
         """从字典更新ScannerConfigData实例的属性"""
         self.parse_json_data(data)
+        
+    def load_from_file(self, config_file: str) -> None:
+        """
+        从配置文件加载数据
+        """
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.parse_json_data(data)
+        except Exception as e:
+            print(f"加载配置文件失败: {str(e)}")
+            # 加载失败时保持默认值
+            self._set_default_values()
 

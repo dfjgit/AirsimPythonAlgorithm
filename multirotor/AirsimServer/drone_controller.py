@@ -144,10 +144,10 @@ class DroneController:
             if speed <= 0:
                 logger.error(f"无人机{vehicle_name}速度必须大于0")
                 return False
-            # 执行移动（匹配示例中的API调用）
+            # 执行移动并等待完成（与其他异步操作保持一致）
             self.client.moveToPositionAsync(
                 x, y, z, speed, vehicle_name=vehicle_name
-            )
+            ).join()
             
             self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}已移动到({x},{y},{z})")

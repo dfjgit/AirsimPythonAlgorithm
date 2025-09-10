@@ -16,19 +16,17 @@ class Vector3:
     def __repr__(self) -> str:
         return f"Vector3({self.x:.3f}, {self.y:.3f}, {self.z:.3f})"
 
-    @property
     def magnitude(self) -> float:
         """返回向量的模长"""
-        return math.sqrt(self.squared_magnitude)
+        return math.sqrt(self.squared_magnitude())
 
-    @property
     def squared_magnitude(self) -> float:
         """返回向量模长的平方（性能更优）"""
         return self.x **2 + self.y** 2 + self.z ** 2
 
     def normalized(self):
         """返回单位向量（归一化）"""
-        mag = self.magnitude
+        mag = self.magnitude()
         if mag < 0.001:
             return Vector3()
         return Vector3(self.x / mag, self.y / mag, self.z / mag)
