@@ -27,9 +27,6 @@ class ScannerAlgorithm:
         self.max_move_distance = config_data.moveSpeed  # 最大移动距离映射到移动速度
         self.min_move_distance = 0.1  # 默认值，配置中没有直接对应项
         
-        # 去除已访问记录相关的参数和逻辑
-        # self.revisit_cooldown = config_data.revisitCooldown
-        # self.avoid_revisits = config_data.avoidRevisits
     
     def calculate_weights(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> Dict[Tuple[float, float], float]:
         """计算各个蜂窝单元的权重
@@ -383,8 +380,7 @@ class ScannerAlgorithm:
             position=new_position,
             velocity=Vector3(0, 0, 0),  # 简化处理，实际应该根据运动模型更新
             leader_position=runtime_data.leader_position,
-            leader_velocity=runtime_data.leader_velocity
-            # 不直接传递visited_cells，而是继续使用内部的visited_cell_set
+            leader_velocity=runtime_data.leader_velocity            
         )
         
         return updated_runtime_data
