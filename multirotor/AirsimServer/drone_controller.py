@@ -154,10 +154,10 @@ class DroneController:
             return True
         except Exception as e:
             logger.error(f"无人机{vehicle_name}移动操作失败: {str(e)}")
-            return False        
-    
-    def move_by_velocity(self, x: float, y: float, z: float, duration: float = 3, 
-                        vehicle_name: Optional[str] = None, timeout_sec: int = 30) -> bool:
+            return False
+
+    def move_by_velocity(self, x: float, y: float, z: float, duration: float = 3,
+                         vehicle_name: Optional[str] = None, timeout_sec: int = 30) -> bool:
         """根据速度移动"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
@@ -168,12 +168,13 @@ class DroneController:
             if duration <= 0:
                 logger.error(f"无人机{vehicle_name}持续时间必须大于0")
                 return False
-            # 执行移动（添加join等待异步操作完成）
+
+            # 移除join()调用，避免阻塞和IOLoop冲突
             self.client.moveByVelocityAsync(
                 x, y, z, duration, vehicle_name=vehicle_name
-            ).join()
-            
-            self._update_vehicle_position(vehicle_name)
+            )
+
+            # 不等待操作完成，直接返回成功
             logger.info(f"无人机{vehicle_name}移动向量({x},{y},{z})，持续时间{duration}秒")
             return True
         except Exception as e:

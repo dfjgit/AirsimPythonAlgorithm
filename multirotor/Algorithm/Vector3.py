@@ -80,3 +80,8 @@ class Vector3:
             y=data.get("y", 0.0),
             z=data.get("z", 0.0)
         )
+
+    def unity_to_air_sim(self):
+        """ Unity坐标转换为AirSim坐标 """
+        return Vector3(self.x, self.y, -self.z)
+

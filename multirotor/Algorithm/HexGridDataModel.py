@@ -82,8 +82,21 @@ class HexGridDataModel:
                 for cell_data in data['cells'] 
                 if isinstance(cell_data, dict)
             ]
-        
         return model
+
+    def update_from_dict(self, data: Dict[str, Any]) -> None:
+        """更新现有对象的数据，而不是创建新对象"""
+        # 清空现有cells
+        self.cells.clear()
+
+        # 安全处理单元格数据
+        if isinstance(data.get('cells'), list):
+            self.cells = [
+                HexCell.from_dict(cell_data)
+                for cell_data in data['cells']
+                if isinstance(cell_data, dict)
+            ]
+        print(f"更新HexGridDataModel: {self}")
 
     def serialize_to_json(self) -> Optional[str]:
         """将数据模型序列化为JSON字符串"""

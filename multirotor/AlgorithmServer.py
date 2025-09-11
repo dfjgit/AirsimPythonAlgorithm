@@ -41,13 +41,13 @@ class MultiDroneAlgorithmServer:
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
         # 无人机名称初始化
-        self.drone_names = drone_names if drone_names else ["UAV1", "UAV2"]
+        self.drone_names = drone_names if drone_names else ["UAV1"]
         logger.info(f"初始化多无人机算法服务，控制无人机: {self.drone_names}")
 
         # 核心组件初始化
         self.drone_controller = DroneController()  # 无人机控制器
-        self.unity_socket = UnitySocketServer()    # Unity通信Socket服务
-        self.config_data = self._load_config()     # 算法配置数据
+        self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
+        self.config_data = self._load_config()  # 算法配置数据
 
         # 数据存储结构（按无人机名称区分）
         self.unity_runtime_data: Dict[str, ScannerRuntimeData] = {
@@ -71,8 +71,8 @@ class MultiDroneAlgorithmServer:
         self.drone_threads: Dict[str, Optional[threading.Thread]] = {
             name: None for name in self.drone_names
         }
-        self.data_lock = threading.Lock()      # 运行时数据锁
-        self.grid_lock = threading.Lock()      # 网格数据锁
+        self.data_lock = threading.Lock()  # 运行时数据锁
+        self.grid_lock = threading.Lock()  # 网格数据锁
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -83,7 +83,7 @@ class MultiDroneAlgorithmServer:
             if os.path.exists(config_file):
                 return config_file
             logger.warning(f"指定的配置文件不存在: {config_file}，将使用默认配置")
-        
+
         default_path = Path(__file__).parent / "scanner_config.json"
         if not default_path.exists():
             raise FileNotFoundError(f"默认配置文件不存在: {default_path}")
@@ -171,7 +171,7 @@ class MultiDroneAlgorithmServer:
             # 1. 所有无人机起飞
             if not self._takeoff_all():
                 return False
-
+            time.sleep(1)
             # 2. 启动算法处理线程
             self.running = True
             for drone_name in self.drone_names:
@@ -196,39 +196,39 @@ class MultiDroneAlgorithmServer:
             if not self.drone_controller.takeoff(drone_name):
                 logger.error(f"无人机{drone_name}起飞失败")
                 all_success = False
-            time.sleep(0.1)  # 错开起飞时间，避免碰撞
+            time.sleep(1)  # 错开起飞时间，避免碰撞
         return all_success
 
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
         """处理从Unity接收的数据"""
-        try:
-            with self.data_lock:
-                # 处理配置请求
-                if 'request' in received_data and received_data['request'] == 'config_data':
-                    self.unity_socket.send_config_data(self.config_data)
-                    logger.debug("响应Unity配置数据请求")
-                    return
+        # try:
+        with self.data_lock:
+            # logger.info(f"收到Unity数据: {str(received_data)[:20]}--{len(received_data)}")  # 打印数据长度和前几20个字符
 
-                # 更新网格数据
-                if 'grid_data' in received_data:
-                    with self.grid_lock:
-                        self.grid_data.from_dict(received_data['grid_data'])
-                        logger.debug("更新网格数据")
+            # 更新网格数据
+            if 'grid_data' in received_data:
+                logger.info(f"收到网格数据，长度：{len(received_data['grid_data']['cells'])}")
+                # 更清晰的写法
+                with self.grid_lock:
+                    self.grid_data.update_from_dict(received_data['grid_data'])
+                    logger.info(f"更新网格数据{self.grid_data}")
 
-                # 更新无人机运行时数据
-                if 'runtime_data' in received_data and 'uav_name' in received_data:
-                    drone_name = received_data['uav_name']
-                    if drone_name in self.unity_runtime_data:
-                        self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(received_data['runtime_data'])
-                        # 记录位置信息
-                        pos = self.unity_runtime_data[drone_name].position
-                        self.last_positions[drone_name] = {
-                            "x": pos.x, "y": pos.y, "z": pos.z
-                        }
-                        logger.debug(f"更新无人机{drone_name}运行时数据")
-        except Exception as e:
-            logger.error(f"处理Unity数据出错: {str(e)}")
-            logger.debug(traceback.format_exc())
+            # 更新无人机运行时数据
+            if 'runtime_data' in received_data and 'uav_name' in received_data:
+                drone_name = received_data['uav_name']
+                if drone_name in self.unity_runtime_data:
+                    self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(
+                        received_data['runtime_data'])
+                    # 记录位置信息
+                    pos = self.unity_runtime_data[drone_name].position
+                    self.last_positions[drone_name] = {
+                        "x": pos.x, "y": pos.y, "z": pos.z
+                    }
+                    logger.debug(f"更新无人机{drone_name}运行时数据")
+    # except Exception as e:
+    #     logger.error(f"处理Unity数据出错: {str(e)}")
+    #     logger.debug(traceback.format_exc())
+
 
     def _process_drone(self, drone_name: str) -> None:
         """无人机算法处理线程：计算移动方向并控制无人机"""
@@ -236,28 +236,26 @@ class MultiDroneAlgorithmServer:
         while self.running:
             try:
                 # 检查数据就绪状态
-                with self.grid_lock:
-                    has_grid = bool(self.grid_data.cells)
-                with self.data_lock:
-                    has_runtime = bool(self.unity_runtime_data[drone_name].position)
 
+                has_grid = bool(self.grid_data.cells)
+                has_runtime = bool(self.unity_runtime_data[drone_name].position)
+
+                # logger.info(f"无人机{drone_name}数据状态：GRID:{has_grid}, RUNTIME:{has_runtime}")
                 if not (has_grid and has_runtime):
-                    time.sleep(0.1)
+                    time.sleep(1)
                     continue
 
-                # 1. 计算避碰方向
-                avoidance_dir = self._calculate_avoidance(drone_name)
+                # 1. 执行算法计算最终方向
+                final_dir = self.algorithms[drone_name].update_runtime_data(
+                    self.grid_data, self.unity_runtime_data[drone_name]
+                )
+                # 打印一下最终向量
+                logging.info(final_dir)
 
-                # 2. 执行算法计算最佳移动方向
-                best_dir = self._calculate_best_direction(drone_name)
+                # 2. 控制无人机移动
+                self._control_drone_movement(drone_name, final_dir.finalMoveDir)
 
-                # 3. 融合避碰方向与最佳方向
-                final_dir = self._combine_directions(best_dir, avoidance_dir)
-
-                # 4. 控制无人机移动
-                self._control_drone_movement(drone_name, final_dir)
-
-                # 5. 发送处理后的数据到Unity
+                # 3. 发送处理后的数据到Unity
                 self._send_processed_data(drone_name, final_dir)
 
                 # 按配置间隔休眠
@@ -266,51 +264,8 @@ class MultiDroneAlgorithmServer:
             except Exception as e:
                 logger.error(f"无人机{drone_name}处理出错: {str(e)}")
                 logger.debug(traceback.format_exc())
-                time.sleep(1)  # 出错后延迟重试
+                time.sleep(self.config_data.updateInterval)  # 出错后延迟重试
 
-    def _calculate_avoidance(self, drone_name: str) -> Vector3:
-        """计算无人机避碰方向（避开其他无人机）"""
-        with self.data_lock:
-            current_pos = self.unity_runtime_data[drone_name].position
-            avoidance = Vector3()
-
-            for other_name in self.drone_names:
-                if other_name == drone_name:
-                    continue
-
-                other_pos = self.unity_runtime_data[other_name].position
-                diff = current_pos - other_pos
-                distance = diff.magnitude()
-
-                # 距离小于安全距离时计算避碰向量
-                if distance < self.config_data.minSafeDistance and distance > 0:
-                    avoidance += diff.normalized() * (self.config_data.minSafeDistance - distance)
-
-            return avoidance
-
-    def _calculate_best_direction(self, drone_name: str) -> Vector3:
-        """计算无人机最佳移动方向（基于扫描算法）"""
-        with self.data_lock:
-            runtime_data = self.unity_runtime_data[drone_name]
-        with self.grid_lock:
-            grid_data = self.grid_data
-
-        # 计算网格权重
-        weights = self.algorithms[drone_name].calculate_weights(grid_data, runtime_data)
-        # 计算最佳方向
-        return self.algorithms[drone_name].calculate_score_direction(
-            weights, runtime_data.position, grid_data, runtime_data
-        )
-
-    def _combine_directions(self, best_dir: Vector3, avoidance_dir: Vector3) -> Vector3:
-        """融合最佳移动方向与避碰方向"""
-        if avoidance_dir.magnitude() < 0.01:
-            return best_dir.normalized()
-
-        # 按权重融合方向
-        combined = (best_dir * (1 - self.config_data.repulsionCoefficient) +
-                   avoidance_dir.normalized() * self.config_data.repulsionCoefficient)
-        return combined.normalized()
 
     def _control_drone_movement(self, drone_name: str, direction: Vector3) -> None:
         """控制无人机按指定方向移动"""
@@ -319,34 +274,31 @@ class MultiDroneAlgorithmServer:
 
         # 计算移动参数
         move_speed = self.config_data.moveSpeed
-        duration = self.config_data.updateInterval
         velocity = direction * move_speed
-
+        velocity = velocity.unity_to_air_sim()
         # 发送速度控制指令
         success = self.drone_controller.move_by_velocity(
-            velocity.x, velocity.y, 0,  # z方向速度为0（保持高度）
-            duration, drone_name
+            velocity.x, velocity.y, velocity.z,  # z方向速度为0（保持高度）
+            self.config_data.updateInterval, drone_name
         )
 
         if success:
             logger.debug(
-                f"无人机{drone_name}移动指令: 速度({velocity.x:.2f}, {velocity.y:.2f})，持续{duration}秒"
+                f"无人机{drone_name}移动指令: 速度({velocity.x:.2f}, {velocity.y:.2f})，持续{1}秒"
             )
         else:
             logger.error(f"无人机{drone_name}移动指令发送失败")
 
-    def _send_processed_data(self, drone_name: str, move_dir: Vector3) -> None:
+
+    def _send_processed_data(self, drone_name: str, scannerRuntimeData: ScannerRuntimeData) -> None:
         """发送处理后的运行时数据到Unity"""
         with self.data_lock:
-            # 更新处理后的数据
-            self.processed_runtime_data[drone_name] = self.algorithms[drone_name].update_runtime_data(
-                self.grid_data, self.unity_runtime_data[drone_name]
-            )
-            self.processed_runtime_data[drone_name].finalMoveDir = move_dir
+            # 直接使用传入的scannerRuntimeData数据
+            self.processed_runtime_data[drone_name] = scannerRuntimeData
             self.processed_runtime_data[drone_name].drone_name = drone_name
-
             # 发送到Unity
-            self.unity_socket.send_runtime_data(self.processed_runtime_data[drone_name])
+            self.unity_socket.send_runtime(self.processed_runtime_data[drone_name])
+
 
     def stop(self) -> None:
         """停止服务：降落无人机，断开连接，清理资源"""
@@ -354,20 +306,21 @@ class MultiDroneAlgorithmServer:
         logger.info("开始停止服务...")
 
         # 等待无人机线程结束
-        for drone_name, thread in self.drone_threads.items():
-            if thread and thread.is_alive():
-                thread.join(5)
-                logger.info(f"无人机{drone_name}线程已停止")
+        # for drone_name, thread in self.drone_threads.items():
+        #     if thread and thread.is_alive():
+        #         thread.join(5)
+        #         logger.info(f"无人机{drone_name}线程已停止")
 
         # 控制所有无人机降落
-        self._land_all()
+        # self._land_all()
 
         # 断开无人机连接
-        self._disconnect_airsim()
+        # self._disconnect_airsim()
 
         # 停止Unity Socket服务
         self.unity_socket.stop()
         logger.info("服务已完全停止")
+
 
     def _land_all(self) -> None:
         """控制所有无人机降落"""
@@ -378,6 +331,7 @@ class MultiDroneAlgorithmServer:
             else:
                 logger.error(f"无人机{drone_name}降落失败")
             time.sleep(1)
+
 
     def _disconnect_airsim(self) -> None:
         """断开与AirSim的连接"""

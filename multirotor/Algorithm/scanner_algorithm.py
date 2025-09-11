@@ -1,5 +1,7 @@
-import math
+
+
 import numpy as np
+import math
 from .Vector3 import Vector3
 from .HexGridDataModel import HexGridDataModel, HexCell
 from .scanner_config_data import ScannerConfigData
@@ -14,11 +16,13 @@ class ScannerAlgorithm:
         Args:
             config_data: 包含算法参数的配置数据对象
         """
+        self.config = config_data #配置数据
         # 导入配置参数并映射到算法所需的属性
         self.weight_coef = config_data.entropyCoefficient  # 权重系数映射到熵系数
         self.entropy_coef = config_data.entropyCoefficient  # 熵系数
         self.neighbor_coef = config_data.leaderRangeCoefficient  # 邻居系数映射到领导者范围系数
         self.angle_coef = config_data.directionRetentionCoefficient  # 角度系数映射到方向保持系数
+        self.visited_coef = 1.0  # 默认值，配置中没有直接对应项
         self.distance_coef = config_data.distanceCoefficient  # 距离系数
         self.current_pos_coef = 0.5  # 默认值，配置中没有直接对应项
         self.max_velocity = config_data.moveSpeed  # 最大速度映射到移动速度
@@ -27,6 +31,9 @@ class ScannerAlgorithm:
         self.max_move_distance = config_data.moveSpeed  # 最大移动距离映射到移动速度
         self.min_move_distance = 0.1  # 默认值，配置中没有直接对应项
         
+        # 已访问记录清理参数
+        self.revisit_cooldown = config_data.revisitCooldown
+        self.avoid_revisits = config_data.avoidRevisits
     
     def calculate_weights(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> Dict[Tuple[float, float], float]:
         """计算各个蜂窝单元的权重
@@ -41,10 +48,15 @@ class ScannerAlgorithm:
         weights = {}
         current_heading = runtime_data.direction.normalized() if runtime_data.direction.magnitude() > 1e-4 else Vector3(1, 0, 0)
         current_position = runtime_data.position
+        visited_cells = runtime_data.visited_cells
         
         for cell in grid_data.cells:
             cell_center = cell.center
             cell_entropy = cell.entropy
+            
+            # 检查是否已访问
+            cell_key = (round(cell_center.x, 2), round(cell_center.z, 2))
+            is_visited = cell_key in visited_cells
             
             # 计算从当前位置到单元中心的向量
             pos_to_cell = Vector3(
@@ -63,31 +75,30 @@ class ScannerAlgorithm:
             # 计算与当前航向的夹角
             angle_diff = math.acos(max(-1, min(1, current_heading.dot(pos_to_cell_normalized)))) if distance > 0.001 else 0
             
-            # 计算邻居单元的熵值总和，不考虑是否已访问
-            neighbor_entropy_sum = self._calculate_neighbor_entropy(grid_data, cell, None)
+            # 计算邻居单元的熵值总和
+            neighbor_entropy_sum = self._calculate_neighbor_entropy(grid_data, cell, visited_cells)
             
-            # 计算权重，不考虑已访问状态
+            # 计算权重
             weight = (
                 self.weight_coef * cell_entropy +
                 self.neighbor_coef * neighbor_entropy_sum -
                 self.angle_coef * angle_diff -
+                self.visited_coef * is_visited -
                 self.distance_coef * distance -
                 self.current_pos_coef * distance
             )
             
-            # 使用单元格中心坐标作为键
-            cell_key = (round(cell_center.x, 2), round(cell_center.z, 2))
             weights[cell_key] = weight
         
         return weights
     
-    def _calculate_neighbor_entropy(self, grid_data: HexGridDataModel, cell: HexCell, visited_cells: Set[Tuple[float, float]] = None) -> float:
+    def _calculate_neighbor_entropy(self, grid_data: HexGridDataModel, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> float:
         """计算邻居单元的熵值总和
         
         Args:
             grid_data: 网格数据对象
             cell: 当前蜂窝单元
-            visited_cells: 已访问单元集合（不再使用）
+            visited_cells: 已访问单元集合
         
         Returns:
             邻居单元熵值总和
@@ -115,8 +126,9 @@ class ScannerAlgorithm:
             # 查找邻居单元
             neighbor_cell = self._find_cell_at_position(grid_data, neighbor_pos)
             if neighbor_cell:
-                # 不考虑是否已访问，直接累加所有邻居的熵值
-                neighbor_entropy_sum += neighbor_cell.entropy
+                neighbor_key = (round(neighbor_cell.center.x, 2), round(neighbor_cell.center.z, 2))
+                if neighbor_key not in visited_cells:
+                    neighbor_entropy_sum += neighbor_cell.entropy
         
         return neighbor_entropy_sum
     
@@ -337,14 +349,18 @@ class ScannerAlgorithm:
         
         return new_position
     
-    def record_visited_cell(self, cell: HexCell) -> None:
-        """记录一个已经访问过的蜂窝单元
+    # def record_visited_cell(self, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> None:
+    #     """记录已访问的蜂窝单元
         
-        Args:
-            cell: 要记录的蜂窝单元
-        """
-        # 根据用户要求，不再记录已访问单元
-        pass
+    #     Args:
+    #         cell: 蜂窝单元
+    #         visited_cells: 已访问单元集合
+    #     """
+    #     if not self.avoid_revisits:
+    #         return
+        
+    #     cell_key = (round(cell.center.x, 2), round(cell.center.z, 2))
+    #     visited_cells.add(cell_key)
     
     def update_runtime_data(self, grid_data: HexGridDataModel, 
                           runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
@@ -360,6 +376,10 @@ class ScannerAlgorithm:
         Returns:
             计算后的运行过程数据对象
         """
+        # 打印一下输入的各项数据
+        print(f"输入的网格数据: {grid_data}")
+        print(f"输入的配置数据: {self.config}")
+        print(f"输入的运行过程数据: {runtime_data}")
         # 1. 计算各个单元的权重
         weights = self.calculate_weights(grid_data, runtime_data)
         
@@ -372,15 +392,36 @@ class ScannerAlgorithm:
         # 4. 计算新位置
         new_position = self.calculate_movement(new_direction, runtime_data.position, runtime_data.velocity, runtime_data)
         
-        # 5. 不再更新访问记录（根据用户要求）
-        
+                
         # 6. 创建更新后的运行时数据
         updated_runtime_data = ScannerRuntimeData(
             direction=new_direction,
             position=new_position,
             velocity=Vector3(0, 0, 0),  # 简化处理，实际应该根据运动模型更新
             leader_position=runtime_data.leader_position,
-            leader_velocity=runtime_data.leader_velocity            
+            leader_velocity=runtime_data.leader_velocity,
+            # visited_cells=runtime_data.visited_cells.copy()
         )
-        
+        # 打印一下输出的各项数据
+        print(f"输出的运行过程数据: {updated_runtime_data}")
         return updated_runtime_data
+
+    def test_runtime_data(self, grid_data: HexGridDataModel,
+                            runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
+        """更新运行时数据，主算法入口
+
+        输入: 网格数据、配置数据(实例化时输入)、运行过程数据
+        输出: 计算后的运行过程数据
+
+        Args:
+            grid_data: 网格数据对象
+            runtime_data: 运行过程数据对象
+
+        Returns:
+            计算后的运行过程数据对象
+        """
+        # 1. 输出一个假的方向
+        runtime_data.finalMoveDir = Vector3(1,0,1)
+
+        return runtime_data
+
