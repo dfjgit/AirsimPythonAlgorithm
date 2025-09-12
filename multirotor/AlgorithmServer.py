@@ -201,33 +201,48 @@ class MultiDroneAlgorithmServer:
 
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
         """处理从Unity接收的数据"""
-        # try:
-        with self.data_lock:
-            # logger.info(f"收到Unity数据: {str(received_data)[:20]}--{len(received_data)}")  # 打印数据长度和前几20个字符
+        try:
+            with self.data_lock:
+                # 记录接收到的数据类型，便于调试
+                logger.debug(f"收到Unity数据，类型: {type(received_data).__name__}")
+                
+                # 更新网格数据
+                if 'grid_data' in received_data:
+                    grid_data = received_data['grid_data']
+                    if isinstance(grid_data, dict):
+                        if 'cells' in grid_data and isinstance(grid_data['cells'], list):
+                            logger.info(f"收到网格数据，长度：{len(grid_data['cells'])}")
+                            with self.grid_lock:
+                                self.grid_data.update_from_dict(grid_data)
+                                logger.info(f"更新网格数据{self.grid_data}")
+                        else:
+                            logger.warning(f"网格数据格式不正确，缺少cells字段或cells不是列表: {grid_data}")
+                    else:
+                        logger.warning(f"grid_data不是字典类型，而是: {type(grid_data).__name__}")
 
-            # 更新网格数据
-            if 'grid_data' in received_data:
-                logger.info(f"收到网格数据，长度：{len(received_data['grid_data']['cells'])}")
-                # 更清晰的写法
-                with self.grid_lock:
-                    self.grid_data.update_from_dict(received_data['grid_data'])
-                    logger.info(f"更新网格数据{self.grid_data}")
-
-            # 更新无人机运行时数据
-            if 'runtime_data' in received_data and 'uav_name' in received_data:
-                drone_name = received_data['uav_name']
-                if drone_name in self.unity_runtime_data:
-                    self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(
-                        received_data['runtime_data'])
-                    # 记录位置信息
-                    pos = self.unity_runtime_data[drone_name].position
-                    self.last_positions[drone_name] = {
-                        "x": pos.x, "y": pos.y, "z": pos.z
-                    }
-                    logger.debug(f"更新无人机{drone_name}运行时数据")
-    # except Exception as e:
-    #     logger.error(f"处理Unity数据出错: {str(e)}")
-    #     logger.debug(traceback.format_exc())
+                # 更新无人机运行时数据
+                if 'runtime_data' in received_data and 'uav_name' in received_data:
+                    runtime_data = received_data['runtime_data']
+                    drone_name = received_data['uav_name']
+                    if isinstance(runtime_data, dict):
+                        if drone_name in self.unity_runtime_data:
+                            try:
+                                self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(runtime_data)
+                                # 记录位置信息
+                                pos = self.unity_runtime_data[drone_name].position
+                                self.last_positions[drone_name] = {
+                                    "x": pos.x, "y": pos.y, "z": pos.z
+                                }
+                                logger.debug(f"更新无人机{drone_name}运行时数据")
+                            except Exception as e:
+                                logger.error(f"解析无人机{drone_name}运行时数据出错: {str(e)}")
+                        else:
+                            logger.warning(f"未知的无人机名称: {drone_name}")
+                    else:                            
+                            logger.warning(f"runtime_data不是字典类型，而是: {type(runtime_data).__name__}")                                                 
+        except Exception as e:
+            logger.error(f"处理Unity数据出错: {str(e)}")
+            logger.debug(traceback.format_exc())
 
 
     def _process_drone(self, drone_name: str) -> None:

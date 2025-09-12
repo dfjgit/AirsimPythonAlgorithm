@@ -1,4 +1,5 @@
 import math
+import logging
 from typing import Dict
 
 
@@ -74,12 +75,20 @@ class Vector3:
 
     @classmethod
     def from_dict(cls, data):
-        """从字典创建Vector3实例"""
-        return cls(
-            x=data.get("x", 0.0),
-            y=data.get("y", 0.0),
-            z=data.get("z", 0.0)
-        )
+        """从字典创建Vector3实例，添加类型检查以防止TypeError"""
+        if isinstance(data, dict):
+            return cls(
+                x=data.get("x", 0.0),
+                y=data.get("y", 0.0),
+                z=data.get("z", 0.0)
+            )
+        elif hasattr(data, 'x') and hasattr(data, 'y') and hasattr(data, 'z'):
+            # 如果是对象类型且有x,y,z属性
+            return cls(x=data.x, y=data.y, z=data.z)
+        else:
+            # 记录错误信息但不抛出异常，避免程序崩溃
+            logging.warning(f"Vector3.from_dict: 数据类型无效: {type(data).__name__}, 数据值: {data}")
+            return cls()
 
     def unity_to_air_sim(self):
         """ Unity坐标转换为AirSim坐标 """

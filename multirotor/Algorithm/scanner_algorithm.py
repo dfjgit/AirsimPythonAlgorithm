@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import logging
 from .Vector3 import Vector3
 from .HexGridDataModel import HexGridDataModel, HexCell
 from .scanner_config_data import ScannerConfigData
@@ -235,45 +236,65 @@ class ScannerAlgorithm:
     def update_runtime_data(self, grid_data: HexGridDataModel, 
                           runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
         """更新运行时数据（供其他组件使用的接口）"""
-        current_time = time.time()
-        
-        # 定期更新方向（根据updateInterval）
-        if current_time - self.last_update_time >= self.config.updateInterval:
-            self.last_update_time = current_time
+        try:
+            # 类型检查
+            if not isinstance(grid_data, HexGridDataModel):
+                logging.warning(f"ScannerAlgorithm.update_runtime_data: grid_data类型无效，期望HexGridDataModel，得到: {type(grid_data).__name__}")
+                return runtime_data
             
-            # 保存当前方向作为下一帧的"previousMoveDir"
-            self.previous_move_dir = runtime_data.finalMoveDir if runtime_data.finalMoveDir.magnitude() > 0.1 else self.previous_move_dir
+            if not isinstance(runtime_data, ScannerRuntimeData):
+                logging.warning(f"ScannerAlgorithm.update_runtime_data: runtime_data类型无效，期望ScannerRuntimeData，得到: {type(runtime_data).__name__}")
+                return runtime_data
+                
+            current_time = time.time()
             
-            # 计算各权重
-            weights = self.calculate_proportional_weights()
-            
-            # 计算各方向向量
-            score_dir = self.calculate_score_direction(grid_data, runtime_data)
-            path_dir = self.calculate_path_direction(score_dir)
-            collide_dir = self.calculate_collide_direction(runtime_data)
-            leader_range_dir = self.calculate_leader_range_direction(runtime_data)
-            direction_retention_dir = self.calculate_direction_retention_direction()
-            
-            # 合并所有向量
-            final_move_dir = self.merge_directions(
-                score_dir, path_dir, collide_dir, 
-                leader_range_dir, direction_retention_dir,
-                weights
-            )
-            
-            # 清理过期访问记录
-            self.cleanup_visited_records()
-            
-            # 更新runtime_data中的方向向量
-            runtime_data.scoreDir = score_dir
-            runtime_data.collideDir = collide_dir
-            runtime_data.pathDir = path_dir
-            runtime_data.leaderRangeDir = leader_range_dir
-            runtime_data.directionRetentionDir = direction_retention_dir
-            runtime_data.finalMoveDir = final_move_dir
+            # 定期更新方向（根据updateInterval）
+            if current_time - self.last_update_time >= self.config.updateInterval:
+                self.last_update_time = current_time
+                
+                # 保存当前方向作为下一帧的"previousMoveDir"
+                try:
+                    if runtime_data.finalMoveDir and runtime_data.finalMoveDir.magnitude() > 0.1:
+                        self.previous_move_dir = runtime_data.finalMoveDir
+                except Exception as e:
+                    logging.warning(f"ScannerAlgorithm.update_runtime_data: 获取finalMoveDir失败: {str(e)}")
+                    
+                # 计算各权重
+                weights = self.calculate_proportional_weights()
+                
+                # 计算各方向向量
+                try:
+                    score_dir = self.calculate_score_direction(grid_data, runtime_data)
+                    path_dir = self.calculate_path_direction(score_dir)
+                    collide_dir = self.calculate_collide_direction(runtime_data)
+                    leader_range_dir = self.calculate_leader_range_direction(runtime_data)
+                    direction_retention_dir = self.calculate_direction_retention_direction()
+                    
+                    # 合并所有向量
+                    final_move_dir = self.merge_directions(
+                        score_dir, path_dir, collide_dir, 
+                        leader_range_dir, direction_retention_dir,
+                        weights
+                    )
+                    
+                    # 清理过期访问记录
+                    self.cleanup_visited_records()
+                    
+                    # 更新runtime_data中的方向向量
+                    runtime_data.scoreDir = score_dir
+                    runtime_data.collideDir = collide_dir
+                    runtime_data.pathDir = path_dir
+                    runtime_data.leaderRangeDir = leader_range_dir
+                    runtime_data.directionRetentionDir = direction_retention_dir
+                    runtime_data.finalMoveDir = final_move_dir
+                except Exception as e:
+                    logging.error(f"ScannerAlgorithm.update_runtime_data: 计算方向向量失败: {str(e)}")
 
-            # 打印输入的Runtime和输出Runtime的数据
-            print(f"输入的Grid数据: {grid_data}")
-            print(f"输入的Runtime数据: {runtime_data}")
-            print(f"输出的Runtime数据: {runtime_data}")
-        return runtime_data
+                # 使用日志记录替代print语句
+                logging.debug(f"输入的Grid数据: {grid_data}")
+                logging.debug(f"输入的Runtime数据: {runtime_data}")
+                logging.debug(f"输出的Runtime数据: {runtime_data}")
+            return runtime_data
+        except Exception as e:
+            logging.error(f"ScannerAlgorithm.update_runtime_data: 处理运行时数据时出错: {str(e)}")
+            return runtime_data

@@ -163,68 +163,29 @@ class UnitySocketServer:
             logger.error(f"接收数据错误: {str(e)}")
 
     def _parse_buffer(self) -> None:
-        """解析缓冲区中的JSON数据（支持多对象连续传输，修复嵌套花括号问题）"""
+        """解析缓冲区中的JSON数据（仅支持单个标准JSON对象传输）"""
         if '{' not in self.receive_buffer:
             return  # 没有起始符，直接返回
 
         try:
-            # 尝试解析整个缓冲区（完整数据场景）
+            # 尝试解析整个缓冲区作为单个标准JSON对象
             parsed = json.loads(self.receive_buffer)
+            
+            # 验证是否是有效的数据对象（必须包含type字段）
+            if not isinstance(parsed, dict) or 'type' not in parsed:
+                raise ValueError("数据格式错误：必须是包含'type'字段的JSON对象")
+            
             self._handle_parsed(parsed)
+            self.receive_buffer = ""  # 成功解析后清空缓冲区
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON格式错误，不支持多对象传输: {str(e)}")
+            self.receive_buffer = ""  # 直接清空缓冲区，不再尝试部分解析
+        except ValueError as e:
+            logger.error(str(e))
             self.receive_buffer = ""
-            return
-        except json.JSONDecodeError:
-            pass  # 不完整，进入部分解析逻辑
         except Exception as e:
-            logger.error(f"完整解析失败: {str(e)}")
+            logger.error(f"解析数据时出错: {str(e)}")
             self.receive_buffer = ""
-            return
-
-        # 部分解析：通过花括号匹配找到第一个完整的JSON对象
-        buffer = self.receive_buffer
-        start_idx = buffer.find('{')
-        if start_idx == -1:
-            self.receive_buffer = ""  # 无有效起始，清空
-            return
-
-        stack = []
-        end_idx = -1
-        # 从第一个'{'开始遍历，跟踪花括号匹配
-        for i in range(start_idx, len(buffer)):
-            char = buffer[i]
-            if char == '{':
-                stack.append(char)
-            elif char == '}':
-                if stack:
-                    stack.pop()
-                    # 栈为空时，找到完整对象的结束位置
-                    if not stack:
-                        end_idx = i
-                        break
-
-        if end_idx == -1:
-            # 未找到完整对象，保留缓冲区等待后续数据
-            return
-        else:
-            # 提取并解析第一个完整对象
-            partial = buffer[start_idx:end_idx + 1]
-            remaining = buffer[end_idx + 1:].lstrip()  # 剩余数据
-            try:
-                parsed = json.loads(partial)
-                self._handle_parsed(parsed)
-                self.receive_buffer = remaining  # 更新缓冲区为剩余数据
-                if self.receive_buffer:
-                    self._parse_buffer()  # 递归处理剩余数据
-            except json.JSONDecodeError as e:
-                logger.warning(f"部分数据解析失败（内容: {partial[:100]}...），错误: {str(e)}")
-                # 跳过当前错误片段，从下一个'{'开始
-                next_start = buffer.find('{', start_idx + 1)
-                self.receive_buffer = buffer[next_start:] if next_start != -1 else ""
-                if self.receive_buffer:
-                    self._parse_buffer()
-            except Exception as e:
-                logger.error(f"处理部分数据时出错: {str(e)}")
-                self.receive_buffer = remaining
 
     def _handle_parsed(self, data: Dict[str, Any]) -> None:
         """处理解析后的JSON数据并触发回调"""
