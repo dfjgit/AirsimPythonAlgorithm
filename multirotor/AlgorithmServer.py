@@ -10,7 +10,7 @@ from pathlib import Path
 
 # 配置日志系统
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -41,7 +41,7 @@ class MultiDroneAlgorithmServer:
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
         # 无人机名称初始化
-        self.drone_names = drone_names if drone_names else ["UAV1"]
+        self.drone_names = drone_names if drone_names else ["UAV1", "UAV2"]
         logger.info(f"初始化多无人机算法服务，控制无人机: {self.drone_names}")
 
         # 核心组件初始化
@@ -201,20 +201,42 @@ class MultiDroneAlgorithmServer:
 
     # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
-        """处理从Unity接收的新格式数据"""
+        """处理从Unity接收的新格式数据
+        注意：unity_socket_server.py会将原始DataPacks格式转换为包含特定数据类型的字典
+        例如：{runtime_data: [...], time_span: "..."} 或 {grid_data: {...}, time_span: "..."}
+        """
         try:
             with self.data_lock:
                 logger.debug(f"收到Unity数据: {received_data}")
-                
-                # 解析数据包类型（适配DataPacks的PackType）
-                data_type = received_data.get('type')
-                if not data_type:
-                    logger.warning("收到无效数据：缺少type字段")
-                    return
 
-                # 处理网格数据（grid_data类型）
-                if data_type == PackType.grid_data.value:
-                    grid_data = received_data.get('data')
+                # 检查是否包含runtime_data字段
+                if 'runtime_data' in received_data:
+                    runtime_data_list = received_data['runtime_data']
+                    if isinstance(runtime_data_list, list):
+                        logger.info(f"收到运行时数据，包含{len(runtime_data_list)}个无人机数据")
+                        # 处理每个无人机的运行时数据
+                        for runtime_data in runtime_data_list:
+                            drone_name = runtime_data.get('uavname')
+                            if drone_name in self.unity_runtime_data and isinstance(runtime_data, dict):
+                                try:
+                                    self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(runtime_data)
+                                    # 更新位置信息
+                                    pos = self.unity_runtime_data[drone_name].position
+                                    self.last_positions[drone_name] = {
+                                        'x': pos.x,
+                                        'y': pos.y,
+                                        'z': pos.z,
+                                        'timestamp': time.time()
+                                    }
+                                    logger.debug(f"更新无人机{drone_name}运行时数据: {pos}NAME：{self.unity_runtime_data[drone_name].uavname}NAME2{runtime_data['uavname']}")
+                                except Exception as e:
+                                    logger.error(f"解析无人机{drone_name}运行时数据失败: {str(e)}")
+                            else:
+                                logger.warning(f"无效的运行时数据或无人机名称: {drone_name}")
+
+                # 检查是否包含grid_data字段
+                elif 'grid_data' in received_data:
+                    grid_data = received_data['grid_data']
                     if isinstance(grid_data, dict) and 'cells' in grid_data:
                         logger.info(f"收到网格数据，包含{len(grid_data['cells'])}个单元")
                         with self.grid_lock:
@@ -222,30 +244,9 @@ class MultiDroneAlgorithmServer:
                     else:
                         logger.warning(f"网格数据格式错误: {grid_data}")
 
-                # 处理运行时数据（runtime_data类型）
-                elif data_type == PackType.runtime_data.value:
-                    runtime_data = received_data.get('data')
-                    drone_name = received_data.get('uav_name')
-                    if drone_name in self.unity_runtime_data and isinstance(runtime_data, dict):
-                        try:
-                            self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(runtime_data)
-                            # 更新位置信息
-                            pos = self.unity_runtime_data[drone_name].position
-                            self.last_positions[drone_name] = {
-                                'x': pos.x,
-                                'y': pos.y,
-                                'z': pos.z,
-                                'timestamp': time.time()
-                            }
-                            logger.debug(f"更新无人机{drone_name}运行时数据: {pos}")
-                        except Exception as e:
-                            logger.error(f"解析无人机{drone_name}运行时数据失败: {str(e)}")
-                    else:
-                        logger.warning(f"无效的运行时数据或无人机名称: {drone_name}")
-
-                # 处理配置数据（config_data类型，预留）
-                elif data_type == PackType.config_data.value:
-                    config_data = received_data.get('data')
+                # 检查是否包含配置数据
+                elif 'config_data' in received_data:
+                    config_data = received_data['config_data']
                     logger.info("收到配置数据更新，准备重新加载配置")
                     try:
                         # 重新加载配置
@@ -260,7 +261,7 @@ class MultiDroneAlgorithmServer:
 
                 # 未知数据类型处理
                 else:
-                    logger.warning(f"收到未知类型数据: {data_type}")
+                    logger.warning(f"收到未知格式数据: {received_data}")
 
         except Exception as e:
             logger.error(f"处理Unity数据时发生错误: {str(e)}，堆栈信息: {traceback.format_exc()}")
@@ -285,8 +286,7 @@ class MultiDroneAlgorithmServer:
                 final_dir = self.algorithms[drone_name].update_runtime_data(
                     self.grid_data, self.unity_runtime_data[drone_name]
                 )
-                # 打印一下最终向量
-                logging.info(final_dir)
+
 
                 # 2. 控制无人机移动
                 self._control_drone_movement(drone_name, final_dir.finalMoveDir)
@@ -332,8 +332,9 @@ class MultiDroneAlgorithmServer:
             # 直接使用传入的scannerRuntimeData数据
             self.processed_runtime_data[drone_name] = scannerRuntimeData
             self.processed_runtime_data[drone_name].drone_name = drone_name
-            # 发送到Unity
-            self.unity_socket.send_runtime(self.processed_runtime_data[drone_name])
+            # 发送到Unity - 注意：send_runtime需要一个可迭代对象（列表）
+            self.unity_socket.send_runtime([self.processed_runtime_data[drone_name]])
+            logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
 
 
     def stop(self) -> None:

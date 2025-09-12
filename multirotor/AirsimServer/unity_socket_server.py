@@ -163,7 +163,6 @@ class UnitySocketServer:
             parsed = json.loads(self.receive_buffer)
             if not isinstance(parsed, dict) or 'type' not in parsed:
                 raise ValueError("数据格式错误：必须是包含'type'字段的DataPacks对象")
-
             self._handle_parsed(parsed)
             self.receive_buffer = ""
         except json.JSONDecodeError as e:
@@ -176,7 +175,7 @@ class UnitySocketServer:
             logger.error(f"解析数据时出错: {str(e)}")
             self.receive_buffer = ""
 
-    def _handle_parsed(self, data: Dict[str, Any]) -> None:
+    def _handle_parsed(self, data: Dict[str, Any]) -> None: ##这里data应该时DataPack格式
         """处理解析后的DataPacks数据并触发回调"""
         if not data or 'type' not in data:
             logger.warning("忽略无效数据（缺少type字段）")

@@ -245,7 +245,7 @@ class ScannerAlgorithm:
             if not isinstance(runtime_data, ScannerRuntimeData):
                 logging.warning(f"ScannerAlgorithm.update_runtime_data: runtime_data类型无效，期望ScannerRuntimeData，得到: {type(runtime_data).__name__}")
                 return runtime_data
-                
+            logging.info("uavName"+runtime_data.uavname)
             current_time = time.time()
             
             # 定期更新方向（根据updateInterval）
@@ -279,7 +279,7 @@ class ScannerAlgorithm:
                     
                     # 清理过期访问记录
                     self.cleanup_visited_records()
-                    
+
                     # 更新runtime_data中的方向向量
                     runtime_data.scoreDir = score_dir
                     runtime_data.collideDir = collide_dir
@@ -293,7 +293,7 @@ class ScannerAlgorithm:
                 # 使用日志记录替代print语句
                 logging.debug(f"输入的Grid数据: {grid_data}")
                 logging.debug(f"输入的Runtime数据: {runtime_data}")
-                logging.debug(f"输出的Runtime数据: {runtime_data}")
+
             return runtime_data
         except Exception as e:
             logging.error(f"ScannerAlgorithm.update_runtime_data: 处理运行时数据时出错: {str(e)}")

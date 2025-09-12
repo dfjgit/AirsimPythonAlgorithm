@@ -7,7 +7,7 @@
     "updateInterval": 1.0,
     "moveSpeed": 2.0,
     "rotationSpeed": 120.0,
-    "scanRadius": 2.0,
+    "scanRadius": 5.0,
     "maxRepulsionDistance": 5.0,
     "minSafeDistance": 1.0,
     "avoidRevisits": true,

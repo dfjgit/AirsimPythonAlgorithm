@@ -26,7 +26,7 @@ class ScannerRuntimeData:
     visited_cells: List[Vector3]
     otherScannerPositions: List[Vector3]
 
-    def __init__(self, direction=None, position=None, velocity=None, 
+    def __init__(self, direction=None, position=None, velocity=None,
                  leader_position=None, leader_velocity=None, visited_cells=None):
         self.uavname = ""
         # 初始化向量默认值
@@ -79,10 +79,9 @@ class ScannerRuntimeData:
     def from_dict(cls, data: Dict[str, Any]):
         """从字典创建ScannerRuntimeData实例"""
         instance = cls()
-        
+
         # 解析向量数据
         vector_keys = [
-            ('uavname', 'uavname'),
             ('position', 'position'),
             ('forward', 'forward'),
             ('scoreDir', 'scoreDir'),
@@ -97,6 +96,10 @@ class ScannerRuntimeData:
             data_dict = data.get(json_key, {})
             if isinstance(data_dict, dict):
                 setattr(instance, attr_name, Vector3.from_dict(data_dict))
+
+        # 解析无人机名称
+        if 'uavname' in data:
+            instance.uavname = data['uavname']
 
         # 解析领导者扫描半径
         if 'leaderScanRadius' in data:
@@ -113,7 +116,7 @@ class ScannerRuntimeData:
         # 解析其它扫描者坐标
         if 'otherScannerPositions' in data and isinstance(data['otherScannerPositions'], list):
             instance.otherScannerPositions = [
-                Vector3.from_dict(pos_data) 
+                Vector3.from_dict(pos_data)
                 for pos_data in data['otherScannerPositions']
                 if isinstance(pos_data, dict)
             ]
@@ -123,10 +126,10 @@ class ScannerRuntimeData:
     def add_visited_cell(self, cell_position: Vector3) -> None:
         """添加已访问的蜂窝位置（去重）"""
         if not any(
-            cell.x == cell_position.x and
-            cell.y == cell_position.y and
-            cell.z == cell_position.z
-            for cell in self.visited_cells
+                cell.x == cell_position.x and
+                cell.y == cell_position.y and
+                cell.z == cell_position.z
+                for cell in self.visited_cells
         ):
             self.visited_cells.append(cell_position)
 
@@ -170,6 +173,6 @@ class ScannerRuntimeData:
         new_data.visited_cells = [Vector3(cell.x, cell.y, cell.z) for cell in self.visited_cells]
         new_data.otherScannerPositions = [Vector3(pos.x, pos.y, pos.z) for pos in self.otherScannerPositions]
         return new_data
-    
+
     def __repr__(self) -> str:
-        return f"RUNTIME_DATA Start:{self.position}To:{self.finalMoveDir}"
+        return f"RUNTIME_DATA UavName:{self.uavname}Start:{self.position}To:{self.finalMoveDir}"
