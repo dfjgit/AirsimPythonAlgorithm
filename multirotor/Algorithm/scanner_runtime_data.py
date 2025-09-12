@@ -4,6 +4,7 @@ from .Vector3 import Vector3
 
 class ScannerRuntimeData:
     """扫描器实时数据类，对应C#中的ScannerRuntimeData"""
+    uavname: str
     # 方向向量（Python提供,Unity绘制）
     scoreDir: Vector3
     collideDir: Vector3
@@ -27,6 +28,7 @@ class ScannerRuntimeData:
 
     def __init__(self, direction=None, position=None, velocity=None, 
                  leader_position=None, leader_velocity=None, visited_cells=None):
+        self.uavname = ""
         # 初始化向量默认值
         self.position = position if position is not None else Vector3()
         self.forward = Vector3(0, 0, 1)
@@ -51,6 +53,7 @@ class ScannerRuntimeData:
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典以便序列化"""
         return {
+            'uavname': self.uavname,
             # 方向向量
             'scoreDir': self.scoreDir.to_dict(),
             'collideDir': self.collideDir.to_dict(),
@@ -79,6 +82,7 @@ class ScannerRuntimeData:
         
         # 解析向量数据
         vector_keys = [
+            ('uavname', 'uavname'),
             ('position', 'position'),
             ('forward', 'forward'),
             ('scoreDir', 'scoreDir'),

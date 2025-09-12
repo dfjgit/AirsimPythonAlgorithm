@@ -3,9 +3,11 @@ import json
 import threading
 import logging
 import time
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Iterable
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.scanner_config_data import ScannerConfigData
+# 导入新的数据包结构
+from AirsimServer.data_pack import DataPacks, PackType
 
 # 配置日志（简化输出）
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,12 +28,11 @@ class UnitySocketServer:
         
         # 数据缓冲区
         self.receive_buffer = ""  # 接收缓存
-        self.pending_config = None  # 待发送的配置数据
-        self.pending_runtime = None  # 待发送的运行时数据
+        self.pending_packs = []  # 待发送的数据包列表（使用DataPacks结构）
         
         # 接收数据存储与回调
         self.received_grid = None
-        self.received_runtime = None
+        self.received_runtimes = []  # 改为列表存储多个运行时数据
         self.data_callback = None  # 数据接收回调函数
 
     def start(self) -> bool:
@@ -79,28 +80,36 @@ class UnitySocketServer:
         return self.connection is not None
 
     def send_config(self, config: ScannerConfigData) -> None:
-        """发送配置数据到Unity"""
+        """发送配置数据到Unity（使用新的DataPacks结构）"""
         try:
-            self.pending_config = {
-                "type": "config_data",
-                "timestamp": time.time(),
-                "data": config.to_dict()
-            }
+            # 创建数据包
+            pack = DataPacks()
+            pack.type = PackType.config_data
+            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.pack_data_list = [config.to_dict()]  # 放入列表中
+            
+            self.pending_packs.append(pack)
         except Exception as e:
             logger.error(f"配置数据准备失败: {str(e)}")
 
-    def send_runtime(self, runtime: ScannerRuntimeData) -> None:
-        """发送运行时数据到Unity"""
+    def send_runtime(self, runtimes: Iterable[ScannerRuntimeData]) -> None:
+        """发送多个运行时数据到Unity（修改为接收可迭代的多个数据）"""
         try:
-            data = {
-                "type": "runtime_data",
-                "timestamp": time.time(),
-                "data": runtime.to_dict()
-            }
-            # 添加无人机标识
-            if hasattr(runtime, 'drone_name'):
-                data['uav_name'] = runtime.drone_name
-            self.pending_runtime = data
+            # 创建数据包
+            pack = DataPacks()
+            pack.type = PackType.runtime_data
+            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            
+            # 将多个ScannerRuntimeData转换为字典并添加到列表
+            pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
+            
+            # 如果有无人机标识，使用第一个runtime的标识（或根据实际需求调整）
+            first_runtime = next(iter(runtimes), None)
+            if first_runtime and hasattr(first_runtime, 'drone_name'):
+                setattr(pack, 'uav_name', first_runtime.drone_name)
+                
+            self.pending_packs.append(pack)
+            logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
 
@@ -163,23 +172,23 @@ class UnitySocketServer:
             logger.error(f"接收数据错误: {str(e)}")
 
     def _parse_buffer(self) -> None:
-        """解析缓冲区中的JSON数据（仅支持单个标准JSON对象传输）"""
+        """解析缓冲区中的JSON数据（适配新的DataPacks结构）"""
         if '{' not in self.receive_buffer:
             return  # 没有起始符，直接返回
 
         try:
-            # 尝试解析整个缓冲区作为单个标准JSON对象
+            # 尝试解析整个缓冲区作为DataPacks对象
             parsed = json.loads(self.receive_buffer)
             
-            # 验证是否是有效的数据对象（必须包含type字段）
+            # 验证是否是有效的DataPacks结构
             if not isinstance(parsed, dict) or 'type' not in parsed:
-                raise ValueError("数据格式错误：必须是包含'type'字段的JSON对象")
+                raise ValueError("数据格式错误：必须是包含'type'字段的DataPacks对象")
             
             self._handle_parsed(parsed)
             self.receive_buffer = ""  # 成功解析后清空缓冲区
         except json.JSONDecodeError as e:
-            logger.error(f"JSON格式错误，不支持多对象传输: {str(e)}")
-            self.receive_buffer = ""  # 直接清空缓冲区，不再尝试部分解析
+            logger.error(f"JSON格式错误: {str(e)}")
+            self.receive_buffer = ""  # 清空缓冲区
         except ValueError as e:
             logger.error(str(e))
             self.receive_buffer = ""
@@ -188,26 +197,33 @@ class UnitySocketServer:
             self.receive_buffer = ""
 
     def _handle_parsed(self, data: Dict[str, Any]) -> None:
-        """处理解析后的JSON数据并触发回调"""
+        """处理解析后的DataPacks数据并触发回调"""
         if not data or 'type' not in data:
             logger.warning("忽略无效数据（缺少type字段）")
             return
 
         callback_data = {}
         data_type = data['type']
+        pack_data_list = data.get('pack_data_list', [])
         
-        # 提取数据内容
-        if 'data' in data:
-            if data_type == 'grid_data':
-                self.received_grid = data['data']
-                callback_data['grid_data'] = data['data']
-            elif data_type == 'runtime_data':
-                self.received_runtime = data['data']
-                callback_data['runtime_data'] = data['data']
+        # 处理数据内容
+        if pack_data_list and isinstance(pack_data_list, list):
+            if data_type == PackType.grid_data.value:
+                # grid_data保持只取第一个元素（根据需求）
+                self.received_grid = pack_data_list[0] if pack_data_list else None
+                callback_data['grid_data'] = self.received_grid
+            elif data_type == PackType.runtime_data.value:
+                # runtime_data改为接收所有元素
+                self.received_runtimes = pack_data_list
+                callback_data['runtime_data'] = self.received_runtimes
         
         # 附加无人机标识
         if 'uav_name' in data:
             callback_data['uav_name'] = data['uav_name']
+        
+        # 附加时间跨度
+        if 'time_span' in data:
+            callback_data['time_span'] = data['time_span']
         
         # 触发回调
         if callback_data and self.data_callback:
@@ -217,22 +233,26 @@ class UnitySocketServer:
                 logger.error(f"回调函数执行失败: {str(e)}")
 
     def _send_pending_data(self, conn: socket.socket) -> None:
-        """发送待处理的配置/运行时数据"""
-        # 发送配置数据
-        if self.pending_config:
-            self._send(conn, self.pending_config)
-            self.pending_config = None
-        
-        # 发送运行时数据
-        if self.pending_runtime:
-            self._send(conn, self.pending_runtime)
-            self.pending_runtime = None
+        """发送待处理的数据包"""
+        while self.pending_packs and self.connection:
+            pack = self.pending_packs.pop(0)
+            self._send(conn, pack)
 
-    def _send(self, conn: socket.socket, data: Dict[str, Any]) -> None:
-        """向Unity发送JSON数据"""
+    def _send(self, conn: socket.socket, pack: DataPacks) -> None:
+        """向Unity发送DataPacks结构的JSON数据"""
         try:
-            json_str = json.dumps(data, ensure_ascii=False)
+            # 转换为可序列化的字典
+            pack_dict = {
+                "type": pack.type.value,
+                "time_span": pack.time_span,
+                "pack_data_list": pack.pack_data_list
+            }
+            # 添加无人机标识（如果有）
+            if hasattr(pack, 'uav_name'):
+                pack_dict['uav_name'] = pack.uav_name
+                
+            json_str = json.dumps(pack_dict, ensure_ascii=False)
             conn.sendall(json_str.encode('utf-8'))
-            logger.debug(f"发送数据: {data['type']}")
+            logger.debug(f"发送数据包: {pack.type.value}，包含{len(pack.pack_data_list)}个数据项")
         except Exception as e:
             logger.error(f"发送数据失败: {str(e)}")

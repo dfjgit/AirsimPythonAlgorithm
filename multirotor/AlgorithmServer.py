@@ -24,7 +24,7 @@ from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.HexGridDataModel import HexGridDataModel
 from Algorithm.Vector3 import Vector3
-
+from AirsimServer.data_pack import PackType
 
 class MultiDroneAlgorithmServer:
     """
@@ -199,50 +199,71 @@ class MultiDroneAlgorithmServer:
             time.sleep(1)  # 错开起飞时间，避免碰撞
         return all_success
 
+    # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
-        """处理从Unity接收的数据"""
+        """处理从Unity接收的新格式数据"""
         try:
             with self.data_lock:
-                # 记录接收到的数据类型，便于调试
-                logger.debug(f"收到Unity数据，类型: {type(received_data).__name__}")
+                logger.debug(f"收到Unity数据: {received_data}")
                 
-                # 更新网格数据
-                if 'grid_data' in received_data:
-                    grid_data = received_data['grid_data']
-                    if isinstance(grid_data, dict):
-                        if 'cells' in grid_data and isinstance(grid_data['cells'], list):
-                            logger.info(f"收到网格数据，长度：{len(grid_data['cells'])}")
-                            with self.grid_lock:
-                                self.grid_data.update_from_dict(grid_data)
-                                logger.info(f"更新网格数据{self.grid_data}")
-                        else:
-                            logger.warning(f"网格数据格式不正确，缺少cells字段或cells不是列表: {grid_data}")
-                    else:
-                        logger.warning(f"grid_data不是字典类型，而是: {type(grid_data).__name__}")
+                # 解析数据包类型（适配DataPacks的PackType）
+                data_type = received_data.get('type')
+                if not data_type:
+                    logger.warning("收到无效数据：缺少type字段")
+                    return
 
-                # 更新无人机运行时数据
-                if 'runtime_data' in received_data and 'uav_name' in received_data:
-                    runtime_data = received_data['runtime_data']
-                    drone_name = received_data['uav_name']
-                    if isinstance(runtime_data, dict):
-                        if drone_name in self.unity_runtime_data:
-                            try:
-                                self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(runtime_data)
-                                # 记录位置信息
-                                pos = self.unity_runtime_data[drone_name].position
-                                self.last_positions[drone_name] = {
-                                    "x": pos.x, "y": pos.y, "z": pos.z
-                                }
-                                logger.debug(f"更新无人机{drone_name}运行时数据")
-                            except Exception as e:
-                                logger.error(f"解析无人机{drone_name}运行时数据出错: {str(e)}")
-                        else:
-                            logger.warning(f"未知的无人机名称: {drone_name}")
-                    else:                            
-                            logger.warning(f"runtime_data不是字典类型，而是: {type(runtime_data).__name__}")                                                 
+                # 处理网格数据（grid_data类型）
+                if data_type == PackType.grid_data.value:
+                    grid_data = received_data.get('data')
+                    if isinstance(grid_data, dict) and 'cells' in grid_data:
+                        logger.info(f"收到网格数据，包含{len(grid_data['cells'])}个单元")
+                        with self.grid_lock:
+                            self.grid_data.update_from_dict(grid_data)
+                    else:
+                        logger.warning(f"网格数据格式错误: {grid_data}")
+
+                # 处理运行时数据（runtime_data类型）
+                elif data_type == PackType.runtime_data.value:
+                    runtime_data = received_data.get('data')
+                    drone_name = received_data.get('uav_name')
+                    if drone_name in self.unity_runtime_data and isinstance(runtime_data, dict):
+                        try:
+                            self.unity_runtime_data[drone_name] = ScannerRuntimeData.from_dict(runtime_data)
+                            # 更新位置信息
+                            pos = self.unity_runtime_data[drone_name].position
+                            self.last_positions[drone_name] = {
+                                'x': pos.x,
+                                'y': pos.y,
+                                'z': pos.z,
+                                'timestamp': time.time()
+                            }
+                            logger.debug(f"更新无人机{drone_name}运行时数据: {pos}")
+                        except Exception as e:
+                            logger.error(f"解析无人机{drone_name}运行时数据失败: {str(e)}")
+                    else:
+                        logger.warning(f"无效的运行时数据或无人机名称: {drone_name}")
+
+                # 处理配置数据（config_data类型，预留）
+                elif data_type == PackType.config_data.value:
+                    config_data = received_data.get('data')
+                    logger.info("收到配置数据更新，准备重新加载配置")
+                    try:
+                        # 重新加载配置
+                        temp_config = ScannerConfigData.from_dict(config_data)
+                        self.config_data = temp_config
+                        # 更新所有无人机的算法配置
+                        for algo in self.algorithms.values():
+                            algo.config = self.config_data
+                        logger.info("配置数据更新成功")
+                    except Exception as e:
+                        logger.error(f"更新配置数据失败: {str(e)}")
+
+                # 未知数据类型处理
+                else:
+                    logger.warning(f"收到未知类型数据: {data_type}")
+
         except Exception as e:
-            logger.error(f"处理Unity数据出错: {str(e)}")
-            logger.debug(traceback.format_exc())
+            logger.error(f"处理Unity数据时发生错误: {str(e)}，堆栈信息: {traceback.format_exc()}")
 
 
     def _process_drone(self, drone_name: str) -> None:
