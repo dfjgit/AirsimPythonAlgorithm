@@ -87,7 +87,7 @@ class UnitySocketServer:
             pack.type = PackType.config_data
             pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             pack.pack_data_list = [config.to_dict()]  # 放入列表中
-            
+            logging.info("发送配置数据")
             self.pending_packs.append(pack)
         except Exception as e:
             logger.error(f"配置数据准备失败: {str(e)}")

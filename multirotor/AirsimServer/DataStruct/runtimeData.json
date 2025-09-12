@@ -1,0 +1,120 @@
+{
+  "type": "runtime_data",
+  "time_span": "09/12/2025 14:56:17",
+  "pack_data_list": [
+    {
+      "uavname": "UAV1",
+      "scoreDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "collideDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "pathDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderRangeDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "directionRetentionDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "finalMoveDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "position": {
+        "x": -15.72,
+        "y": -279.35883,
+        "z": -1.5
+      },
+      "forward": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderPosition": {
+        "x": 0.29982,
+        "y": 0.5,
+        "z": 0.0
+      },
+      "leaderScanRadius": 8.0,
+      "visitedCells": [],
+      "otherScannerPositions": [
+        {
+          "x": -15.76,
+          "y": -279.35883,
+          "z": 1.31
+        }
+      ]
+    },
+    {
+      "uavname": "UAV2",
+      "scoreDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "collideDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "pathDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderRangeDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "directionRetentionDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "finalMoveDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "position": {
+        "x": -15.76,
+        "y": -279.5022,
+        "z": 1.31
+      },
+      "forward": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderPosition": {
+        "x": 0.29982,
+        "y": 0.5,
+        "z": 0.0
+      },
+      "leaderScanRadius": 8.0,
+      "visitedCells": [],
+      "otherScannerPositions": [
+        {
+          "x": -15.72,
+          "y": -279.5022,
+          "z": -1.5
+        }
+      ]
+    }
+  ]
+}
