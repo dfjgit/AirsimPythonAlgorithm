@@ -15,7 +15,7 @@ logger = logging.getLogger("UnitySocketServer")
 class UnitySocketServer:
     """与Unity通信的Socket服务器核心类"""
 
-    def __init__(self, host='localhost', port=5000, buffer_size=4096*5):
+    def __init__(self, host='localhost', port=5000, buffer_size=4096):
         self.host = host
         self.port = port
         self.buffer_size = buffer_size
@@ -155,29 +155,40 @@ class UnitySocketServer:
         except Exception as e:
             logger.error(f"接收数据错误: {str(e)}")
 
+
     def _parse_buffer(self) -> None:
         """解析缓冲区中的JSON数据（适配DataPacks结构）"""
 
-        if '{' not in self.receive_buffer:
+        if not self.receive_buffer:
             return
 
-        try:
-            logger.info("解析到数据: %s", self.receive_buffer)
-            parsed = json.loads(self.receive_buffer)
-            if not isinstance(parsed, dict) or 'type' not in parsed:
-                raise ValueError("数据格式错误：必须是包含'type'字段的DataPacks对象")
+        # 使用换行符作为数据包分隔符
+        while '\n' in self.receive_buffer:
+            # 找到第一个换行符的位置
+            newline_pos = self.receive_buffer.index('\n')
+            # 提取一个完整的数据包
+            packet = self.receive_buffer[:newline_pos]
+            # 更新缓冲区，保留剩余数据
+            self.receive_buffer = self.receive_buffer[newline_pos + 1:]
 
-            self._handle_parsed(parsed)
-            self.receive_buffer = ""
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON格式错误: {str(e)}")
-            self.receive_buffer = ""
-        except ValueError as e:
-            logger.error(str(e))
-            self.receive_buffer = ""
-        except Exception as e:
-            logger.error(f"解析数据时出错: {str(e)}")
-            self.receive_buffer = ""
+            # 处理提取出的数据包
+            if packet.strip():
+                try:
+                    logger.debug(f"解析数据包: {packet}")
+                    parsed = json.loads(packet)
+                    if isinstance(parsed, dict) and 'type' in parsed:
+                        self._handle_parsed(parsed)
+                    else:
+                        logger.warning(f"无效的数据包格式（缺少type字段）: {packet}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON解析错误: {str(e)}, 数据包: {packet}")
+                except Exception as e:
+                    logger.error(f"解析数据包时出错: {str(e)}, 数据包: {packet}")
+
+        # 对于没有换行符的情况，我们不做处理，等待更多数据到达
+
+
+
 
     def _handle_parsed(self, data: Dict[str, Any]) -> None: ##这里data应该时DataPack格式
         """处理解析后的DataPacks数据并触发回调"""
