@@ -15,7 +15,7 @@ logger = logging.getLogger("UnitySocketServer")
 class UnitySocketServer:
     """与Unity通信的Socket服务器核心类"""
 
-    def __init__(self, host='localhost', port=5000, buffer_size=4096):
+    def __init__(self, host='localhost', port=5000, buffer_size=4096*5):
         self.host = host
         self.port = port
         self.buffer_size = buffer_size
@@ -28,6 +28,8 @@ class UnitySocketServer:
         self.receive_buffer = ""  # 接收缓存
         self.pending_packs = []  # 待发送的数据包列表（使用DataPacks结构）
 
+        # 添加发送锁，解决多线程同时发送导致的粘包问题
+        self.send_lock = threading.Lock()
         # 接收数据存储与回调
         self.received_grid = None
         self.received_runtimes = []  # 存储多个运行时数据
@@ -160,9 +162,11 @@ class UnitySocketServer:
             return
 
         try:
+            logger.info("解析到数据: %s", self.receive_buffer)
             parsed = json.loads(self.receive_buffer)
             if not isinstance(parsed, dict) or 'type' not in parsed:
                 raise ValueError("数据格式错误：必须是包含'type'字段的DataPacks对象")
+
             self._handle_parsed(parsed)
             self.receive_buffer = ""
         except json.JSONDecodeError as e:
@@ -222,7 +226,9 @@ class UnitySocketServer:
             }
             # 序列化为JSON并发送
             json_data = json.dumps(pack_dict, ensure_ascii=False) + "\n"  # 加换行符作为分隔符
-            conn.sendall(json_data.encode('utf-8'))
+            # 使用锁确保发送操作的原子性
+            with self.send_lock:
+                conn.sendall(json_data.encode('utf-8'))
             logger.debug(f"发送数据: {pack_dict['type']} (长度: {len(json_data)})")
         except Exception as e:
             logger.error(f"发送数据失败: {str(e)}")

@@ -92,5 +92,9 @@ class Vector3:
 
     def unity_to_air_sim(self):
         """ Unity坐标转换为AirSim坐标 """
-        return Vector3(self.x, self.y, -self.z)
+        return Vector3(self.z, self.x, -self.y)
+
+    def airsim_to_unity(self):
+        """ Unity坐标转换为AirSim坐标 """
+        return Vector3(self.y, -self.z, self.x)
 

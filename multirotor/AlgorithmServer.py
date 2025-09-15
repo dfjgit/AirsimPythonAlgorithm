@@ -41,7 +41,7 @@ class MultiDroneAlgorithmServer:
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
         # 无人机名称初始化
-        self.drone_names = drone_names if drone_names else ["UAV1", "UAV2"]
+        self.drone_names = drone_names if drone_names else ["UAV1"]
         logger.info(f"初始化多无人机算法服务，控制无人机: {self.drone_names}")
 
         # 核心组件初始化
@@ -286,7 +286,6 @@ class MultiDroneAlgorithmServer:
                 final_dir = self.algorithms[drone_name].update_runtime_data(
                     self.grid_data, self.unity_runtime_data[drone_name]
                 )
-
 
                 # 2. 控制无人机移动
                 self._control_drone_movement(drone_name, final_dir.finalMoveDir)
