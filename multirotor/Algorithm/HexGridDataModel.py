@@ -1,6 +1,7 @@
 # 数据模型类，用于 JSON 序列化
 import json
 import os
+import logging
 from typing import List, Optional, Dict, Any
 from .Vector3 import Vector3
 
@@ -86,17 +87,28 @@ class HexGridDataModel:
 
     def update_from_dict(self, data: Dict[str, Any]) -> None:
         """更新现有对象的数据，而不是创建新对象"""
-        # 清空现有cells
-        self.cells.clear()
+        try:
+            # 清空现有cells
+            self.cells.clear()
 
-        # 安全处理单元格数据
-        if isinstance(data.get('cells'), list):
-            self.cells = [
-                HexCell.from_dict(cell_data)
-                for cell_data in data['cells']
-                if isinstance(cell_data, dict)
-            ]
-        print(f"更新HexGridDataModel: {self}")
+            # 安全处理数据：首先检查data是否是字典类型
+            if not isinstance(data, dict):
+                logging.warning(f"HexGridDataModel.update_from_dict: 数据类型无效，期望dict，得到: {type(data).__name__}")
+                return
+
+            # 安全处理单元格数据
+            cells_data = data.get('cells')
+            if isinstance(cells_data, list):
+                self.cells = [
+                    HexCell.from_dict(cell_data)
+                    for cell_data in cells_data
+                    if isinstance(cell_data, dict)
+                ]
+                logging.info(f"HexGridDataModel.update_from_dict: 已更新 {len(self.cells)} 个蜂窝单元")
+            else:
+                logging.warning(f"HexGridDataModel.update_from_dict: cells字段不是列表类型，而是: {type(cells_data).__name__}")
+        except Exception as e:
+            logging.error(f"HexGridDataModel.update_from_dict: 更新网格数据时出错: {str(e)}")
 
     def serialize_to_json(self) -> Optional[str]:
         """将数据模型序列化为JSON字符串"""

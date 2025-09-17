@@ -4,6 +4,7 @@ from .Vector3 import Vector3
 
 class ScannerRuntimeData:
     """扫描器实时数据类，对应C#中的ScannerRuntimeData"""
+    uavname: str
     # 方向向量（Python提供,Unity绘制）
     scoreDir: Vector3
     collideDir: Vector3
@@ -25,8 +26,9 @@ class ScannerRuntimeData:
     visited_cells: List[Vector3]
     otherScannerPositions: List[Vector3]
 
-    def __init__(self, direction=None, position=None, velocity=None, 
+    def __init__(self, direction=None, position=None, velocity=None,
                  leader_position=None, leader_velocity=None, visited_cells=None):
+        self.uavname = ""
         # 初始化向量默认值
         self.position = position if position is not None else Vector3()
         self.forward = Vector3(0, 0, 1)
@@ -51,6 +53,7 @@ class ScannerRuntimeData:
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典以便序列化"""
         return {
+            'uavname': self.uavname,
             # 方向向量
             'scoreDir': self.scoreDir.to_dict(),
             'collideDir': self.collideDir.to_dict(),
@@ -76,7 +79,7 @@ class ScannerRuntimeData:
     def from_dict(cls, data: Dict[str, Any]):
         """从字典创建ScannerRuntimeData实例"""
         instance = cls()
-        
+
         # 解析向量数据
         vector_keys = [
             ('position', 'position'),
@@ -94,6 +97,10 @@ class ScannerRuntimeData:
             if isinstance(data_dict, dict):
                 setattr(instance, attr_name, Vector3.from_dict(data_dict))
 
+        # 解析无人机名称
+        if 'uavname' in data:
+            instance.uavname = data['uavname']
+
         # 解析领导者扫描半径
         if 'leaderScanRadius' in data:
             instance.leader_scan_radius = data['leaderScanRadius']
@@ -109,7 +116,7 @@ class ScannerRuntimeData:
         # 解析其它扫描者坐标
         if 'otherScannerPositions' in data and isinstance(data['otherScannerPositions'], list):
             instance.otherScannerPositions = [
-                Vector3.from_dict(pos_data) 
+                Vector3.from_dict(pos_data)
                 for pos_data in data['otherScannerPositions']
                 if isinstance(pos_data, dict)
             ]
@@ -119,10 +126,10 @@ class ScannerRuntimeData:
     def add_visited_cell(self, cell_position: Vector3) -> None:
         """添加已访问的蜂窝位置（去重）"""
         if not any(
-            cell.x == cell_position.x and
-            cell.y == cell_position.y and
-            cell.z == cell_position.z
-            for cell in self.visited_cells
+                cell.x == cell_position.x and
+                cell.y == cell_position.y and
+                cell.z == cell_position.z
+                for cell in self.visited_cells
         ):
             self.visited_cells.append(cell_position)
 
@@ -166,6 +173,6 @@ class ScannerRuntimeData:
         new_data.visited_cells = [Vector3(cell.x, cell.y, cell.z) for cell in self.visited_cells]
         new_data.otherScannerPositions = [Vector3(pos.x, pos.y, pos.z) for pos in self.otherScannerPositions]
         return new_data
-    
+
     def __repr__(self) -> str:
-        return f"ScannerConfigData{self.finalMoveDir}"
+        return f"RUNTIME_DATA UavName:{self.uavname}Start:{self.position}To:{self.finalMoveDir}"

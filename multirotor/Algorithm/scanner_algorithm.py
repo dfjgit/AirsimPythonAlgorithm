@@ -1,427 +1,300 @@
-
-
 import numpy as np
 import math
+import logging
 from .Vector3 import Vector3
 from .HexGridDataModel import HexGridDataModel, HexCell
 from .scanner_config_data import ScannerConfigData
 from .scanner_runtime_data import ScannerRuntimeData
 from typing import List, Dict, Tuple, Optional, Set
+import time
 
 
 class ScannerAlgorithm:
     def __init__(self, config_data: ScannerConfigData):
-        """初始化扫描器算法，传入配置数据
+        """初始化扫描器算法，传入配置数据"""
+        self.config = config_data
+        self.last_update_time = 0.0
+        self.previous_move_dir = Vector3(0, 0, 1)  # 上一帧的移动方向
+        self.visited_cells: Dict[Tuple[float, float, float], float] = {}  # 存储访问时间 (x,y,z) -> timestamp
+
+    def calculate_proportional_weights(self) -> Tuple[float, float, float, float, float]:
+        """计算权重：F = 系数 / 系数总和（与C#逻辑一致）"""
+        total = (self.config.repulsionCoefficient + 
+                 self.config.entropyCoefficient + 
+                 self.config.distanceCoefficient + 
+                 self.config.leaderRangeCoefficient + 
+                 self.config.directionRetentionCoefficient)
         
-        Args:
-            config_data: 包含算法参数的配置数据对象
-        """
-        self.config = config_data #配置数据
-        # 导入配置参数并映射到算法所需的属性
-        self.weight_coef = config_data.entropyCoefficient  # 权重系数映射到熵系数
-        self.entropy_coef = config_data.entropyCoefficient  # 熵系数
-        self.neighbor_coef = config_data.leaderRangeCoefficient  # 邻居系数映射到领导者范围系数
-        self.angle_coef = config_data.directionRetentionCoefficient  # 角度系数映射到方向保持系数
-        self.visited_coef = 1.0  # 默认值，配置中没有直接对应项
-        self.distance_coef = config_data.distanceCoefficient  # 距离系数
-        self.current_pos_coef = 0.5  # 默认值，配置中没有直接对应项
-        self.max_velocity = config_data.moveSpeed  # 最大速度映射到移动速度
-        self.max_angle_velocity = math.radians(config_data.rotationSpeed)  # 最大角速度（转换为弧度）
-        self.rotation_radius = 1.0  # 默认值，配置中没有直接对应项
-        self.max_move_distance = config_data.moveSpeed  # 最大移动距离映射到移动速度
-        self.min_move_distance = 0.1  # 默认值，配置中没有直接对应项
+        # 处理所有系数都为0的特殊情况
+        if total < 0.001:
+            return (0.2, 0.2, 0.2, 0.2, 0.2)
         
-        # 已访问记录清理参数
-        self.revisit_cooldown = config_data.revisitCooldown
-        self.avoid_revisits = config_data.avoidRevisits
-    
-    def calculate_weights(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> Dict[Tuple[float, float], float]:
-        """计算各个蜂窝单元的权重
-        
-        Args:
-            grid_data: 网格数据对象
-            runtime_data: 运行时数据对象
-        
-        Returns:
-            以(x,z)坐标为键，权重值为值的字典
-        """
-        weights = {}
-        current_heading = runtime_data.direction.normalized() if runtime_data.direction.magnitude() > 1e-4 else Vector3(1, 0, 0)
-        current_position = runtime_data.position
-        visited_cells = runtime_data.visited_cells
+        return (
+            self.config.repulsionCoefficient / total,
+            self.config.entropyCoefficient / total,
+            self.config.distanceCoefficient / total,
+            self.config.leaderRangeCoefficient / total,
+            self.config.directionRetentionCoefficient / total
+        )
+
+    def get_valid_candidate_cells(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> List[HexCell]:
+        """获取有效的候选蜂窝（与C# GetValidCandidateCells逻辑一致）"""
+        current_pos = runtime_data.position
+        candidate_cells = []
         
         for cell in grid_data.cells:
-            cell_center = cell.center
-            cell_entropy = cell.entropy
+            # 检查是否在Leader范围内
+            if runtime_data.leader_position is not None:
+                distance_to_leader = (cell.center - runtime_data.leader_position).magnitude()
+                if distance_to_leader > runtime_data.leader_scan_radius:
+                    continue  # 不在Leader范围内，跳过
             
-            # 检查是否已访问
-            cell_key = (round(cell_center.x, 2), round(cell_center.z, 2))
-            is_visited = cell_key in visited_cells
+            # 检查是否在搜索范围内
+            distance_to_cell = (cell.center - current_pos).magnitude()
+            if distance_to_cell > self.config.targetSearchRange:
+                continue  # 超出搜索范围，跳过
             
-            # 计算从当前位置到单元中心的向量
-            pos_to_cell = Vector3(
-                cell_center.x - current_position.x,
-                0.0,  # 假设为2D平面
-                cell_center.z - current_position.z
-            )
-            distance = pos_to_cell.magnitude()
+            # 检查是否需要避免重复访问
+            if self.config.avoidRevisits:
+                # 四舍五入避免浮点数精度问题
+                rounded_center = (
+                    round(cell.center.x * 100) / 100,
+                    round(cell.center.y * 100) / 100,
+                    round(cell.center.z * 100) / 100
+                )
+                
+                if rounded_center in self.visited_cells:
+                    # 检查是否在冷却期内
+                    if time.time() - self.visited_cells[rounded_center] < self.config.revisitCooldown:
+                        continue  # 仍在冷却期，跳过
             
-            # 归一化位置到单元中心的向量
-            if distance > 0.001:
-                pos_to_cell_normalized = pos_to_cell.normalized()
+            candidate_cells.append(cell)
+        
+        return candidate_cells
+
+    def calculate_score_direction(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> Vector3:
+        """计算熵最优方向向量（与C# CalculateScoreDirection逻辑一致）"""
+        current_pos = Vector3(runtime_data.position.x, 0, runtime_data.position.z)
+        candidate_cells = self.get_valid_candidate_cells(grid_data, runtime_data)
+        
+        if not candidate_cells:
+            return Vector3()
+        
+        # 归一化熵值范围（0-1）
+        entropies = [cell.entropy for cell in candidate_cells]
+        min_entropy = min(entropies)
+        max_entropy = max(entropies)
+        entropy_range = max_entropy - min_entropy
+        all_entropy_same = abs(entropy_range) < 0.01
+        
+        # 计算每个候选蜂窝的分数
+        scored_cells = []
+        for cell in candidate_cells:
+            distance = (cell.center - current_pos).magnitude()
+            normalized_distance = min(1.0, max(0.0, 1 - (distance / self.config.targetSearchRange)))
+            
+            # 计算熵值分数
+            if all_entropy_same:
+                entropy_score = 0.5
             else:
-                pos_to_cell_normalized = Vector3()
+                entropy_score = (cell.entropy - min_entropy) / entropy_range
             
-            # 计算与当前航向的夹角
-            angle_diff = math.acos(max(-1, min(1, current_heading.dot(pos_to_cell_normalized)))) if distance > 0.001 else 0
+            # 综合分数：熵值为主（70%），距离为辅（30%）
+            total_score = entropy_score * 0.7 + normalized_distance * 0.3
+            scored_cells.append((cell, total_score))
+        
+        # 选择最高分的蜂窝作为目标
+        best_cell = max(scored_cells, key=lambda x: x[1])[0]
+        score_dir = (best_cell.center - current_pos).normalized()
+        
+        # 记录访问
+        self.record_visited_cell(best_cell.center)
+        return score_dir
+
+    def calculate_path_direction(self, score_dir: Vector3) -> Vector3:
+        """计算最短路径方向向量（与C# CalculatePathDirection逻辑一致）"""
+        return score_dir  # 路径方向与分数方向一致
+
+    def calculate_collide_direction(self, runtime_data: ScannerRuntimeData) -> Vector3:
+        """计算排斥力方向向量（与C# CalculateRepulsionDirection逻辑一致）"""
+        collide_dir = Vector3()
+        current_pos = runtime_data.position
+        
+        # 其他扫描器位置
+        other_scanners = runtime_data.otherScannerPositions
+        
+        for other_pos in other_scanners:
+            delta_pos = current_pos - other_pos
+            distance = delta_pos.magnitude()
             
-            # 计算邻居单元的熵值总和
-            neighbor_entropy_sum = self._calculate_neighbor_entropy(grid_data, cell, visited_cells)
+            # 超出排斥范围或距离过近（避免除以零）
+            if distance > self.config.maxRepulsionDistance or distance < 0.1:
+                continue
             
-            # 计算权重
-            weight = (
-                self.weight_coef * cell_entropy +
-                self.neighbor_coef * neighbor_entropy_sum -
-                self.angle_coef * angle_diff -
-                self.visited_coef * is_visited -
-                self.distance_coef * distance -
-                self.current_pos_coef * distance
-            )
-            
-            weights[cell_key] = weight
+            # 计算排斥力比例
+            repulsion_ratio = self.calculate_repulsion_ratio(distance)
+            collide_dir += delta_pos.normalized() * repulsion_ratio
         
-        return weights
-    
-    def _calculate_neighbor_entropy(self, grid_data: HexGridDataModel, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> float:
-        """计算邻居单元的熵值总和
+        # 归一化排斥方向
+        if collide_dir.magnitude() > 0.1:
+            return collide_dir.normalized()
+        return collide_dir
+
+    def calculate_repulsion_ratio(self, distance: float) -> float:
+        """计算排斥力比例（与C# CalculateRepulsionRatio逻辑一致）"""
+        if distance <= self.config.minSafeDistance:
+            return 1.0
+        if distance >= self.config.maxRepulsionDistance:
+            return 0.0
         
-        Args:
-            grid_data: 网格数据对象
-            cell: 当前蜂窝单元
-            visited_cells: 已访问单元集合
+        # 非线性衰减，近距离排斥力增长更快
+        t = (distance - self.config.minSafeDistance) / (self.config.maxRepulsionDistance - self.config.minSafeDistance)
+        return 1.0 - (t * t)
+
+    def calculate_leader_range_direction(self, runtime_data: ScannerRuntimeData) -> Vector3:
+        """计算保持在Leader范围内的方向向量（与C# CalculateLeaderRangeDirection逻辑一致）"""
+        leader_range_dir = Vector3()
+        current_pos = runtime_data.position
+        leader_pos = runtime_data.leader_position
+        leader_scan_radius = runtime_data.leader_scan_radius
         
-        Returns:
-            邻居单元熵值总和
-        """
-        neighbor_entropy_sum = 0.0
-        cell_center = cell.center
+        if leader_pos is None:
+            return leader_range_dir
         
-        # 六边形网格的6个方向
-        directions = [
-            Vector3(1, 0, 0), Vector3(0.5, 0, np.sqrt(3)/2),
-            Vector3(-0.5, 0, np.sqrt(3)/2), Vector3(-1, 0, 0),
-            Vector3(-0.5, 0, -np.sqrt(3)/2), Vector3(0.5, 0, -np.sqrt(3)/2)
+        # 计算与Leader的距离
+        distance_to_leader = (current_pos - leader_pos).magnitude()
+        
+        # 如果超出Leader的范围，生成指向Leader的方向向量
+        if distance_to_leader > leader_scan_radius:
+            # 距离越远，返回的力度越大
+            range_ratio = min(1.0, (distance_to_leader - leader_scan_radius) / leader_scan_radius)
+            leader_range_dir = (leader_pos - current_pos).normalized() * (1.0 + range_ratio)
+        # 如果离Leader过近，生成轻微远离Leader的方向向量
+        elif distance_to_leader < leader_scan_radius * 0.3:
+            leader_range_dir = (current_pos - leader_pos).normalized() * 0.3
+        
+        return leader_range_dir
+
+    def calculate_direction_retention_direction(self) -> Vector3:
+        """计算方向保持向量（与C# CalculateDirectionRetentionDirection逻辑一致）"""
+        return self.previous_move_dir  # 方向保持向量与上一帧的移动方向一致
+
+    def merge_directions(self, 
+                        score_dir: Vector3, 
+                        path_dir: Vector3, 
+                        collide_dir: Vector3, 
+                        leader_range_dir: Vector3, 
+                        direction_retention_dir: Vector3,
+                        weights: Tuple[float, float, float, float, float]) -> Vector3:
+        """合并所有方向向量（与C# MergeDirections逻辑一致）"""
+        repulsion_weight, entropy_weight, distance_weight, leader_range_weight, direction_retention_weight = weights
+        
+        # 应用权重合并向量
+        final_move_dir = (
+            score_dir * entropy_weight +
+            path_dir * distance_weight +
+            collide_dir * repulsion_weight +
+            leader_range_dir * leader_range_weight +
+            direction_retention_dir * direction_retention_weight
+        )
+        
+        # 归一化最终方向
+        if final_move_dir.magnitude() > 0.1:
+            return final_move_dir.normalized()
+        else:
+            # 如果最终方向接近零，保持当前方向
+            return self.previous_move_dir
+
+    def record_visited_cell(self, cell_center: Vector3) -> None:
+        """记录已访问的蜂窝（与C# RecordVisitedCell逻辑一致）"""
+        if not self.config.avoidRevisits:
+            return
+        
+        # 四舍五入避免浮点数精度问题
+        rounded_center = (
+            round(cell_center.x * 100) / 100,
+            round(cell_center.y * 100) / 100,
+            round(cell_center.z * 100) / 100
+        )
+        
+        self.visited_cells[rounded_center] = time.time()
+
+    def cleanup_visited_records(self) -> None:
+        """清理过期的访问记录（与C# CleanupVisitedRecords逻辑一致）"""
+        if not self.config.avoidRevisits:
+            return
+        
+        current_time = time.time()
+        expired_keys = [
+            key for key, timestamp in self.visited_cells.items()
+            if current_time - timestamp >= self.config.revisitCooldown
         ]
         
-        # 假设网格间距为1，实际应用中需要根据实际网格调整
-        grid_spacing = 1.0
-        
-        for direction in directions:
-            neighbor_pos = Vector3(
-                cell_center.x + direction.x * grid_spacing,
-                0.0,
-                cell_center.z + direction.z * grid_spacing
-            )
-            
-            # 查找邻居单元
-            neighbor_cell = self._find_cell_at_position(grid_data, neighbor_pos)
-            if neighbor_cell:
-                neighbor_key = (round(neighbor_cell.center.x, 2), round(neighbor_cell.center.z, 2))
-                if neighbor_key not in visited_cells:
-                    neighbor_entropy_sum += neighbor_cell.entropy
-        
-        return neighbor_entropy_sum
-    
-    def _find_cell_at_position(self, grid_data: HexGridDataModel, position: Vector3) -> Optional[HexCell]:
-        """在网格中查找指定位置的单元
-        
-        Args:
-            grid_data: 网格数据对象
-            position: 目标位置
-        
-        Returns:
-            找到的蜂窝单元，未找到则返回None
-        """
-        # 使用简单的距离检查，实际应用中可能需要更高效的查找算法
-        for cell in grid_data.cells:
-            dx = cell.center.x - position.x
-            dz = cell.center.z - position.z
-            if dx*dx + dz*dz < 0.5:  # 阈值可能需要根据网格大小调整
-                return cell
-        return None
-    
-    def calculate_score_direction(self, weights: Dict[Tuple[float, float], float], 
-                                  current_position: Vector3, 
-                                  grid_data: HexGridDataModel, 
-                                  runtime_data: ScannerRuntimeData) -> Vector3:
-        """计算不同方向的得分
-        
-        Args:
-            weights: 各单元权重字典
-            current_position: 当前位置
-            grid_data: 网格数据对象
-            runtime_data: 运行时数据对象
-        
-        Returns:
-            得分最高的方向向量
-        """
-        direction_scores = []
-        current_heading = runtime_data.direction.normalized() if runtime_data.direction.magnitude() > 1e-4 else Vector3(1, 0, 0)
-        
-        # 生成多个方向候选
-        num_directions = 12  # 方向候选数量
-        for i in range(num_directions):
-            angle = 2 * math.pi * i / num_directions
-            candidate_direction = Vector3(math.cos(angle), 0, math.sin(angle))
-            
-            # 计算该方向的得分
-            score = self._calculate_direction_score(candidate_direction, current_position, weights, grid_data)
-            
-            # 考虑与当前航向的一致性
-            direction_consistency = current_heading.dot(candidate_direction)
-            adjusted_score = score * direction_consistency
-            
-            direction_scores.append((candidate_direction, adjusted_score))
-        
-        # 找到得分最高的方向
-        if direction_scores:
-            best_direction, best_score = max(direction_scores, key=lambda x: x[1])
-            return best_direction
-        
-        # 如果没有有效的方向，返回当前航向
-        return current_heading
-    
-    def _calculate_direction_score(self, direction: Vector3, current_position: Vector3, 
-                                  weights: Dict[Tuple[float, float], float], 
-                                  grid_data: HexGridDataModel) -> float:
-        """计算指定方向的得分
-        
-        Args:
-            direction: 候选方向
-            current_position: 当前位置
-            weights: 各单元权重字典
-            grid_data: 网格数据对象
-        
-        Returns:
-            该方向的得分
-        """
-        # 沿方向生成一条线，计算线上的权重积分
-        score = 0.0
-        samples = 10  # 采样点数
-        max_line_length = self.max_move_distance  # 线的最大长度
-        
-        for i in range(1, samples + 1):
-            distance = (i / samples) * max_line_length
-            sample_point = Vector3(
-                current_position.x + direction.x * distance,
-                0.0,
-                current_position.z + direction.z * distance
-            )
-            
-            # 找到最近的单元
-            nearest_cell = self._find_cell_at_position(grid_data, sample_point)
-            if nearest_cell:
-                cell_key = (round(nearest_cell.center.x, 2), round(nearest_cell.center.z, 2))
-                if cell_key in weights:
-                    # 距离越近权重越高
-                    weight_contribution = weights[cell_key] * (1 - i / samples)
-                    score += weight_contribution
-        
-        return score
-    
-    def update_heading(self, best_direction: Vector3, current_direction: Vector3) -> Vector3:
-        """更新航向，考虑最大角速度限制
-        
-        Args:
-            best_direction: 最佳方向向量
-            current_direction: 当前方向向量
-        
-        Returns:
-            更新后的方向向量
-        """
-        # 归一化方向向量
-        best_dir_norm = best_direction.normalized()
-        current_dir_norm = current_direction.normalized() if current_direction.magnitude() > 1e-4 else Vector3(1, 0, 0)
-        
-        # 计算方向之间的夹角
-        dot_product = max(-1, min(1, current_dir_norm.dot(best_dir_norm)))  # 限制在[-1, 1]范围内
-        angle = math.acos(dot_product)
-        
-        # 如果角度小于阈值，直接返回目标方向
-        if angle < 0.001:
-            return best_dir_norm
-        
-        # 计算旋转轴（叉积）
-        rotation_axis = current_dir_norm.cross(best_dir_norm)
-        rotation_axis = rotation_axis.normalized() if rotation_axis.magnitude() > 1e-4 else Vector3(0, 1, 0)
-        
-        # 限制旋转角度不超过最大角速度
-        max_allowed_angle = self.max_angle_velocity  # 假设单位时间内的最大旋转角度
-        actual_angle = min(angle, max_allowed_angle)
-        
-        # 使用罗德里格斯旋转公式进行旋转
-        new_direction = self._rotate_vector(current_dir_norm, rotation_axis, actual_angle)
-        return new_direction.normalized()
-    
-    def _rotate_vector(self, vector: Vector3, axis: Vector3, angle: float) -> Vector3:
-        """使用罗德里格斯旋转公式旋转向量
-        
-        Args:
-            vector: 待旋转向量
-            axis: 旋转轴
-            angle: 旋转角度（弧度）
-        
-        Returns:
-            旋转后的向量
-        """
-        # 罗德里格斯旋转公式
-        cos_angle = math.cos(angle)
-        sin_angle = math.sin(angle)
-        
-        rotated_vector = Vector3(
-            vector.x * cos_angle + \
-            axis.cross(vector).x * sin_angle + \
-            axis.x * axis.dot(vector) * (1 - cos_angle),
-            vector.y * cos_angle + \
-            axis.cross(vector).y * sin_angle + \
-            axis.y * axis.dot(vector) * (1 - cos_angle),
-            vector.z * cos_angle + \
-            axis.cross(vector).z * sin_angle + \
-            axis.z * axis.dot(vector) * (1 - cos_angle)
-        )
-        
-        return rotated_vector
-    
-    def calculate_movement(self, best_direction: Vector3, current_position: Vector3, 
-                          current_velocity: Vector3, runtime_data: ScannerRuntimeData) -> Vector3:
-        """计算移动距离和新位置
-        
-        Args:
-            best_direction: 最佳方向向量
-            current_position: 当前位置
-            current_velocity: 当前速度
-            runtime_data: 运行时数据对象
-        
-        Returns:
-            新的位置向量
-        """
-        # 归一化方向
-        direction_norm = best_direction.normalized()
-        
-        # 计算目标速度
-        target_velocity = Vector3(
-            direction_norm.x * self.max_velocity,
-            direction_norm.y * self.max_velocity,
-            direction_norm.z * self.max_velocity
-        )
-        
-        # 平滑过渡到目标速度
-        velocity_diff = Vector3(
-            target_velocity.x - current_velocity.x,
-            target_velocity.y - current_velocity.y,
-            target_velocity.z - current_velocity.z
-        )
-        velocity_diff_mag = velocity_diff.magnitude()
-        
-        if velocity_diff_mag > 1e-4:
-            # 限制速度变化量
-            velocity_step = min(velocity_diff_mag, self.max_velocity * 0.1)  # 假设加速度限制
-            new_velocity = Vector3(
-                current_velocity.x + velocity_diff.x / velocity_diff_mag * velocity_step,
-                current_velocity.y + velocity_diff.y / velocity_diff_mag * velocity_step,
-                current_velocity.z + velocity_diff.z / velocity_diff_mag * velocity_step
-            )
-        else:
-            new_velocity = current_velocity
-        
-        # 计算移动距离
-        move_distance = new_velocity.magnitude()  # 假设单位时间
-        
-        # 确保移动距离在合理范围内
-        move_distance = max(self.min_move_distance, min(move_distance, self.max_move_distance))
-        
-        # 计算新位置
-        new_position = Vector3(
-            current_position.x + direction_norm.x * move_distance,
-            current_position.y,
-            current_position.z + direction_norm.z * move_distance
-        )
-        
-        return new_position
-    
-    # def record_visited_cell(self, cell: HexCell, visited_cells: Set[Tuple[float, float]]) -> None:
-    #     """记录已访问的蜂窝单元
-        
-    #     Args:
-    #         cell: 蜂窝单元
-    #         visited_cells: 已访问单元集合
-    #     """
-    #     if not self.avoid_revisits:
-    #         return
-        
-    #     cell_key = (round(cell.center.x, 2), round(cell.center.z, 2))
-    #     visited_cells.add(cell_key)
-    
+        for key in expired_keys:
+            del self.visited_cells[key]
+
     def update_runtime_data(self, grid_data: HexGridDataModel, 
                           runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
-        """更新运行时数据，主算法入口
-        
-        输入: 网格数据、配置数据(实例化时输入)、运行过程数据
-        输出: 计算后的运行过程数据
-        
-        Args:
-            grid_data: 网格数据对象
-            runtime_data: 运行过程数据对象
-        
-        Returns:
-            计算后的运行过程数据对象
-        """
-        # 打印一下输入的各项数据
-        print(f"输入的网格数据: {grid_data}")
-        print(f"输入的配置数据: {self.config}")
-        print(f"输入的运行过程数据: {runtime_data}")
-        # 1. 计算各个单元的权重
-        weights = self.calculate_weights(grid_data, runtime_data)
-        
-        # 2. 计算最佳方向
-        best_direction = self.calculate_score_direction(weights, runtime_data.position, grid_data, runtime_data)
-        
-        # 3. 更新航向
-        new_direction = self.update_heading(best_direction, runtime_data.direction)
-        
-        # 4. 计算新位置
-        new_position = self.calculate_movement(new_direction, runtime_data.position, runtime_data.velocity, runtime_data)
-        
+        """更新运行时数据（供其他组件使用的接口）"""
+        try:
+            # 类型检查
+            if not isinstance(grid_data, HexGridDataModel):
+                logging.warning(f"ScannerAlgorithm.update_runtime_data: grid_data类型无效，期望HexGridDataModel，得到: {type(grid_data).__name__}")
+                return runtime_data
+            
+            if not isinstance(runtime_data, ScannerRuntimeData):
+                logging.warning(f"ScannerAlgorithm.update_runtime_data: runtime_data类型无效，期望ScannerRuntimeData，得到: {type(runtime_data).__name__}")
+                return runtime_data
+            logging.info("uavName"+runtime_data.uavname)
+            current_time = time.time()
+            
+            # 定期更新方向（根据updateInterval）
+            if current_time - self.last_update_time >= self.config.updateInterval:
+                self.last_update_time = current_time
                 
-        # 6. 创建更新后的运行时数据
-        updated_runtime_data = ScannerRuntimeData(
-            direction=new_direction,
-            position=new_position,
-            velocity=Vector3(0, 0, 0),  # 简化处理，实际应该根据运动模型更新
-            leader_position=runtime_data.leader_position,
-            leader_velocity=runtime_data.leader_velocity,
-            # visited_cells=runtime_data.visited_cells.copy()
-        )
-        # 打印一下输出的各项数据
-        print(f"输出的运行过程数据: {updated_runtime_data}")
-        return updated_runtime_data
+                # 保存当前方向作为下一帧的"previousMoveDir"
+                try:
+                    if runtime_data.finalMoveDir and runtime_data.finalMoveDir.magnitude() > 0.1:
+                        self.previous_move_dir = runtime_data.finalMoveDir
+                except Exception as e:
+                    logging.warning(f"ScannerAlgorithm.update_runtime_data: 获取finalMoveDir失败: {str(e)}")
+                    
+                # 计算各权重
+                weights = self.calculate_proportional_weights()
+                
+                # 计算各方向向量
+                try:
+                    score_dir = self.calculate_score_direction(grid_data, runtime_data)
+                    path_dir = self.calculate_path_direction(score_dir)
+                    collide_dir = self.calculate_collide_direction(runtime_data)
+                    leader_range_dir = self.calculate_leader_range_direction(runtime_data)
+                    direction_retention_dir = self.calculate_direction_retention_direction()
+                    
+                    # 合并所有向量
+                    final_move_dir = self.merge_directions(
+                        score_dir, path_dir, collide_dir, 
+                        leader_range_dir, direction_retention_dir,
+                        weights
+                    )
+                    
+                    # 清理过期访问记录
+                    self.cleanup_visited_records()
 
-    def test_runtime_data(self, grid_data: HexGridDataModel,
-                            runtime_data: ScannerRuntimeData) -> ScannerRuntimeData:
-        """更新运行时数据，主算法入口
+                    # 更新runtime_data中的方向向量
+                    runtime_data.scoreDir = score_dir
+                    runtime_data.collideDir = collide_dir
+                    runtime_data.pathDir = path_dir
+                    runtime_data.leaderRangeDir = leader_range_dir
+                    runtime_data.directionRetentionDir = direction_retention_dir
+                    runtime_data.finalMoveDir = final_move_dir
+                except Exception as e:
+                    logging.error(f"ScannerAlgorithm.update_runtime_data: 计算方向向量失败: {str(e)}")
 
-        输入: 网格数据、配置数据(实例化时输入)、运行过程数据
-        输出: 计算后的运行过程数据
+                # 使用日志记录替代print语句
+                logging.debug(f"输入的Grid数据: {grid_data}")
+                logging.debug(f"输入的Runtime数据: {runtime_data}")
 
-        Args:
-            grid_data: 网格数据对象
-            runtime_data: 运行过程数据对象
-
-        Returns:
-            计算后的运行过程数据对象
-        """
-        # 1. 输出一个假的方向
-        runtime_data.finalMoveDir = Vector3(1,0,1)
-
-        return runtime_data
-
+            return runtime_data
+        except Exception as e:
+            logging.error(f"ScannerAlgorithm.update_runtime_data: 处理运行时数据时出错: {str(e)}")
+            return runtime_data

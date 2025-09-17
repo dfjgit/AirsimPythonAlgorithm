@@ -3,35 +3,36 @@ import json
 import threading
 import logging
 import time
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Iterable
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.scanner_config_data import ScannerConfigData
+from AirsimServer.data_pack import DataPacks, PackType
 
-# 配置日志（简化输出）
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("UnitySocketServer")
 
 
 class UnitySocketServer:
     """与Unity通信的Socket服务器核心类"""
-    
+
     def __init__(self, host='localhost', port=5000, buffer_size=4096):
         self.host = host
         self.port = port
         self.buffer_size = buffer_size
         self.socket = None
         self.connection = None  # 当前连接
-        self.running = False    # 运行状态标志
+        self.running = False  # 运行状态标志
         self.server_thread = None  # 服务器主线程
-        
+
         # 数据缓冲区
         self.receive_buffer = ""  # 接收缓存
-        self.pending_config = None  # 待发送的配置数据
-        self.pending_runtime = None  # 待发送的运行时数据
-        
+        self.pending_packs = []  # 待发送的数据包列表（使用DataPacks结构）
+
+        # 添加发送锁，解决多线程同时发送导致的粘包问题
+        self.send_lock = threading.Lock()
         # 接收数据存储与回调
         self.received_grid = None
-        self.received_runtime = None
+        self.received_runtimes = []  # 存储多个运行时数据
         self.data_callback = None  # 数据接收回调函数
 
     def start(self) -> bool:
@@ -42,8 +43,7 @@ class UnitySocketServer:
             self.socket.bind((self.host, self.port))
             self.socket.listen(1)
             self.running = True
-            
-            # 启动服务器线程
+
             self.server_thread = threading.Thread(target=self._server_loop, daemon=True)
             self.server_thread.start()
             logger.info(f"服务器启动成功 {self.host}:{self.port}")
@@ -55,8 +55,7 @@ class UnitySocketServer:
     def stop(self) -> None:
         """停止服务器并释放资源"""
         self.running = False
-        
-        # 关闭连接
+
         if self.connection:
             try:
                 self.connection.close()
@@ -64,8 +63,7 @@ class UnitySocketServer:
             except Exception as e:
                 logger.error(f"关闭连接出错: {str(e)}")
             self.connection = None
-        
-        # 关闭socket
+
         if self.socket:
             try:
                 self.socket.close()
@@ -79,28 +77,28 @@ class UnitySocketServer:
         return self.connection is not None
 
     def send_config(self, config: ScannerConfigData) -> None:
-        """发送配置数据到Unity"""
+        """发送配置数据到Unity（适配字典类型的pack_data_list）"""
         try:
-            self.pending_config = {
-                "type": "config_data",
-                "timestamp": time.time(),
-                "data": config.to_dict()
-            }
+            pack = DataPacks()
+            pack.type = PackType.config_data
+            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.pack_data_list = config.to_dict()  # 字典结构（匹配config.json）
+            logging.info("发送配置数据")
+            self.pending_packs.append(pack)
         except Exception as e:
             logger.error(f"配置数据准备失败: {str(e)}")
 
-    def send_runtime(self, runtime: ScannerRuntimeData) -> None:
-        """发送运行时数据到Unity"""
+    def send_runtime(self, runtimes: Iterable[ScannerRuntimeData]) -> None:
+        """发送多个运行时数据到Unity（列表类型的pack_data_list）"""
         try:
-            data = {
-                "type": "runtime_data",
-                "timestamp": time.time(),
-                "data": runtime.to_dict()
-            }
-            # 添加无人机标识
-            if hasattr(runtime, 'drone_name'):
-                data['uav_name'] = runtime.drone_name
-            self.pending_runtime = data
+            pack = DataPacks()
+            pack.type = PackType.runtime_data
+            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # 每个runtime数据已包含uavname，无需顶层字段
+            pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
+
+            self.pending_packs.append(pack)
+            logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
 
@@ -116,9 +114,9 @@ class UnitySocketServer:
                 conn, addr = self.socket.accept()
                 self.connection = conn
                 logger.info(f"Unity已连接: {addr}")
-                self._handle_conn(conn)  # 处理连接
+                self._handle_conn(conn)
             except socket.timeout:
-                continue  # 超时继续等待
+                continue
             except Exception as e:
                 if self.running:
                     logger.error(f"服务器循环错误: {str(e)}")
@@ -127,22 +125,17 @@ class UnitySocketServer:
     def _handle_conn(self, conn: socket.socket) -> None:
         """处理与Unity的单连接通信"""
         conn.settimeout(1.0)
-        self.receive_buffer = ""  # 重置缓冲区
+        self.receive_buffer = ""
 
         while self.running:
             try:
-                # 接收数据并解析
                 self._recv_and_parse(conn)
-                
-                # 发送待处理数据
                 self._send_pending_data(conn)
-                
-                time.sleep(0.01)  # 降低CPU占用
+                time.sleep(0.01)
             except Exception as e:
                 logger.error(f"连接处理错误: {str(e)}")
                 break
 
-        # 清理连接
         conn.close()
         self.connection = None
         logger.info("连接已断开")
@@ -153,101 +146,73 @@ class UnitySocketServer:
             data = conn.recv(self.buffer_size).decode('utf-8')
             if data:
                 self.receive_buffer += data
-                self._parse_buffer()  # 解析缓冲区
+                self._parse_buffer()
         except socket.timeout:
-            pass  # 超时忽略
+            pass
         except ConnectionResetError:
             logger.warning("Unity强制断开连接")
             raise
         except Exception as e:
             logger.error(f"接收数据错误: {str(e)}")
 
+
     def _parse_buffer(self) -> None:
-        """解析缓冲区中的JSON数据（支持多对象连续传输，修复嵌套花括号问题）"""
-        if '{' not in self.receive_buffer:
-            return  # 没有起始符，直接返回
+        """解析缓冲区中的JSON数据（适配DataPacks结构）"""
 
-        try:
-            # 尝试解析整个缓冲区（完整数据场景）
-            parsed = json.loads(self.receive_buffer)
-            self._handle_parsed(parsed)
-            self.receive_buffer = ""
-            return
-        except json.JSONDecodeError:
-            pass  # 不完整，进入部分解析逻辑
-        except Exception as e:
-            logger.error(f"完整解析失败: {str(e)}")
-            self.receive_buffer = ""
+        if not self.receive_buffer:
             return
 
-        # 部分解析：通过花括号匹配找到第一个完整的JSON对象
-        buffer = self.receive_buffer
-        start_idx = buffer.find('{')
-        if start_idx == -1:
-            self.receive_buffer = ""  # 无有效起始，清空
-            return
+        # 使用换行符作为数据包分隔符
+        while '\n' in self.receive_buffer:
+            # 找到第一个换行符的位置
+            newline_pos = self.receive_buffer.index('\n')
+            # 提取一个完整的数据包
+            packet = self.receive_buffer[:newline_pos]
+            # 更新缓冲区，保留剩余数据
+            self.receive_buffer = self.receive_buffer[newline_pos + 1:]
 
-        stack = []
-        end_idx = -1
-        # 从第一个'{'开始遍历，跟踪花括号匹配
-        for i in range(start_idx, len(buffer)):
-            char = buffer[i]
-            if char == '{':
-                stack.append(char)
-            elif char == '}':
-                if stack:
-                    stack.pop()
-                    # 栈为空时，找到完整对象的结束位置
-                    if not stack:
-                        end_idx = i
-                        break
+            # 处理提取出的数据包
+            if packet.strip():
+                try:
+                    logger.debug(f"解析数据包: {packet}")
+                    parsed = json.loads(packet)
+                    if isinstance(parsed, dict) and 'type' in parsed:
+                        self._handle_parsed(parsed)
+                    else:
+                        logger.warning(f"无效的数据包格式（缺少type字段）: {packet}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON解析错误: {str(e)}, 数据包: {packet}")
+                except Exception as e:
+                    logger.error(f"解析数据包时出错: {str(e)}, 数据包: {packet}")
 
-        if end_idx == -1:
-            # 未找到完整对象，保留缓冲区等待后续数据
-            return
-        else:
-            # 提取并解析第一个完整对象
-            partial = buffer[start_idx:end_idx + 1]
-            remaining = buffer[end_idx + 1:].lstrip()  # 剩余数据
-            try:
-                parsed = json.loads(partial)
-                self._handle_parsed(parsed)
-                self.receive_buffer = remaining  # 更新缓冲区为剩余数据
-                if self.receive_buffer:
-                    self._parse_buffer()  # 递归处理剩余数据
-            except json.JSONDecodeError as e:
-                logger.warning(f"部分数据解析失败（内容: {partial[:100]}...），错误: {str(e)}")
-                # 跳过当前错误片段，从下一个'{'开始
-                next_start = buffer.find('{', start_idx + 1)
-                self.receive_buffer = buffer[next_start:] if next_start != -1 else ""
-                if self.receive_buffer:
-                    self._parse_buffer()
-            except Exception as e:
-                logger.error(f"处理部分数据时出错: {str(e)}")
-                self.receive_buffer = remaining
+        # 对于没有换行符的情况，我们不做处理，等待更多数据到达
 
-    def _handle_parsed(self, data: Dict[str, Any]) -> None:
-        """处理解析后的JSON数据并触发回调"""
+
+
+
+    def _handle_parsed(self, data: Dict[str, Any]) -> None: ##这里data应该时DataPack格式
+        """处理解析后的DataPacks数据并触发回调"""
         if not data or 'type' not in data:
             logger.warning("忽略无效数据（缺少type字段）")
             return
 
         callback_data = {}
         data_type = data['type']
-        
-        # 提取数据内容
-        if 'data' in data:
-            if data_type == 'grid_data':
-                self.received_grid = data['data']
-                callback_data['grid_data'] = data['data']
-            elif data_type == 'runtime_data':
-                self.received_runtime = data['data']
-                callback_data['runtime_data'] = data['data']
-        
-        # 附加无人机标识
-        if 'uav_name' in data:
-            callback_data['uav_name'] = data['uav_name']
-        
+        pack_data_list = data.get('pack_data_list', {})  # 默认为空字典
+
+        # 处理不同类型的数据
+        if data_type == PackType.grid_data.value:
+            # grid_data的pack_data_list是字典（包含cells字段）
+            self.received_grid = pack_data_list if isinstance(pack_data_list, dict) else None
+            callback_data['grid_data'] = self.received_grid
+        elif data_type == PackType.runtime_data.value:
+            # runtime_data的pack_data_list是列表，每个元素包含uavname
+            self.received_runtimes = pack_data_list if isinstance(pack_data_list, list) else []
+            callback_data['runtime_data'] = self.received_runtimes
+
+        if 'time_span' in data:
+            callback_data['time_span'] = data['time_span']
+
         # 触发回调
         if callback_data and self.data_callback:
             try:
@@ -256,22 +221,25 @@ class UnitySocketServer:
                 logger.error(f"回调函数执行失败: {str(e)}")
 
     def _send_pending_data(self, conn: socket.socket) -> None:
-        """发送待处理的配置/运行时数据"""
-        # 发送配置数据
-        if self.pending_config:
-            self._send(conn, self.pending_config)
-            self.pending_config = None
-        
-        # 发送运行时数据
-        if self.pending_runtime:
-            self._send(conn, self.pending_runtime)
-            self.pending_runtime = None
+        """发送待处理的数据包"""
+        while self.pending_packs and self.connection:
+            pack = self.pending_packs.pop(0)
+            self._send(conn, pack)
 
-    def _send(self, conn: socket.socket, data: Dict[str, Any]) -> None:
-        """向Unity发送JSON数据"""
+    def _send(self, conn: socket.socket, pack: DataPacks) -> None:
+        """向Unity发送完整的DataPacks结构（不含顶层uav_name）"""
         try:
-            json_str = json.dumps(data, ensure_ascii=False)
-            conn.sendall(json_str.encode('utf-8'))
-            logger.debug(f"发送数据: {data['type']}")
+            # 构建数据包字典（移除uav_name字段）
+            pack_dict = {
+                "type": pack.type.value,
+                "time_span": pack.time_span,
+                "pack_data_list": pack.pack_data_list  # 核心数据（列表或字典）
+            }
+            # 序列化为JSON并发送
+            json_data = json.dumps(pack_dict, ensure_ascii=False) + "\n"  # 加换行符作为分隔符
+            # 使用锁确保发送操作的原子性
+            with self.send_lock:
+                conn.sendall(json_data.encode('utf-8'))
+            logger.debug(f"发送数据: {pack_dict['type']} (长度: {len(json_data)})")
         except Exception as e:
             logger.error(f"发送数据失败: {str(e)}")

@@ -1,19 +1,21 @@
 {
+  "type": "config_data",
+  "time_span": "2025-09-12 14:55:53",
+  "pack_data_list": {
     "repulsionCoefficient": 2.0,
     "entropyCoefficient": 2.0,
     "distanceCoefficient": 2.0,
     "leaderRangeCoefficient": 2.0,
     "directionRetentionCoefficient": 2.0,
-    "updateInterval": 1,
+    "updateInterval": 1.0,
     "moveSpeed": 2.0,
     "rotationSpeed": 120.0,
-    "scanRadius": 1.0,
+    "scanRadius": 2.0,
+    "altitude": 2.0,
     "maxRepulsionDistance": 5.0,
     "minSafeDistance": 1.0,
     "avoidRevisits": true,
     "targetSearchRange": 20.0,
-    "revisitCooldown": 10.0,
-    "altitude": 2.0,
-    "name": "ScannerConfigData",
-    "hideFlags": 0
+    "revisitCooldown": 10.0
+  }
 }

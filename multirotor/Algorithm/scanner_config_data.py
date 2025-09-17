@@ -176,3 +176,5 @@ class ScannerConfigData:
             # 加载失败时保持默认值
             self._set_default_values()
 
+    def __repr__(self) -> str:
+        return f"ScannerConfigData:ScanRadius:{self.scanRadius}"

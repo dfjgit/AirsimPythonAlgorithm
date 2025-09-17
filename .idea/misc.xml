@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.6 (airsim-for-python - 副本)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.6 (airsim-for-python - 副本)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.13 (AirsimAlgorithmPython)" project-jdk-type="Python SDK" />
 </project>

@@ -1,0 +1,120 @@
+{
+  "type": "runtime_data",
+  "time_span": "09/15/2025 09:05:14",
+  "pack_data_list": [
+    {
+      "uavname": "UAV1",
+      "scoreDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "collideDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "pathDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderRangeDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "directionRetentionDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "finalMoveDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "position": {
+        "x": -15.71638,
+        "y": 0.54783,
+        "z": -1.49557
+      },
+      "forward": {
+        "x": -6E-05,
+        "y": 0.01616,
+        "z": 0.99987
+      },
+      "leaderPosition": {
+        "x": 0.97158,
+        "y": 0.5,
+        "z": 0.0
+      },
+      "leaderScanRadius": 8.0,
+      "visitedCells": [],
+      "otherScannerPositions": [
+        {
+          "x": -15.75464,
+          "y": -0.81608,
+          "z": 1.31531
+        }
+      ]
+    },
+    {
+      "uavname": "UAV2",
+      "scoreDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "collideDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "pathDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "leaderRangeDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "directionRetentionDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "finalMoveDir": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 1.0
+      },
+      "position": {
+        "x": -15.75464,
+        "y": -0.81608,
+        "z": 1.31531
+      },
+      "forward": {
+        "x": -4E-05,
+        "y": 0.00496,
+        "z": 0.99999
+      },
+      "leaderPosition": {
+        "x": 0.97073,
+        "y": 0.5,
+        "z": 0.0
+      },
+      "leaderScanRadius": 8.0,
+      "visitedCells": [],
+      "otherScannerPositions": [
+        {
+          "x": -15.71638,
+          "y": 0.54783,
+          "z": -1.49557
+        }
+      ]
+    }
+  ]
+}
