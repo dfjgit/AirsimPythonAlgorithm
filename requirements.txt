@@ -1,3 +1,5 @@
+stable-baselines3
+gym
 setuptools~=59.6.0
 backports.ssl_match_hostname
 msgpack-python

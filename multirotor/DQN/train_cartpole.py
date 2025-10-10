@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym  # 将Gym替换为Gymnasium
 from stable_baselines3 import PPO
 
 
@@ -12,13 +12,13 @@ def main():
 
 def test_model(model):
     env = gym.make('CartPole-v1', render_mode='human')  # 可视化只能在初始化时指定
-    obs, _ = env.reset()
-    done1, done2 = False, False
+    obs, info = env.reset()  # Gymnasium的reset返回两个值
+    terminated, truncated = False, False  # 使用terminated和truncated替代done1和done2
     total_reward = 0
 
-    while not done1 or done2:
+    while not terminated and not truncated:  # 修正终止条件判断
         action, _states = model.predict(obs, deterministic=True)
-        obs, reward, done1, done2, info = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action)  # step返回五个值
         total_reward += reward
 
     print(f'Total Reward: {total_reward}')
