@@ -4,9 +4,11 @@ import logging
 import json
 import threading
 import os
+import sys
 from typing import Dict, Any, Optional, List, Tuple
 import traceback
 from pathlib import Path
+import numpy as np
 
 # 配置日志系统
 logging.basicConfig(
@@ -26,17 +28,26 @@ from Algorithm.HexGridDataModel import HexGridDataModel
 from Algorithm.Vector3 import Vector3
 from AirsimServer.data_pack import PackType
 
+# 尝试导入可视化模块
+try:
+    from Algorithm.simple_visualizer import SimpleVisualizer
+    HAS_VISUALIZATION = True
+except ImportError as e:
+    logging.warning(f"无法导入可视化模块: {str(e)}")
+    HAS_VISUALIZATION = False
+
 class MultiDroneAlgorithmServer:
     """
     多无人机算法服务核心类
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, enable_learning: bool = False):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
+        :param enable_learning: 是否启用DQN学习
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -73,9 +84,23 @@ class MultiDroneAlgorithmServer:
         }
         self.data_lock = threading.Lock()  # 运行时数据锁
         self.grid_lock = threading.Lock()  # 网格数据锁
+        
+        # 可视化组件
+        self.visualizer = None
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
+        
+        # DQN学习相关初始化
+        self.enable_learning = enable_learning
+        self.learning_envs = {}
+        self.dqn_agents = {}
+        
+        if self.enable_learning:
+            self._init_dqn_learning()
+            
+        # 初始化可视化组件
+        self._init_visualization()
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
         """解析配置文件路径，默认使用项目根目录下的scanner_config.json"""
@@ -98,6 +123,16 @@ class MultiDroneAlgorithmServer:
             logger.error(f"配置文件加载失败: {str(e)}")
             raise
 
+    def _init_visualization(self):
+        """初始化可视化组件"""
+        if HAS_VISUALIZATION:
+            try:
+                self.visualizer = SimpleVisualizer(self)
+                logger.info("可视化组件初始化成功")
+            except Exception as e:
+                logger.warning(f"可视化组件初始化失败: {str(e)}")
+                self.visualizer = None
+
     def start(self) -> bool:
         """启动服务主流程：连接Unity与AirSim，初始化无人机"""
         try:
@@ -115,6 +150,11 @@ class MultiDroneAlgorithmServer:
                 self._disconnect_airsim()
                 self.unity_socket.stop()
                 return False
+
+            # 4. 启动可视化（如果已初始化）
+            if self.visualizer:
+                self.visualizer.start_visualization()
+                logger.info("可视化功能已启动")
 
             logger.info("服务初始化成功")
             return True
@@ -137,7 +177,7 @@ class MultiDroneAlgorithmServer:
             if self.unity_socket.is_connected():
                 logger.info("Unity客户端已连接")
                 self.unity_socket.send_config(self.config_data)
-                logger.info("已发送初始配置数据到Unity")
+                # logger.info("已发送初始配置数据到Unity")
                 return True
             time.sleep(0.5)
 
@@ -149,6 +189,8 @@ class MultiDroneAlgorithmServer:
         logger.info("连接到AirSim模拟器...")
         if self.drone_controller.connect():
             logger.info("AirSim连接成功")
+            # 起飞前先重置airsim
+            self.drone_controller.reset()
             return True
         logger.error("AirSim连接失败")
         return False
@@ -168,6 +210,7 @@ class MultiDroneAlgorithmServer:
     def start_mission(self) -> bool:
         """开始任务：控制所有无人机起飞并启动算法线程"""
         if not self.running:
+
             # 1. 所有无人机起飞
             if not self._takeoff_all():
                 return False
@@ -207,13 +250,13 @@ class MultiDroneAlgorithmServer:
         """
         try:
             with self.data_lock:
-                logger.debug(f"收到Unity数据: {received_data}")
+                # logger.debug(f"收到Unity数据: {received_data}")
 
                 # 检查是否包含runtime_data字段
                 if 'runtime_data' in received_data:
                     runtime_data_list = received_data['runtime_data']
                     if isinstance(runtime_data_list, list):
-                        logger.info(f"收到运行时数据，包含{len(runtime_data_list)}个无人机数据")
+                        # logger.info(f"收到运行时数据，包含{len(runtime_data_list)}个无人机数据")
                         # 处理每个无人机的运行时数据
                         for runtime_data in runtime_data_list:
                             drone_name = runtime_data.get('uavname')
@@ -228,7 +271,7 @@ class MultiDroneAlgorithmServer:
                                         'z': pos.z,
                                         'timestamp': time.time()
                                     }
-                                    logger.debug(f"更新无人机{drone_name}运行时数据: {pos}NAME：{self.unity_runtime_data[drone_name].uavname}NAME2{runtime_data['uavname']}")
+                                    # logger.debug(f"更新无人机{drone_name}运行时数据: {pos}NAME：{self.unity_runtime_data[drone_name].uavname}NAME2{runtime_data['uavname']}")
                                 except Exception as e:
                                     logger.error(f"解析无人机{drone_name}运行时数据失败: {str(e)}")
                             else:
@@ -238,7 +281,7 @@ class MultiDroneAlgorithmServer:
                 elif 'grid_data' in received_data:
                     grid_data = received_data['grid_data']
                     if isinstance(grid_data, dict) and 'cells' in grid_data:
-                        logger.info(f"收到网格数据，包含{len(grid_data['cells'])}个单元")
+                        # logger.info(f"收到网格数据，包含{len(grid_data['cells'])}个单元")
                         with self.grid_lock:
                             self.grid_data.update_from_dict(grid_data)
                     else:
@@ -267,31 +310,114 @@ class MultiDroneAlgorithmServer:
             logger.error(f"处理Unity数据时发生错误: {str(e)}，堆栈信息: {traceback.format_exc()}")
 
 
+    def _init_dqn_learning(self):
+        """初始化DQN学习组件"""
+        try:
+            # 使用正确的相对导入方式
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from multirotor.DQN.DqnLearning import DQNAgent
+            from multirotor.DQN.DroneLearningEnv import DroneLearningEnv
+            
+            for drone_name in self.drone_names:
+                # 创建学习环境
+                env = DroneLearningEnv(self, drone_name)
+                self.learning_envs[drone_name] = env
+                
+                # 创建DQN智能体
+                agent = DQNAgent(
+                    state_dim=env.state_dim,
+                    action_dim=env.action_dim,
+                    lr=0.001,
+                    gamma=0.99,
+                    epsilon=1.0,
+                    epsilon_min=0.01,
+                    epsilon_decay=0.995,
+                    batch_size=64,
+                    target_update=10
+                )
+                self.dqn_agents[drone_name] = agent
+                
+                # 尝试加载已训练的模型
+                try:
+                    model_path = f"DQN/dqn_{drone_name}_model.pth"
+                    agent.load_model(model_path)
+                    logger.info(f"已加载无人机{drone_name}的DQN模型")
+                except Exception as e:
+                    logger.info(f"未找到无人机{drone_name}的DQN模型，将从头开始训练: {str(e)}")
+        except Exception as e:
+            logger.error(f"初始化DQN学习组件失败: {str(e)}")
+            self.enable_learning = False
+    
     def _process_drone(self, drone_name: str) -> None:
         """无人机算法处理线程：计算移动方向并控制无人机"""
         logger.info(f"无人机{drone_name}算法线程启动")
         while self.running:
             try:
                 # 检查数据就绪状态
-
                 has_grid = bool(self.grid_data.cells)
                 has_runtime = bool(self.unity_runtime_data[drone_name].position)
 
-                # logger.info(f"无人机{drone_name}数据状态：GRID:{has_grid}, RUNTIME:{has_runtime}")
                 if not (has_grid and has_runtime):
                     time.sleep(1)
                     continue
 
-                # 1. 执行算法计算最终方向
-                final_dir = self.algorithms[drone_name].update_runtime_data(
-                    self.grid_data, self.unity_runtime_data[drone_name]
-                )
-
-                # 2. 控制无人机移动
-                self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-
-                # 3. 发送处理后的数据到Unity
-                self._send_processed_data(drone_name, final_dir)
+                if self.enable_learning and drone_name in self.learning_envs and drone_name in self.dqn_agents:
+                    # DQN学习模式
+                    try:
+                        # 获取当前状态
+                        state = self.learning_envs[drone_name].get_state()
+                        
+                        # DQN智能体选择动作
+                        action = self.dqn_agents[drone_name].select_action(state)
+                        
+                        # 执行动作并获取反馈
+                        next_state, reward, done, info = self.learning_envs[drone_name].step(action)
+                        
+                        # 存储经验
+                        self.dqn_agents[drone_name].memory.push(state, action, reward, next_state, done)
+                        
+                        # DQN智能体学习
+                        self.dqn_agents[drone_name].learn()
+                        
+                        # 定期保存模型
+                        if self.dqn_agents[drone_name].steps_done % 1000 == 0:
+                            model_path = f"DQN/dqn_{drone_name}_model_{self.dqn_agents[drone_name].steps_done}.pth"
+                            self.dqn_agents[drone_name].save_model(model_path)
+                            logger.info(f"已保存无人机{drone_name}的DQN模型: {model_path}")
+                        
+                        # 执行算法计算最终方向（使用调整后的权重）
+                        final_dir = self.algorithms[drone_name].update_runtime_data(
+                            self.grid_data, self.unity_runtime_data[drone_name]
+                        )
+                        
+                        # 控制无人机移动
+                        self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                        
+                        # 发送处理后的数据到Unity
+                        self._send_processed_data(drone_name, final_dir)
+                        
+                    except Exception as e:
+                        logger.error(f"无人机{drone_name}DQN学习处理出错: {str(e)}")
+                        # 出错时回退到传统模式
+                        final_dir = self.algorithms[drone_name].update_runtime_data(
+                            self.grid_data, self.unity_runtime_data[drone_name]
+                        )
+                        self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                        self._send_processed_data(drone_name, final_dir)
+                else:
+                    # 传统人工势场算法模式
+                    # 执行算法计算最终方向
+                    final_dir = self.algorithms[drone_name].update_runtime_data(
+                        self.grid_data, self.unity_runtime_data[drone_name]
+                    )
+                    
+                    # 控制无人机移动
+                    self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                    
+                    # 发送处理后的数据到Unity
+                    self._send_processed_data(drone_name, final_dir)
 
                 # 按配置间隔休眠
                 time.sleep(self.config_data.updateInterval)
@@ -317,12 +443,10 @@ class MultiDroneAlgorithmServer:
             self.config_data.updateInterval, drone_name
         )
 
-        if success:
-            logger.debug(
-                f"无人机{drone_name}移动指令: 速度({velocity.x:.2f}, {velocity.y:.2f})，持续{1}秒"
-            )
-        else:
-            logger.error(f"无人机{drone_name}移动指令发送失败")
+        # if success :
+        #
+        # else:
+        #     logger.error(f"无人机{drone_name}移动指令发送失败")
 
 
     def _send_processed_data(self, drone_name: str, scannerRuntimeData: ScannerRuntimeData) -> None:
@@ -333,13 +457,18 @@ class MultiDroneAlgorithmServer:
             self.processed_runtime_data[drone_name].drone_name = drone_name
             # 发送到Unity - 注意：send_runtime需要一个可迭代对象（列表）
             self.unity_socket.send_runtime([self.processed_runtime_data[drone_name]])
-            logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
+            # logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
 
 
     def stop(self) -> None:
         """停止服务：降落无人机，断开连接，清理资源"""
         self.running = False
         logger.info("开始停止服务...")
+
+        # 停止可视化
+        if self.visualizer:
+            self.visualizer.stop_visualization()
+            logger.info("可视化功能已停止")
 
         # 等待无人机线程结束
         # for drone_name, thread in self.drone_threads.items():
@@ -382,7 +511,8 @@ class MultiDroneAlgorithmServer:
 
 if __name__ == "__main__":
     try:
-        server = MultiDroneAlgorithmServer()
+        # 创建服务器实例，启用DQN学习功能
+        server = MultiDroneAlgorithmServer(enable_learning=True)
         if server.start():
             server.start_mission()
             # 主循环保持运行

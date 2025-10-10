@@ -8,63 +8,10 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import BaseCallback
+import time
 
 
-# 创建早停回调类
-class EarlyStoppingCallback(BaseCallback):
-    def __init__(self, check_interval=100, window_size=1000, threshold=0.05, verbose=1):
-        super(EarlyStoppingCallback, self).__init__(verbose)
-        self.check_interval = check_interval  # 检查间隔（局数）
-        self.window_size = window_size  # 检查的窗口大小
-        self.threshold = threshold  # 得分变化阈值
-        self.scores = []  # 记录最近的得分
-        self.episode_count = 0  # 记录局数
 
-    def _on_step(self) -> bool:
-        # 获取当前局的信息
-        infos = self.locals.get('infos')
-        if infos is not None and len(infos) > 0:
-            # 检查是否有episode结束的信息
-            if 'episode' in infos[0]:
-                score = infos[0]['episode']['r']
-                self.scores.append(score)
-                self.episode_count += 1
-
-                # 只保留最近window_size个得分
-                if len(self.scores) > self.window_size:
-                    self.scores.pop(0)
-
-                # 检查是否需要停止训练
-                if self.episode_count % self.check_interval == 0 and len(self.scores) == self.window_size:
-                    # 计算得分的标准差
-                    std_dev = np.std(self.scores)
-                    # 计算得分的平均值
-                    mean_score = np.mean(self.scores)
-
-                    # 计算相对标准差（变异系数）
-                    if mean_score > 0:
-                        relative_std = std_dev / mean_score
-                    else:
-                        relative_std = std_dev  # 如果平均分为0，直接使用标准差
-
-                    if self.verbose > 0:
-                        print(f"\n早停检查 - 局数: {self.episode_count}")
-                        print(f"最近{self.window_size}局平均得分: {mean_score:.2f}")
-                        print(f"标准差: {std_dev:.4f}")
-                        print(f"相对标准差: {relative_std:.4f}")
-                        print(f"阈值: {self.threshold}")
-
-                    # 如果相对标准差小于阈值，停止训练
-                    if relative_std < self.threshold:
-                        if self.verbose > 0:
-                            print(
-                                f"\n训练停止：最近{self.window_size}局得分几乎一样 (相对标准差 {relative_std:.4f} < 阈值 {self.threshold})")
-                        # 保存当前模型
-                        self.model.save("dqn_breakout_model_early_stopped")
-                        if self.verbose > 0:
-                            print("模型已保存为: dqn_breakout_model_early_stopped.zip")
-                        return False
-        return True
 
 
 class BreakoutEnv(gym.Env):
@@ -120,8 +67,12 @@ class BreakoutEnv(gym.Env):
         # 2. 初始化小球位置（初始位置在挡板中央上方）
         self.ball_x = self.paddle_x + self.PADDLE_WIDTH // 2 - self.BALL_SIZE // 2
         self.ball_y = self.paddle_y - self.BALL_SIZE
-        self.ball_dx = self.BALL_SPEED_X  # x方向速度
-        self.ball_dy = -self.BALL_SPEED_Y  # y方向速度（初始向上）
+        # 初始x方向速度随机在-5到5之间
+        self.ball_dx = np.random.uniform(-5, 5)
+        self.ball_dy = -self.BALL_SPEED_Y  # y方向速度始终向上
+        
+        # 初始化prev_ball_dy属性，用于奖励函数中的小球反弹检测
+        self.prev_ball_dy = self.ball_dy
 
         # 3. 初始化砖块矩阵
         self.bricks = []
@@ -171,22 +122,59 @@ class BreakoutEnv(gym.Env):
         return obs
 
     def _get_reward(self, bricks_hit):
-        """计算奖励值"""
-        # 1. 基础移动奖励（保持小球在空中）
-        reward = 0.01
+        """计算奖励值 - 优化版本"""
+        # 1. 基础生存奖励（随着时间增长，鼓励更长时间存活）
+        # 初始值较小，防止消极策略，同时随步数缓慢增加
+        reward = 0.05 + min(self.steps * 0.0001, 0.2)  # 最大0.25
 
-        # 2. 击中砖块奖励
+        # 2. 击中砖块奖励 - 增加权重，使摧毁砖块更有吸引力
         if bricks_hit > 0:
-            reward += bricks_hit * 1.0
+            # 考虑到当前实现中每次最多击中一个砖块
+            reward += 5.0  # 击中单个砖块的奖励
+            # 额外奖励：随着剩余砖块减少，每个砖块的价值增加
+            remaining_bricks = sum(1 for row in self.bricks for brick in row if brick['active'])
+            reward += (50 - remaining_bricks) * 0.1  # 剩余砖块越少，奖励越多
 
-        # 3. 小球掉落惩罚
+        # 3. 成功接住小球奖励 - 直接奖励接住行为
+        if self.prev_ball_dy > 0 and self.ball_dy < 0:  # 小球刚刚从向下变为向上
+            # 检查是否是被挡板接住的（位置接近挡板）
+            if abs(self.ball_y + self.BALL_SIZE - self.paddle_y) < self.BALL_SIZE * 2:
+                reward += 8.0  # 接住小球的直接奖励
+
+        # 4. 小球掉落惩罚 - 调整为更合适的值
         if self.ball_y >= self.SCREEN_HEIGHT:
-            reward -= 10.0
+            reward -= 80.0  # 减少惩罚强度，避免过度惩罚
 
-        # 4. 胜利奖励
+        # 5. 胜利奖励 - 增加权重并添加额外奖励
         if self._check_win():
-            reward += 100.0
+            reward += 1500.0  # 增加胜利奖励
+            # 添加剩余步数奖励，鼓励更快完成
+            reward += max(0, (self.max_steps - self.steps) * 0.1)  # 剩余每步额外加0.1
 
+        # 6. 挡板与小球距离奖励 - 优化计算方式
+        if self.ball_dy > 0 and self.ball_y > self.SCREEN_HEIGHT * 0.4:  # 小球向下移动且在屏幕下半部分
+            # 计算挡板中心和小球中心的水平距离
+            paddle_center_x = self.paddle_x + self.PADDLE_WIDTH / 2
+            ball_center_x = self.ball_x + self.BALL_SIZE / 2
+            distance = abs(paddle_center_x - ball_center_x)
+            
+            # 使用挡板宽度作为参考，而非屏幕宽度
+            max_distance = self.SCREEN_WIDTH / 2  # 最大可能距离
+            threshold_distance = self.PADDLE_WIDTH * 1.5  # 有效距离阈值
+            
+            # 非线性距离奖励：距离越近，奖励增长越快
+            if distance < threshold_distance:
+                # 使用二次函数增强近距离奖励
+                normalized_distance = distance / threshold_distance
+                distance_reward = 5.0 * (1 - normalized_distance ** 2)  # 最大5.0
+                reward += distance_reward
+
+        # 保存当前小球方向供下次判断使用
+        self.prev_ball_dy = self.ball_dy
+
+        # 确保奖励在合理范围内
+        reward = np.clip(reward, -100.0, 2000.0)
+        
         return reward
 
     def _check_win(self):
@@ -319,6 +307,73 @@ class BreakoutEnv(gym.Env):
             self.clock = None
 
 
+class SimpleProgressBarCallback(BaseCallback):
+    """自定义的简单进度条回调类，不依赖外部库"""
+    def __init__(self, total_timesteps, update_freq=1000):
+        super().__init__()
+        self.total_timesteps = total_timesteps
+        self.update_freq = update_freq
+        self.start_time = None
+        self.last_update_time = None
+    
+    def _on_training_start(self):
+        self.start_time = time.time()
+        self.last_update_time = self.start_time
+        print("开始训练...")
+    
+    def _on_step(self):
+        # 每update_freq步更新一次进度条
+        if self.num_timesteps % self.update_freq == 0 or self.num_timesteps == self.total_timesteps:
+            self._update_progress()
+        return True
+    
+    def _update_progress(self):
+        # 计算进度百分比
+        progress = min(self.num_timesteps / self.total_timesteps, 1.0)
+        percentage = int(progress * 100)
+        
+        # 计算已用时间和预计剩余时间
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+        
+        # 只在有进度时计算预计剩余时间
+        if self.num_timesteps > 0:
+            steps_per_second = self.num_timesteps / elapsed_time
+            remaining_steps = self.total_timesteps - self.num_timesteps
+            remaining_time = remaining_steps / steps_per_second if steps_per_second > 0 else 0
+        else:
+            remaining_time = 0
+        
+        # 格式化时间显示
+        elapsed_str = self._format_time(elapsed_time)
+        remaining_str = self._format_time(remaining_time)
+        
+        # 绘制进度条
+        bar_length = 30
+        filled_length = int(bar_length * progress)
+        bar = '█' * filled_length + '-' * (bar_length - filled_length)
+        
+        # 清除当前行并显示新进度
+        sys.stdout.write('\r')
+        sys.stdout.write(f'训练进度: |{bar}| {percentage}% [{self.num_timesteps}/{self.total_timesteps}] 已用时间: {elapsed_str} 预计剩余: {remaining_str}')
+        sys.stdout.flush()
+        
+    def _format_time(self, seconds):
+        """将秒数格式化为时:分:秒"""
+        hours, remainder = divmod(int(seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}h{minutes}m{seconds}s"
+        elif minutes > 0:
+            return f"{minutes}m{seconds}s"
+        else:
+            return f"{seconds}s"
+    
+    def _on_training_end(self):
+        # 确保显示100%进度
+        self._update_progress()
+        print("\n训练完成!")
+
 def train_agent(resume_training=False, total_timesteps=1000000):
     """训练DQN智能体"""
     # 1. 创建环境
@@ -335,50 +390,45 @@ def train_agent(resume_training=False, total_timesteps=1000000):
             print("未找到模型文件，将创建新模型开始训练")
             # 如果找不到模型文件，创建新模型
             model = DQN(
-                "MlpPolicy",
-                env,
-                verbose=1,
-                buffer_size=100000,
-                learning_rate=5e-4,
-                batch_size=64,
-                gamma=0.99,
-                exploration_fraction=0.1,
-                exploration_initial_eps=1.0,
-                exploration_final_eps=0.05,
-                target_update_interval=1000,
-                train_freq=4
+                "MlpPolicy",              # 策略网络类型：多层感知器策略
+                env,                       # 环境实例
+                verbose=0,                 # 日志级别：1表示显示训练过程中的信息
+                buffer_size=100000,        # 经验回放缓冲区大小：存储100000条经验
+                learning_rate=5e-4,        # 学习率：控制参数更新步长
+                batch_size=64,             # 批次大小：每次训练使用64条经验
+                gamma=0.99,                # 折扣因子：控制未来奖励的现值，接近1表示重视未来奖励
+                exploration_fraction=0.1,  # 探索率衰减周期：总训练步数的10%用于衰减探索率
+                exploration_initial_eps=1.0, # 初始探索率：1.0表示完全随机选择动作
+                exploration_final_eps=0.05,  # 最终探索率：0.05表示训练结束后仍有5%的概率随机探索
+                target_update_interval=1000, # 目标网络更新间隔：每1000步更新一次目标网络
+                train_freq=4               # 训练频率：每4步训练一次网络
             )
     else:
         # 3. 创建新的DQN模型
         print("创建新模型，开始训练...")
         model = DQN(
-            "MlpPolicy",
-            env,
-            verbose=1,
-            buffer_size=100000,
-            learning_rate=5e-4,
-            batch_size=64,
-            gamma=0.99,
-            exploration_fraction=0.1,
-            exploration_initial_eps=1.0,
-            exploration_final_eps=0.05,
-            target_update_interval=1000,
-            train_freq=4
+            "MlpPolicy",              # 策略网络类型：多层感知器策略
+            env,                       # 环境实例
+            verbose=0,                 # 日志级别：1表示显示训练过程中的信息
+            buffer_size=100000,        # 经验回放缓冲区大小：存储100000条经验
+            learning_rate=5e-4,        # 学习率：控制参数更新步长
+            batch_size=64,             # 批次大小：每次训练使用64条经验
+            gamma=0.99,                # 折扣因子：控制未来奖励的现值，接近1表示重视未来奖励
+            exploration_fraction=0.1,  # 探索率衰减周期：总训练步数的10%用于衰减探索率
+            exploration_initial_eps=1.0, # 初始探索率：1.0表示完全随机选择动作
+            exploration_final_eps=0.05,  # 最终探索率：0.05表示训练结束后仍有5%的概率随机探索
+            target_update_interval=1000, # 目标网络更新间隔：每1000步更新一次目标网络
+            train_freq=4               # 训练频率：每4步训练一次网络
         )
 
-    # 4. 创建早停回调实例
-    early_stopping_callback = EarlyStoppingCallback(
-        check_interval=100,  # 每100局检查一次
-        window_size=1000,    # 检查最近1000局
-        threshold=0.05,      # 相对标准差阈值为5%
-        verbose=1            # 显示详细信息
-    )
-
-    # 5. 训练模型，传入早停回调
+    # 4. 创建自定义进度条回调
+    progress_bar = SimpleProgressBarCallback(total_timesteps)
+    
+    # 5. 训练模型（带进度条）
     model.learn(
         total_timesteps=total_timesteps,
         log_interval=10,
-        callback=early_stopping_callback
+        callback=progress_bar
     )
 
     # 6. 保存模型

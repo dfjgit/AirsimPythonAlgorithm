@@ -98,7 +98,7 @@ class UnitySocketServer:
             pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
 
             self.pending_packs.append(pack)
-            logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
+            # logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
 
@@ -174,7 +174,7 @@ class UnitySocketServer:
             # 处理提取出的数据包
             if packet.strip():
                 try:
-                    logger.debug(f"解析数据包: {packet}")
+                    # logger.debug(f"解析数据包: {packet}")
                     parsed = json.loads(packet)
                     if isinstance(parsed, dict) and 'type' in parsed:
                         self._handle_parsed(parsed)
@@ -240,6 +240,6 @@ class UnitySocketServer:
             # 使用锁确保发送操作的原子性
             with self.send_lock:
                 conn.sendall(json_data.encode('utf-8'))
-            logger.debug(f"发送数据: {pack_dict['type']} (长度: {len(json_data)})")
+            # logger.debug(f"发送数据: {pack_dict['type']} (长度: {len(json_data)})")
         except Exception as e:
             logger.error(f"发送数据失败: {str(e)}")

@@ -104,7 +104,7 @@ class HexGridDataModel:
                     for cell_data in cells_data
                     if isinstance(cell_data, dict)
                 ]
-                logging.info(f"HexGridDataModel.update_from_dict: 已更新 {len(self.cells)} 个蜂窝单元")
+                # logging.info(f"HexGridDataModel.update_from_dict: 已更新 {len(self.cells)} 个蜂窝单元")
             else:
                 logging.warning(f"HexGridDataModel.update_from_dict: cells字段不是列表类型，而是: {type(cells_data).__name__}")
         except Exception as e:
