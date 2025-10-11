@@ -91,10 +91,16 @@ class Vector3:
             return cls()
 
     def unity_to_air_sim(self):
-        """ Unity坐标转换为AirSim坐标 """
+        """ Unity坐标转换为AirSim坐标 
+        参考C#代码：UnityToAirSim(Vector3 originalVector)
+        return new Vector3(originalVector.z, originalVector.x, -originalVector.y);
+        """
         return Vector3(self.z, self.x, -self.y)
 
     def airsim_to_unity(self):
-        """ AirSim坐标转换为Unity坐标 """
+        """ AirSim坐标转换为Unity坐标 
+        参考C#代码：AirsimToUnity(Vector3 originalVector)
+        return new Vector3(originalVector.y, -originalVector.z, originalVector.x);
+        """
         return Vector3(self.y, -self.z, self.x)
 

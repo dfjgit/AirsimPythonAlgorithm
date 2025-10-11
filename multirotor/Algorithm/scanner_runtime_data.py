@@ -90,12 +90,16 @@ class ScannerRuntimeData:
             ('leaderRangeDir', 'leaderRangeDir'),
             ('directionRetentionDir', 'directionRetentionDir'),
             ('finalMoveDir', 'finalMoveDir'),
-            ('leaderPosition', 'leaderPosition')
+            ('leader_position', 'leaderPosition')  # 修正属性名
         ]
         for attr_name, json_key in vector_keys:
             data_dict = data.get(json_key, {})
             if isinstance(data_dict, dict):
-                setattr(instance, attr_name, Vector3.from_dict(data_dict))
+                try:
+                    setattr(instance, attr_name, Vector3.from_dict(data_dict))
+                except Exception as e:
+                    print(f"警告：解析向量数据{json_key}失败: {str(e)}，使用默认值")
+                    setattr(instance, attr_name, Vector3())
 
         # 解析无人机名称
         if 'uavname' in data:
@@ -103,7 +107,11 @@ class ScannerRuntimeData:
 
         # 解析领导者扫描半径
         if 'leaderScanRadius' in data:
-            instance.leader_scan_radius = data['leaderScanRadius']
+            try:
+                instance.leader_scan_radius = float(data['leaderScanRadius'])
+            except (ValueError, TypeError):
+                instance.leader_scan_radius = 0.0  # 默认值
+                print(f"警告：Leader扫描半径解析失败，使用默认值0.0，原始数据: {data['leaderScanRadius']}")
 
         # 解析已访问蜂窝
         if 'visitedCells' in data and isinstance(data['visitedCells'], list):

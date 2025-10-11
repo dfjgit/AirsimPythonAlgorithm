@@ -1,6 +1,7 @@
 import setup_path
 import airsim
 import numpy as np
+import math
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from collections import defaultdict
@@ -169,13 +170,18 @@ class DroneController:
                 logger.error(f"无人机{vehicle_name}持续时间必须大于0")
                 return False
 
-            # 移除join()调用，避免阻塞和IOLoop冲突
+            # 检查速度是否为零或过小
+            velocity_magnitude = math.sqrt(x*x + y*y + z*z)
+            if velocity_magnitude < 0.01:
+                logger.debug(f"无人机{vehicle_name}速度过小({velocity_magnitude:.3f})，跳过移动")
+                return True
+
+            # 使用moveByVelocityAsync，但不等待完成，避免阻塞
             self.client.moveByVelocityAsync(
                 x, y, z, duration, vehicle_name=vehicle_name
             )
 
-            # 不等待操作完成，直接返回成功
-            logger.info(f"无人机{vehicle_name}移动向量({x},{y},{z})，持续时间{duration}秒")
+            logger.debug(f"无人机{vehicle_name}移动向量({x:.3f},{y:.3f},{z:.3f})，持续时间{duration}秒")
             return True
         except Exception as e:
             logger.error(f"无人机{vehicle_name}移动操作失败: {str(e)}")

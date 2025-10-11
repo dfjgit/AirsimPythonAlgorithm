@@ -54,16 +54,25 @@ class ScannerAlgorithm:
         current_pos = ensure_unity_coordinates(runtime_data.position)
         candidate_cells = []
         
+        # 首先检查无人机本身是否在Leader范围内
+        if runtime_data.leader_position is not None and runtime_data.leader_scan_radius > 0:
+            leader_pos = ensure_unity_coordinates(runtime_data.leader_position)
+            distance_to_leader = (current_pos - leader_pos).magnitude()
+            
+            if distance_to_leader > runtime_data.leader_scan_radius:
+                # 无人机超出Leader范围，不扫描任何蜂窝
+                return candidate_cells
+        
         for cell in grid_data.cells:
             # 确保蜂窝中心也使用Unity坐标系
             cell_center = ensure_unity_coordinates(cell.center)
             
-            # 检查是否在Leader范围内
+            # 检查蜂窝是否在Leader范围内（可选：如果无人机在范围内，蜂窝也应该在范围内）
             if runtime_data.leader_position is not None and runtime_data.leader_scan_radius > 0:
                 leader_pos = ensure_unity_coordinates(runtime_data.leader_position)
                 distance_to_leader = (cell_center - leader_pos).magnitude()
                 if distance_to_leader > runtime_data.leader_scan_radius:
-                    continue  # 不在Leader范围内，跳过
+                    continue  # 蜂窝不在Leader范围内，跳过
             
             # 检查是否在搜索范围内
             distance_to_cell = (cell_center - current_pos).magnitude()

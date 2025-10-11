@@ -39,12 +39,26 @@
     "learning_env": {
         "coefficient_step": 0.5,
         "coefficient_ranges": {
-            "repulsionCoefficient": [0.1, 10.0],
-            "entropyCoefficient": [0.1, 10.0],
-            "distanceCoefficient": [0.1, 10.0],
-            "leaderRangeCoefficient": [0.1, 10.0],
-            "directionRetentionCoefficient": [0.1, 10.0]
+            "repulsionCoefficient": [
+                0.1,
+                10.0
+            ],
+            "entropyCoefficient": [
+                0.1,
+                10.0
+            ],
+            "distanceCoefficient": [
+                0.1,
+                10.0
+            ],
+            "leaderRangeCoefficient": [
+                0.1,
+                10.0
+            ],
+            "directionRetentionCoefficient": [
+                0.1,
+                10.0
+            ]
         }
     }
 }
-
