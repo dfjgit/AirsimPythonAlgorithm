@@ -75,9 +75,9 @@ class SimpleVisualizer:
     
     def world_to_screen(self, vector):
         """将世界坐标转换为屏幕坐标"""
-        # 使用z轴作为x轴，x轴作为y轴进行2D投影
-        screen_x = self.origin_x + vector.z * self.scale
-        screen_y = self.origin_y - vector.x * self.scale  # 负号是因为pygame的y轴向下
+        # 修正X轴方向：使用x轴作为x轴，z轴作为y轴进行2D投影
+        screen_x = self.origin_x + vector.x * self.scale
+        screen_y = self.origin_y - vector.z * self.scale  # 负号是因为pygame的y轴向下
         return int(screen_x), int(screen_y)
         
     def draw_grid(self, grid_data):
@@ -90,8 +90,17 @@ class SimpleVisualizer:
                 color_intensity = int(255 * (1 - min(1.0, cell.entropy)))
                 color = (color_intensity, color_intensity, 255)
                 
-                # 绘制六边形
-                self.draw_hexagon(screen_x, screen_y, color)
+                # 绘制单一的点
+                pygame.draw.circle(self.screen, color, (screen_x, screen_y), 3)
+                
+                # 显示熵值数值
+                if self.font:
+                    entropy_text = f"{cell.entropy:.2f}"
+                    # 创建小字体用于显示熵值
+                    small_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 12)
+                    text_surface = small_font.render(entropy_text, True, self.WHITE)
+                    text_rect = text_surface.get_rect(center=(screen_x, screen_y - 15))
+                    self.screen.blit(text_surface, text_rect)
     
     def draw_hexagon(self, x, y, color):
         """绘制六边形"""
@@ -116,8 +125,8 @@ class SimpleVisualizer:
                         
                         # 绘制方向指示
                         if 'finalMoveDir' in drone_info and drone_info['finalMoveDir']:
-                            dir_x = screen_x + drone_info['finalMoveDir'].z * 20
-                            dir_y = screen_y - drone_info['finalMoveDir'].x * 20  # 注意坐标系转换
+                            dir_x = screen_x + drone_info['finalMoveDir'].x * 20
+                            dir_y = screen_y - drone_info['finalMoveDir'].z * 20  # 注意坐标系转换
                             pygame.draw.line(self.screen, self.RED, (screen_x, screen_y), (dir_x, dir_y), 3)
                         
                         # 绘制无人机名称
