@@ -101,7 +101,7 @@ class DQNAgent:
     """
 
     def __init__(self, state_dim, action_dim, lr=0.001, gamma=0.99, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995,
-                 batch_size=64, target_update=10):
+                 batch_size=64, target_update=10, memory_capacity=10000):
         """
         初始化DQN智能体
         参数:
@@ -137,7 +137,7 @@ class DQNAgent:
         self.criterion = nn.MSELoss()  # 使用均方误差损失函数
 
         # 创建经验回放缓冲区
-        self.memory = ReplayBuffer(10000)  # 缓冲区容量为10000
+        self.memory = ReplayBuffer(memory_capacity)  # 缓冲区容量可配置
 
         # 记录训练步数
         self.steps_done = 0

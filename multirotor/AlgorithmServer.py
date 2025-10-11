@@ -42,12 +42,12 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, enable_learning: bool = False):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, enable_learning: Optional[bool] = None):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
-        :param enable_learning: 是否启用DQN学习
+        :param enable_learning: 是否启用DQN学习（None表示从配置文件读取）
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -92,7 +92,12 @@ class MultiDroneAlgorithmServer:
         self.unity_socket.set_callback(self._handle_unity_data)
         
         # DQN学习相关初始化
-        self.enable_learning = enable_learning
+        # 如果enable_learning为None，则从配置文件读取
+        if enable_learning is None:
+            self.enable_learning = self.config_data.dqn_enabled
+        else:
+            self.enable_learning = enable_learning
+            
         self.learning_envs = {}
         self.dqn_agents = {}
         
@@ -325,17 +330,21 @@ class MultiDroneAlgorithmServer:
                 env = DroneLearningEnv(self, drone_name)
                 self.learning_envs[drone_name] = env
                 
+                # 从配置中读取DQN参数
+                config = self.config_data
+                
                 # 创建DQN智能体
                 agent = DQNAgent(
                     state_dim=env.state_dim,
                     action_dim=env.action_dim,
-                    lr=0.001,
-                    gamma=0.99,
-                    epsilon=1.0,
-                    epsilon_min=0.01,
-                    epsilon_decay=0.995,
-                    batch_size=64,
-                    target_update=10
+                    lr=config.dqn_learning_rate,
+                    gamma=config.dqn_gamma,
+                    epsilon=config.dqn_epsilon,
+                    epsilon_min=config.dqn_epsilon_min,
+                    epsilon_decay=config.dqn_epsilon_decay,
+                    batch_size=config.dqn_batch_size,
+                    target_update=config.dqn_target_update,
+                    memory_capacity=config.dqn_memory_capacity
                 )
                 self.dqn_agents[drone_name] = agent
                 
@@ -382,7 +391,8 @@ class MultiDroneAlgorithmServer:
                         self.dqn_agents[drone_name].learn()
                         
                         # 定期保存模型
-                        if self.dqn_agents[drone_name].steps_done % 1000 == 0:
+                        save_interval = self.config_data.dqn_model_save_interval
+                        if self.dqn_agents[drone_name].steps_done % save_interval == 0:
                             model_path = f"DQN/dqn_{drone_name}_model_{self.dqn_agents[drone_name].steps_done}.pth"
                             self.dqn_agents[drone_name].save_model(model_path)
                             logger.info(f"已保存无人机{drone_name}的DQN模型: {model_path}")

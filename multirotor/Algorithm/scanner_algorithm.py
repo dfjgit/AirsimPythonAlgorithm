@@ -245,15 +245,12 @@ class ScannerAlgorithm:
             direction_retention_dir * direction_retention_weight
         )
         
-        # 确保结果向量在Unity坐标系中正确
-        return ensure_unity_coordinates(final_move_dir)
-        
         # 归一化最终方向
         if final_move_dir.magnitude() > 0.1:
-            return final_move_dir.normalized()
+            return ensure_unity_coordinates(final_move_dir.normalized())
         else:
             # 如果最终方向接近零，保持当前方向
-            return self.previous_move_dir
+            return ensure_unity_coordinates(self.previous_move_dir)
 
     def record_visited_cell(self, cell_center: Vector3) -> None:
         """记录已访问的蜂窝（与C# RecordVisitedCell逻辑一致）"""

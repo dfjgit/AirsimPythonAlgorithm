@@ -29,26 +29,23 @@ class DroneLearningEnv:
         # 动作空间维度：5个权重系数，每个系数有5个离散取值（-2, -1, 0, 1, 2）的调整步长
         self.action_dim = 5 * 5  # 每个权重有5种调整方式，共5个权重
 
+        # 从配置中读取参数
+        config = server.config_data
+        
         # 权重调整步长
-        self.coefficient_step = 0.5
+        self.coefficient_step = config.learning_env_coefficient_step
 
         # 权重范围限制
-        self.coefficient_ranges = {
-            'repulsionCoefficient': (0.1, 10.0),
-            'entropyCoefficient': (0.1, 10.0),
-            'distanceCoefficient': (0.1, 10.0),
-            'leaderRangeCoefficient': (0.1, 10.0),
-            'directionRetentionCoefficient': (0.1, 10.0)
-        }
+        self.coefficient_ranges = config.learning_env_coefficient_ranges.copy()
 
         # 奖励权重配置
         self.reward_config = {
-            'exploration_weight': 1.0,  # 探索新区域奖励权重
-            'efficiency_weight': 0.5,  # 扫描效率奖励权重
-            'collision_penalty': -5.0,  # 碰撞惩罚
-            'boundary_penalty': -2.0,  # 越界惩罚
-            'energy_penalty': -0.1,  # 能耗惩罚
-            'completion_reward': 100.0  # 完成奖励
+            'exploration_weight': config.reward_exploration_weight,
+            'efficiency_weight': config.reward_efficiency_weight,
+            'collision_penalty': config.reward_collision_penalty,
+            'boundary_penalty': config.reward_boundary_penalty,
+            'energy_penalty': config.reward_energy_penalty,
+            'completion_reward': config.reward_completion_reward
         }
 
         # 记录上一步的状态，用于计算奖励
