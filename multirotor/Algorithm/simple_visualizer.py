@@ -284,13 +284,12 @@ class SimpleVisualizer:
             except:
                 self._status_font = self.font
         
-        # 计算面板高度（根据是否启用DQN和无人机数量）
+        # 计算面板高度（固定高度，共享权重只显示一次）
         use_dqn = self.server and hasattr(self.server, 'use_learned_weights') and self.server.use_learned_weights
         
-        if use_dqn and self.server and self.server.drone_names:
-            # 每个无人机需要约50px高度
-            num_drones = min(len(self.server.drone_names), 2)  # 最多显示2个
-            panel_height = 160 + num_drones * 50
+        if self.server and self.server.drone_names:
+            # 固定高度：基础信息 + 共享权重显示
+            panel_height = 200  # 基础信息 + 一套共享权重
         else:
             panel_height = 120
         
@@ -335,47 +334,45 @@ class SimpleVisualizer:
             self.screen.blit(text, (20, y_offset))
             y_offset += 25
         
-        # 如果启用DQN，显示当前权重（显示所有无人机）
-        if use_dqn and self.server.drone_names:
+        # 显示当前权重（所有无人机共享同一套权重）
+        if self.server and self.server.drone_names and len(self.server.algorithms) > 0:
             # 绘制权重标题
-            title = self._status_font.render("当前APF权重:", True, self.YELLOW)
+            if use_dqn:
+                title = self._status_font.render("DQN预测权重:", True, self.YELLOW)
+            else:
+                title = self._status_font.render("共享APF权重:", True, self.YELLOW)
             self.screen.blit(title, (20, y_offset))
             y_offset += 20
             
-            # 显示每个无人机的权重（最多显示2个）
-            for idx, drone_name in enumerate(self.server.drone_names[:2]):
-                if drone_name in self.server.algorithms:
-                    try:
-                        weights = self.server.algorithms[drone_name].get_current_coefficients()
-                        
-                        # 无人机名称
-                        name_text = self._status_font.render(f"{drone_name}:", True, self.CYAN)
-                        self.screen.blit(name_text, (20, y_offset))
-                        y_offset += 16
-                        
-                        # 显示5个权重（紧凑格式）
-                        weight_texts = [
-                            f"α1={weights.get('repulsionCoefficient', 0):.1f}",
-                            f"α2={weights.get('entropyCoefficient', 0):.1f}",
-                            f"α3={weights.get('distanceCoefficient', 0):.1f}",
-                            f"α4={weights.get('leaderRangeCoefficient', 0):.1f}",
-                            f"α5={weights.get('directionRetentionCoefficient', 0):.1f}"
-                        ]
-                        
-                        # 分两行显示
-                        line1 = f"  {weight_texts[0]} {weight_texts[1]} {weight_texts[2]}"
-                        line2 = f"  {weight_texts[3]} {weight_texts[4]}"
-                        
-                        text1 = self._status_font.render(line1, True, self.LIGHT_BLUE)
-                        self.screen.blit(text1, (20, y_offset))
-                        y_offset += 16
-                        
-                        text2 = self._status_font.render(line2, True, self.LIGHT_BLUE)
-                        self.screen.blit(text2, (20, y_offset))
-                        y_offset += 18
-                        
-                    except Exception as e:
-                        pass
+            # 只显示第一个无人机的权重（所有无人机共享）
+            first_drone = self.server.drone_names[0]
+            if first_drone in self.server.algorithms:
+                try:
+                    weights = self.server.algorithms[first_drone].get_current_coefficients()
+                    
+                    # 显示5个权重（紧凑格式）
+                    weight_texts = [
+                        f"α1={weights.get('repulsionCoefficient', 0):.1f}",
+                        f"α2={weights.get('entropyCoefficient', 0):.1f}",
+                        f"α3={weights.get('distanceCoefficient', 0):.1f}",
+                        f"α4={weights.get('leaderRangeCoefficient', 0):.1f}",
+                        f"α5={weights.get('directionRetentionCoefficient', 0):.1f}"
+                    ]
+                    
+                    # 分两行显示
+                    line1 = f"  {weight_texts[0]} {weight_texts[1]} {weight_texts[2]}"
+                    line2 = f"  {weight_texts[3]} {weight_texts[4]}"
+                    
+                    text1 = self._status_font.render(line1, True, self.LIGHT_BLUE)
+                    self.screen.blit(text1, (20, y_offset))
+                    y_offset += 16
+                    
+                    text2 = self._status_font.render(line2, True, self.LIGHT_BLUE)
+                    self.screen.blit(text2, (20, y_offset))
+                    y_offset += 18
+                    
+                except Exception as e:
+                    pass
             
             # 显示权重说明
             hint = self._status_font.render("(排斥/熵/距离/Leader/方向)", True, self.GRAY)
@@ -397,13 +394,12 @@ class SimpleVisualizer:
         except Exception:
             return None
     
-    def draw_dqn_weights_panel(self):
-        """绘制DQN权重详细面板"""
-        if not self.server or not hasattr(self.server, 'use_learned_weights'):
+    def draw_weights_detail_panel(self):
+        """绘制权重详细面板（无论是否启用DQN都显示）"""
+        if not self.server or not self.server.drone_names:
             return
         
-        if not self.server.use_learned_weights:
-            return
+        use_dqn = hasattr(self.server, 'use_learned_weights') and self.server.use_learned_weights
         
         # 创建字体
         if not hasattr(self, '_weight_font'):
@@ -414,9 +410,8 @@ class SimpleVisualizer:
         
         # 面板位置（左下角）
         panel_x = 10
-        # 根据无人机数量调整高度
-        num_drones = min(len(self.server.drone_names), 2) if self.server.drone_names else 1
-        panel_height = 50 + num_drones * 140  # 每个无人机140px
+        # 固定高度：只显示一套共享权重
+        panel_height = 180  # 标题 + 5个权重项
         panel_y = self.SCREEN_HEIGHT - panel_height - 10
         panel_width = 380
         
@@ -426,80 +421,82 @@ class SimpleVisualizer:
         s.set_alpha(200)
         s.fill((0, 0, 0))
         self.screen.blit(s, (panel_x, panel_y))
-        pygame.draw.rect(self.screen, self.GREEN, panel_rect, 2)
+        
+        # 根据模式设置边框颜色和标题
+        if use_dqn:
+            border_color = self.GREEN
+            title_text = "DQN权重预测 (共享)"
+            title_color = self.GREEN
+        else:
+            border_color = self.CYAN
+            title_text = "APF权重系数 (共享)"
+            title_color = self.CYAN
+        
+        pygame.draw.rect(self.screen, border_color, panel_rect, 2)
         
         y = panel_y + 10
         
         # 标题
-        title = self._weight_font.render("🤖 DQN权重预测", True, self.GREEN)
+        title = self._weight_font.render(title_text, True, title_color)
         self.screen.blit(title, (panel_x + 10, y))
         y += 25
         
-        # 显示所有无人机的权重（最多2个）
-        if self.server.drone_names:
-            for drone_idx, drone_name in enumerate(self.server.drone_names[:2]):
-                if drone_name in self.server.algorithms:
-                    try:
-                        # 无人机标题
-                        drone_title = self._weight_font.render(f"【{drone_name}】", True, self.CYAN)
-                        self.screen.blit(drone_title, (panel_x + 10, y))
+        # 显示共享的权重（只显示一次）
+        if self.server.drone_names and len(self.server.drone_names) > 0:
+            first_drone = self.server.drone_names[0]
+            if first_drone in self.server.algorithms:
+                try:
+                    weights = self.server.algorithms[first_drone].get_current_coefficients()
+                    
+                    # 权重名称和说明
+                    weight_info = [
+                        ("α1 排斥", weights.get('repulsionCoefficient', 0), "避障"),
+                        ("α2 熵值", weights.get('entropyCoefficient', 0), "探索"),
+                        ("α3 距离", weights.get('distanceCoefficient', 0), "导航"),
+                        ("α4 Leader", weights.get('leaderRangeCoefficient', 0), "跟随"),
+                        ("α5 方向", weights.get('directionRetentionCoefficient', 0), "稳定")
+                    ]
+                    
+                    # 显示每个权重
+                    for name, value, desc in weight_info:
+                        # 权重名称和值
+                        text = self._weight_font.render(f"{name}: {value:.2f}", True, self.LIGHT_BLUE)
+                        self.screen.blit(text, (panel_x + 15, y))
+                        
+                        # 权重条（可视化）
+                        bar_x = panel_x + 130
+                        bar_y = y + 3
+                        bar_width = 120
+                        bar_height = 10
+                        
+                        # 背景条
+                        pygame.draw.rect(self.screen, self.GRAY, (bar_x, bar_y, bar_width, bar_height))
+                        
+                        # 填充条（根据权重值，范围0.5-5.0）
+                        fill_width = int(bar_width * min((value - 0.5) / 4.5, 1.0))
+                        if fill_width > 0:
+                            # 颜色根据值变化
+                            if value < 1.5:
+                                color = self.GREEN
+                            elif value < 3.0:
+                                color = self.YELLOW
+                            else:
+                                color = self.RED
+                            pygame.draw.rect(self.screen, color, (bar_x, bar_y, fill_width, bar_height))
+                        
+                        # 边框
+                        pygame.draw.rect(self.screen, self.WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
+                        
+                        # 说明文字
+                        desc_text = self._weight_font.render(f"({desc})", True, self.GRAY)
+                        self.screen.blit(desc_text, (bar_x + bar_width + 5, y))
+                        
                         y += 20
-                        
-                        weights = self.server.algorithms[drone_name].get_current_coefficients()
-                        
-                        # 权重名称和说明
-                        weight_info = [
-                            ("α1 排斥", weights.get('repulsionCoefficient', 0), "避障"),
-                            ("α2 熵值", weights.get('entropyCoefficient', 0), "探索"),
-                            ("α3 距离", weights.get('distanceCoefficient', 0), "导航"),
-                            ("α4 Leader", weights.get('leaderRangeCoefficient', 0), "跟随"),
-                            ("α5 方向", weights.get('directionRetentionCoefficient', 0), "稳定")
-                        ]
-                        
-                        # 显示每个权重
-                        for name, value, desc in weight_info:
-                            # 权重名称和值
-                            text = self._weight_font.render(f"{name}: {value:.2f}", True, self.LIGHT_BLUE)
-                            self.screen.blit(text, (panel_x + 15, y))
-                            
-                            # 权重条（可视化）
-                            bar_x = panel_x + 130
-                            bar_y = y + 3
-                            bar_width = 120
-                            bar_height = 10
-                            
-                            # 背景条
-                            pygame.draw.rect(self.screen, self.GRAY, (bar_x, bar_y, bar_width, bar_height))
-                            
-                            # 填充条（根据权重值，范围0.5-5.0）
-                            fill_width = int(bar_width * min((value - 0.5) / 4.5, 1.0))
-                            if fill_width > 0:
-                                # 颜色根据值变化
-                                if value < 1.5:
-                                    color = self.GREEN
-                                elif value < 3.0:
-                                    color = self.YELLOW
-                                else:
-                                    color = self.RED
-                                pygame.draw.rect(self.screen, color, (bar_x, bar_y, fill_width, bar_height))
-                            
-                            # 边框
-                            pygame.draw.rect(self.screen, self.WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
-                            
-                            # 说明文字
-                            desc_text = self._weight_font.render(f"({desc})", True, self.GRAY)
-                            self.screen.blit(desc_text, (bar_x + bar_width + 5, y))
-                            
-                            y += 20
-                        
-                        # 无人机之间的分隔
-                        if drone_idx < min(len(self.server.drone_names), 2) - 1:
-                            y += 5
-                        
-                    except Exception as e:
-                        error_text = self._weight_font.render(f"{drone_name}权重获取失败", True, self.RED)
-                        self.screen.blit(error_text, (panel_x + 15, y))
-                        y += 20
+                    
+                except Exception as e:
+                    error_text = self._weight_font.render(f"权重获取失败", True, self.RED)
+                    self.screen.blit(error_text, (panel_x + 15, y))
+                    y += 20
     
     def draw_instructions(self):
         """绘制操作说明"""
@@ -661,9 +658,9 @@ class SimpleVisualizer:
                     print(f"绘制UI时出错: {str(e)}")
                 
                 try:
-                    self.draw_dqn_weights_panel()
+                    self.draw_weights_detail_panel()
                 except Exception as e:
-                    print(f"绘制DQN权重面板时出错: {str(e)}")
+                    print(f"绘制权重详细面板时出错: {str(e)}")
                 
                 # 更新屏幕
                 pygame.display.flip()

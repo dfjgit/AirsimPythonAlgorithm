@@ -678,8 +678,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='多无人机算法服务器')
     parser.add_argument('--use-learned-weights', action='store_true', 
                         help='使用DQN学习的权重（需要先训练模型）')
-    parser.add_argument('--drones', type=int, default=2,
-                        help='无人机数量（默认2）')
+    parser.add_argument('--drones', type=int, default=1,
+                        help='无人机数量（默认1）')
     args = parser.parse_args()
     
     try:

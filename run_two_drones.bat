@@ -11,7 +11,7 @@ call .venv\Scripts\activate.bat
 
 REM 运行算法服务器
 echo 启动算法服务器...
-python multirotor\AlgorithmServer.py
+python multirotor\AlgorithmServer.py  
 
 pause
 

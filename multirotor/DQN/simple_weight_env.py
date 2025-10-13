@@ -5,6 +5,8 @@
 import numpy as np
 import gym
 from gym import spaces
+import os
+from dqn_reward_config_data import DQNRewardConfig
 
 
 class SimpleWeightEnv(gym.Env):
@@ -14,11 +16,20 @@ class SimpleWeightEnv(gym.Env):
     目标: 学习5个权重系数 (α1, α2, α3, α4, α5)
     """
     
-    def __init__(self, server=None, drone_name="UAV1"):
+    def __init__(self, server=None, drone_name="UAV1", reward_config_path=None):
         super(SimpleWeightEnv, self).__init__()
         
         self.server = server
         self.drone_name = drone_name
+        
+        # 加载奖励配置
+        if reward_config_path is None:
+            # 使用默认路径
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            reward_config_path = os.path.join(current_dir, "dqn_reward_config.json")
+        
+        self.reward_config = DQNRewardConfig(reward_config_path)
+        print(f"[OK] DQN环境已加载奖励配置")
         
         # 状态空间: 18维
         # [位置(3) + 速度(3) + 方向(3) + 熵值(3) + Leader(3) + 扫描(3)]
@@ -30,10 +41,10 @@ class SimpleWeightEnv(gym.Env):
         )
         
         # 动作空间: 5维连续（5个权重系数）
-        # 范围: [0.5, 5.0] - 缩小范围避免极端值
+        # 使用配置文件中的范围
         self.action_space = spaces.Box(
-            low=0.5,
-            high=5.0,
+            low=self.reward_config.weight_min,
+            high=self.reward_config.weight_max,
             shape=(5,),
             dtype=np.float32
         )
@@ -58,29 +69,29 @@ class SimpleWeightEnv(gym.Env):
         :param action: [α1, α2, α3, α4, α5] - 5个权重系数
         :return: observation, reward, done, info
         """
-        # 确保action在有效范围内 [0.5, 5.0]
-        action = np.clip(action, 0.5, 5.0)
+        # 确保action在有效范围内（使用配置）
+        action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
         
         # 权重归一化：避免某个权重过高导致行为失衡
         # 方法1: 软归一化（保持相对比例，但限制最大差异）
         action_mean = np.mean(action)
         action_std = np.std(action)
         
-        # 如果标准差过大，进行平滑
-        if action_std > 1.5:  # 标准差阈值
+        # 如果标准差过大，进行平滑（使用配置）
+        if action_std > self.reward_config.std_threshold:
             # 将极端值拉回到均值附近
-            action = action_mean + (action - action_mean) * 0.7
-            action = np.clip(action, 0.5, 5.0)
+            action = action_mean + (action - action_mean) * self.reward_config.std_smoothing
+            action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
         
         # 方法2: 确保所有权重在合理范围内
-        # 最大值不超过最小值的5倍
+        # 最大值不超过最小值的N倍（使用配置）
         min_weight = np.min(action)
         max_weight = np.max(action)
-        if max_weight > min_weight * 5:
+        if max_weight > min_weight * self.reward_config.max_min_ratio:
             # 缩放权重
-            scale = (min_weight * 5) / max_weight
+            scale = (min_weight * self.reward_config.max_min_ratio) / max_weight
             action = action * scale
-            action = np.clip(action, 0.5, 5.0)
+            action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
         
         # 将权重设置到APF算法
         weights = {
@@ -100,9 +111,9 @@ class SimpleWeightEnv(gym.Env):
         # 计算奖励
         reward = self._calculate_reward()
         
-        # 判断是否结束
+        # 判断是否结束（使用配置）
         self.step_count += 1
-        done = self.step_count >= 200  # 每个episode最多200步
+        done = self.step_count >= self.reward_config.max_steps
         
         # 额外信息
         info = {
@@ -165,7 +176,7 @@ class SimpleWeightEnv(gym.Env):
             return np.zeros(18, dtype=np.float32)
     
     def _calculate_reward(self):
-        """计算奖励"""
+        """计算奖励（使用配置文件中的系数）"""
         if not self.server:
             return 0.0
         
@@ -175,28 +186,28 @@ class SimpleWeightEnv(gym.Env):
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data[self.drone_name]
                 
-                # 1. 探索奖励：新扫描的单元格
+                # 1. 探索奖励：新扫描的单元格（使用配置）
                 current_scanned = self._count_scanned_cells()
                 new_scanned = current_scanned - self.prev_scanned_cells
-                reward += new_scanned * 1.0  # 每个新单元格+1分
+                reward += new_scanned * self.reward_config.exploration_reward
                 self.prev_scanned_cells = current_scanned
                 
-                # 2. 碰撞惩罚
+                # 2. 碰撞惩罚（使用配置）
                 min_dist = self._get_min_distance_to_others(runtime_data)
-                if min_dist < 2.0:  # 小于2米
-                    reward -= 5.0
+                if min_dist < self.reward_config.collision_distance:
+                    reward -= self.reward_config.collision_penalty
                 
-                # 3. 越界惩罚
+                # 3. 越界惩罚（使用配置）
                 if runtime_data.leader_position:
                     dist_to_leader = (runtime_data.position - runtime_data.leader_position).magnitude()
                     if runtime_data.leader_scan_radius > 0 and dist_to_leader > runtime_data.leader_scan_radius:
-                        reward -= 2.0
+                        reward -= self.reward_config.out_of_range_penalty
                 
-                # 4. 平滑运动奖励
+                # 4. 平滑运动奖励（使用配置）
                 if self.prev_position:
                     movement = (runtime_data.position - self.prev_position).magnitude()
-                    if 0.5 < movement < 3.0:  # 合理的移动距离
-                        reward += 0.1
+                    if self.reward_config.movement_min < movement < self.reward_config.movement_max:
+                        reward += self.reward_config.smooth_movement_reward
                 
                 self.prev_position = runtime_data.position
                 
@@ -206,14 +217,14 @@ class SimpleWeightEnv(gym.Env):
         return reward
     
     def _get_entropy_info(self, grid_data, position):
-        """获取附近熵值信息"""
+        """获取附近熵值信息（使用配置）"""
         if not grid_data or not grid_data.cells:
             return [50.0, 50.0, 0.0]
         
-        # 找附近10米内的单元格
+        # 找附近N米内的单元格（使用配置）
         nearby_cells = [
             cell for cell in grid_data.cells[:100]  # 限制数量避免卡顿
-            if (cell.center - position).magnitude() < 10.0
+            if (cell.center - position).magnitude() < self.reward_config.nearby_entropy_distance
         ]
         
         if not nearby_cells:
@@ -227,12 +238,12 @@ class SimpleWeightEnv(gym.Env):
         ]
     
     def _get_scan_info(self, grid_data):
-        """获取扫描进度"""
+        """获取扫描进度（使用配置）"""
         if not grid_data or not grid_data.cells:
             return [0.0, 0.0, 0.0]
         
         total = len(grid_data.cells)
-        scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30)
+        scanned = sum(1 for cell in grid_data.cells if cell.entropy < self.reward_config.scanned_entropy_threshold)
         
         return [
             scanned / max(total, 1),
@@ -241,13 +252,13 @@ class SimpleWeightEnv(gym.Env):
         ]
     
     def _count_scanned_cells(self):
-        """统计已扫描单元格"""
+        """统计已扫描单元格（使用配置）"""
         if not self.server or not self.server.grid_data:
             return 0
         
         try:
             with self.server.data_lock:
-                return sum(1 for cell in self.server.grid_data.cells if cell.entropy < 30)
+                return sum(1 for cell in self.server.grid_data.cells if cell.entropy < self.reward_config.scanned_entropy_threshold)
         except:
             return 0
     
@@ -289,5 +300,5 @@ if __name__ == "__main__":
         print(f"  奖励: {reward:.2f}")
         print(f"  完成: {done}")
     
-    print("\n✓ 环境测试通过！")
+    print("\n[OK] 环境测试通过！")
 
