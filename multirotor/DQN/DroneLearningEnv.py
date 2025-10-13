@@ -111,53 +111,61 @@ class DroneLearningEnv:
 
     def get_state(self):
         """获取当前环境状态"""
-        with self.server.data_lock:
-            runtime_data = self.server.unity_runtime_data[self.drone_name]
-            algorithm = self.server.algorithms[self.drone_name]
+        try:
+            with self.server.data_lock:
+                runtime_data = self.server.unity_runtime_data[self.drone_name]
+                algorithm = self.server.algorithms[self.drone_name]
 
-            # 获取无人机位置
-            position = [runtime_data.position.x, runtime_data.position.y, runtime_data.position.z]
+                # 获取无人机位置
+                position = [runtime_data.position.x, runtime_data.position.y, runtime_data.position.z]
 
-            # 计算无人机速度（简化为方向向量乘以移动速度）
-            velocity = [runtime_data.finalMoveDir.x * self.server.config_data.moveSpeed,
-                        runtime_data.finalMoveDir.y * self.server.config_data.moveSpeed,
-                        runtime_data.finalMoveDir.z * self.server.config_data.moveSpeed]
+                # 计算无人机速度（简化为方向向量乘以移动速度）
+                velocity = [runtime_data.finalMoveDir.x * self.server.config_data.moveSpeed,
+                            runtime_data.finalMoveDir.y * self.server.config_data.moveSpeed,
+                            runtime_data.finalMoveDir.z * self.server.config_data.moveSpeed]
 
-            # 获取无人机方向
-            direction = [runtime_data.forward.x, runtime_data.forward.y, runtime_data.forward.z]
+                # 获取无人机方向
+                direction = [runtime_data.forward.x, runtime_data.forward.y, runtime_data.forward.z]
 
-            # 获取当前权重系数
-            coefficients = algorithm.get_current_coefficients()
-            coefficient_values = [
-                coefficients['repulsionCoefficient'],
-                coefficients['entropyCoefficient'],
-                coefficients['distanceCoefficient'],
-                coefficients['leaderRangeCoefficient'],
-                coefficients['directionRetentionCoefficient']
-            ]
-
-            # 获取Leader相对位置
-            if runtime_data.leader_position is not None:
-                leader_relative_pos = [
-                    runtime_data.leader_position.x - runtime_data.position.x,
-                    runtime_data.leader_position.y - runtime_data.position.y,
-                    runtime_data.leader_position.z - runtime_data.position.z
+                # 获取当前权重系数
+                coefficients = algorithm.get_current_coefficients()
+                coefficient_values = [
+                    coefficients['repulsionCoefficient'],
+                    coefficients['entropyCoefficient'],
+                    coefficients['distanceCoefficient'],
+                    coefficients['leaderRangeCoefficient'],
+                    coefficients['directionRetentionCoefficient']
                 ]
-            else:
-                leader_relative_pos = [0.0, 0.0, 0.0]
 
-            # 计算扫描效率（已扫描区域占总区域的比例）
-            total_area = self._estimate_total_area()
-            if total_area > 0:
-                scanned_area_ratio = min(1.0, self._calculate_scanned_area() / total_area)
-            else:
-                scanned_area_ratio = 0.0
+                # 获取Leader相对位置
+                if runtime_data.leader_position is not None:
+                    leader_relative_pos = [
+                        runtime_data.leader_position.x - runtime_data.position.x,
+                        runtime_data.leader_position.y - runtime_data.position.y,
+                        runtime_data.leader_position.z - runtime_data.position.z
+                    ]
+                else:
+                    leader_relative_pos = [0.0, 0.0, 0.0]
 
-        # 组合所有状态特征
-        state = (position + velocity + direction + coefficient_values +
-                 leader_relative_pos + [scanned_area_ratio])
+                # 计算扫描效率（已扫描区域占总区域的比例）
+                total_area = self._estimate_total_area()
+                if total_area > 0:
+                    scanned_area_ratio = min(1.0, self._calculate_scanned_area() / total_area)
+                else:
+                    scanned_area_ratio = 0.0
 
-        return np.array(state, dtype=np.float32)
+            # 组合所有状态特征
+            state = (position + velocity + direction + coefficient_values +
+                     leader_relative_pos + [scanned_area_ratio])
+
+            return np.array(state, dtype=np.float32)
+        except Exception as e:
+            # 发生错误时返回零状态
+            import logging
+            logging.error(f"DroneLearningEnv.get_state() 出错: {str(e)}")
+            import traceback
+            logging.debug(traceback.format_exc())
+            return np.zeros(self.state_dim, dtype=np.float32)
 
     def calculate_reward(self, prev_state, current_state):
         """计算奖励值"""
@@ -256,7 +264,7 @@ class DroneLearningEnv:
     def _calculate_scanned_area(self):
         """计算已扫描的区域面积"""
         # 简化处理：基于网格中的低熵单元格数量（不使用不存在的visited属性）
-        with self.server.grid_lock:
+        with self.server.data_lock:
             grid_data = self.server.grid_data
             scanned_cells = sum(1 for cell in grid_data.cells if cell.entropy < 0.5)
 
@@ -267,7 +275,7 @@ class DroneLearningEnv:
 
     def _estimate_total_area(self):
         """估计总区域面积"""
-        with self.server.grid_lock:
+        with self.server.data_lock:
             return len(self.server.grid_data.cells) * 1.0  # 简化处理
 
     def _check_done(self):

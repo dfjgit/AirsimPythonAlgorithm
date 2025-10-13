@@ -59,7 +59,8 @@ class MultiDroneAlgorithmServer:
         self.drone_controller = DroneController()  # 无人机控制器
         self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
         self.config_data = self._load_config()  # 算法配置数据
-
+        logger.info(f"配置文件加载完成 {self.drone_names}")
+        
         # 数据存储结构（按无人机名称区分）
         self.unity_runtime_data: Dict[str, ScannerRuntimeData] = {
             name: ScannerRuntimeData() for name in self.drone_names
@@ -332,23 +333,41 @@ class MultiDroneAlgorithmServer:
 
     def _init_dqn_learning(self):
         """初始化DQN学习组件"""
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("DQN初始化超时")
+        
         try:
+            logger.info("开始初始化DQN学习组件...")
+            
             # 使用正确的相对导入方式
             import sys
             import os
             sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+            # 设置环境变量强制禁用CUDA
+            os.environ['CUDA_VISIBLE_DEVICES'] = ''
+            os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+            
+            logger.info("导入DQN模块...")
             from multirotor.DQN.DqnLearning import DQNAgent
             from multirotor.DQN.DroneLearningEnv import DroneLearningEnv
+            logger.info("DQN模块导入成功")
             
             for drone_name in self.drone_names:
+                logger.info(f"为无人机{drone_name}创建DQN学习环境...")
+                
                 # 创建学习环境
                 env = DroneLearningEnv(self, drone_name)
                 self.learning_envs[drone_name] = env
+                logger.info(f"学习环境创建成功")
                 
                 # 从配置中读取DQN参数
                 config = self.config_data
                 
                 # 创建DQN智能体
+                logger.info(f"创建DQN智能体（state_dim={env.state_dim}, action_dim={env.action_dim}）...")
                 agent = DQNAgent(
                     state_dim=env.state_dim,
                     action_dim=env.action_dim,
@@ -362,6 +381,7 @@ class MultiDroneAlgorithmServer:
                     memory_capacity=config.dqn_memory_capacity
                 )
                 self.dqn_agents[drone_name] = agent
+                logger.info(f"DQN智能体创建成功")
                 
                 # 尝试加载已训练的模型
                 try:
@@ -374,8 +394,17 @@ class MultiDroneAlgorithmServer:
                         logger.info(f"未找到无人机{drone_name}的DQN模型文件，将从头开始训练")
                 except Exception as e:
                     logger.info(f"加载无人机{drone_name}的DQN模型失败: {str(e)}")
+            
+            logger.info("DQN学习组件初始化完成")
+            
+        except TimeoutError as e:
+            logger.error(f"DQN初始化超时，自动禁用DQN学习: {str(e)}")
+            logger.warning("建议在配置文件中设置 'dqn.enabled' 为 false")
+            self.enable_learning = False
         except Exception as e:
             logger.error(f"初始化DQN学习组件失败: {str(e)}")
+            logger.debug(f"详细错误:\n{traceback.format_exc()}")
+            logger.warning("DQN学习已自动禁用，系统将使用传统APF算法")
             self.enable_learning = False
     
     def _process_drone(self, drone_name: str) -> None:
@@ -433,6 +462,7 @@ class MultiDroneAlgorithmServer:
                         
                     except Exception as e:
                         logger.error(f"无人机{drone_name}DQN学习处理出错: {str(e)}")
+                        logger.debug(f"详细错误信息:\n{traceback.format_exc()}")
                         # 出错时回退到传统模式
                         final_dir = self.algorithms[drone_name].update_runtime_data(
                             self.grid_data, self.unity_runtime_data[drone_name]
@@ -462,7 +492,7 @@ class MultiDroneAlgorithmServer:
 
 
     def _control_drone_movement(self, drone_name: str, direction: Vector3) -> None:
-        """控制无人机按指定方向移动，保持高度不变"""
+        """控制无人机按指定方向移动，水平和垂直分离计算"""
         with self.data_lock:
             current_pos = self.unity_runtime_data[drone_name].position
 
@@ -471,26 +501,51 @@ class MultiDroneAlgorithmServer:
             logger.debug(f"无人机{drone_name}方向向量过小，跳过移动")
             return
 
-        # 计算移动速度
+        # ===== 第一步：分离水平和垂直方向 =====
+        # Unity坐标系：X前后，Y高度，Z左右
+        horizontal_direction = Vector3(direction.x, 0.0, direction.z)  # 只保留X和Z（水平）
+        vertical_direction = Vector3(0.0, direction.y, 0.0)  # 只保留Y（高度）
+        
+        # ===== 第二步：分别计算水平和垂直速度 =====
         move_speed = self.config_data.moveSpeed
-        velocity = direction * move_speed
         
-        # 坐标转换：Unity到AirSim
-        velocity_airsim = velocity.unity_to_air_sim()
+        # 水平速度：使用完整的移动速度
+        if horizontal_direction.magnitude() > 0.001:
+            horizontal_velocity = horizontal_direction.normalized() * move_speed
+        else:
+            horizontal_velocity = Vector3(0.0, 0.0, 0.0)
         
-        # 保持高度：将Z轴速度设置为0
-        velocity_airsim.z = 0.0
+        # 垂直速度：使用较慢的速度进行高度调整
+        vertical_speed = move_speed * 0.5  # 高度调整速度为水平速度的50%
+        if abs(direction.y) > 0.001:
+            vertical_velocity = Vector3(0.0, direction.y * vertical_speed, 0.0)
+        else:
+            vertical_velocity = Vector3(0.0, 0.0, 0.0)
         
-        # 限制速度范围，避免过大的速度导致不稳定
-        max_velocity = 3.0  # 降低最大速度限制
-        if velocity_airsim.magnitude() > max_velocity:
-            velocity_airsim = velocity_airsim.normalized() * max_velocity
-            velocity_airsim.z = 0.0  # 确保Z轴速度仍为0
+        # ===== 第三步：合成最终速度向量（Unity坐标系） =====
+        final_velocity = horizontal_velocity + vertical_velocity
         
-        # 检查无人机是否卡住（位置长时间不变）
+        # ===== 第四步：坐标转换：Unity到AirSim =====
+        velocity_airsim = final_velocity.unity_to_air_sim()
+        
+        # ===== 第五步：限制速度范围 =====
+        # 分别限制水平和垂直速度
+        horizontal_speed_airsim = (velocity_airsim.x**2 + velocity_airsim.y**2)**0.5
+        max_horizontal_velocity = 3.0  # 最大水平速度
+        max_vertical_velocity = 4.5    # 最大垂直速度
+        
+        if horizontal_speed_airsim > max_horizontal_velocity:
+            scale = max_horizontal_velocity / horizontal_speed_airsim
+            velocity_airsim.x *= scale
+            velocity_airsim.y *= scale
+        
+        if abs(velocity_airsim.z) > max_vertical_velocity:
+            velocity_airsim.z = max_vertical_velocity if velocity_airsim.z > 0 else -max_vertical_velocity
+        
+        # ===== 第六步：检查无人机是否卡住 =====
         self._check_drone_stuck(drone_name, current_pos)
         
-        # 发送速度控制指令
+        # ===== 第七步：发送速度控制指令 =====
         success = self.drone_controller.move_by_velocity(
             velocity_airsim.x, velocity_airsim.y, velocity_airsim.z,
             self.config_data.updateInterval, drone_name
@@ -499,7 +554,11 @@ class MultiDroneAlgorithmServer:
         if not success:
             logger.error(f"无人机{drone_name}移动指令发送失败")
         else:
-            logger.debug(f"无人机{drone_name}移动指令: Unity方向{direction} -> AirSim速度{velocity_airsim}")
+            logger.debug(
+                f"无人机{drone_name}移动: Unity方向{direction} -> "
+                f"水平{horizontal_direction} + 垂直{vertical_direction} -> "
+                f"AirSim速度{velocity_airsim} (水平:{horizontal_speed_airsim:.2f}, 垂直:{abs(velocity_airsim.z):.2f})"
+            )
 
     def _check_drone_stuck(self, drone_name: str, current_pos: Vector3) -> None:
         """检查无人机是否卡住（位置长时间不变）"""
@@ -598,7 +657,7 @@ class MultiDroneAlgorithmServer:
 if __name__ == "__main__":
     try:
         # 创建服务器实例，启用DQN学习功能
-        server = MultiDroneAlgorithmServer(enable_learning=True)
+        server = MultiDroneAlgorithmServer(enable_learning=False)
         if server.start():
             server.start_mission()
             # 主循环保持运行

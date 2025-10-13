@@ -53,34 +53,7 @@ class SimpleVisualizer:
         
         # 可视化控制
         self.running = False
-        self.clock = pygame.time.Clock()
-        self.visualization_thread = None
-        
-        # 颜色定义
-        self.BLACK = (0, 0, 0)
-        self.WHITE = (255, 255, 255)
-        self.RED = (255, 0, 0)
-        self.GREEN = (0, 255, 0)
-        self.BLUE = (0, 0, 255)
-        self.YELLOW = (255, 255, 0)
-        self.CYAN = (0, 255, 255)
-        self.MAGENTA = (255, 0, 255)
-        self.GRAY = (128, 128, 128)
-        self.LIGHT_GRAY = (200, 200, 200)
-        
-        # 新增颜色定义
-        self.LIGHT_BLUE = (173, 216, 230)  # 淡蓝色用于Leader
-        self.DRONE_GREEN = (50, 205, 50)   # 无人机绿色
-        self.SCAN_RANGE_COLOR = (0, 255, 0)  # 扫描范围颜色
-        
-        # 坐标系转换参数
-        self.origin_x = self.SCREEN_WIDTH // 2
-        self.origin_y = self.SCREEN_HEIGHT // 2
-        self.scale = 20  # 1单位=20像素
-        
-        # 可视化控制
-        self.running = False
-        self.clock = pygame.time.Clock()
+        self.clock = None  # 延迟初始化，在pygame.init()之后创建
         self.visualization_thread = None
     
     def world_to_screen(self, vector):
@@ -365,6 +338,9 @@ class SimpleVisualizer:
                 pygame.init()
                 self.pygame_initialized = True
                 
+                # 初始化时钟
+                self.clock = pygame.time.Clock()
+                
                 # 初始化字体系统
                 pygame.font.init()
                 
@@ -423,7 +399,8 @@ class SimpleVisualizer:
                 pygame.display.flip()
                 
                 # 优化帧率控制，使用更稳定的帧率
-                self.clock.tick(60)  # 提高到60fps，使用标准tick方法
+                if self.clock:
+                    self.clock.tick(60)  # 提高到60fps，使用标准tick方法
             except Exception as e:
                 print(f"可视化主循环出错: {str(e)}")
                 # 短暂暂停后继续，避免错误导致程序崩溃

@@ -1,93 +1,97 @@
-import numpy as np
+"""
+DQN (Deep Q-Network) 学习算法实现
+包含DQN神经网络、经验回放缓冲区和DQN智能体
+"""
+import os
+# 强制禁用CUDA，避免在没有GPU的环境中卡住
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 import random
 from collections import deque
 
-# 设置随机种子，保证结果可复现
-torch.manual_seed(0)
-np.random.seed(0)
-random.seed(0)
+# 设置PyTorch使用CPU并限制线程数
+torch.set_num_threads(2)  # 限制线程数，避免占用所有CPU核心
 
 
 class DQN(nn.Module):
-    """DQN网络模型，用于估计Q值
-    简单的前馈神经网络，接收状态作为输入，输出每个动作的Q值
+    """DQN神经网络
+    输入：状态向量
+    输出：每个动作的Q值
     """
 
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, hidden_dim=128):
         """
         初始化DQN网络
         参数:
-            state_dim: 状态空间的维度
-            action_dim: 动作空间的维度
+            state_dim: 状态空间维度
+            action_dim: 动作空间维度
+            hidden_dim: 隐藏层维度
         """
         super(DQN, self).__init__()
-        # 定义网络层结构
-        self.fc1 = nn.Linear(state_dim, 64)  # 输入层到隐藏层1
-        self.fc2 = nn.Linear(64, 64)  # 隐藏层1到隐藏层2
-        self.fc3 = nn.Linear(64, action_dim)  # 隐藏层2到输出层
-        # 使用ReLU激活函数
-        self.relu = nn.ReLU()
-
+        
+        # 定义网络结构：3层全连接网络
+        self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, action_dim)
+        
     def forward(self, x):
-        """前向传播，计算Q值
-        参数:
-            x: 状态张量
-        返回:
-            每个动作的Q值
-        """
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)  # 输出层不需要激活函数
-        return x
+        """前向传播"""
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
 
 
 class ReplayBuffer:
     """经验回放缓冲区
-    用于存储和采样训练数据，打破样本间的相关性
+    存储和采样(s, a, r, s', done)经验元组
     """
 
-    def __init__(self, capacity):
+    def __init__(self, capacity=10000):
         """
         初始化经验回放缓冲区
         参数:
-            capacity: 缓冲区的最大容量
+            capacity: 缓冲区最大容量
         """
+        self.buffer = deque(maxlen=capacity)
         self.capacity = capacity
-        self.buffer = deque(maxlen=capacity)  # 使用双端队列实现
 
     def push(self, state, action, reward, next_state, done):
-        """将经验存入缓冲区
+        """
+        添加一条经验到缓冲区
         参数:
             state: 当前状态
             action: 执行的动作
             reward: 获得的奖励
-            next_state: 执行动作后的状态
+            next_state: 下一个状态
             done: 是否结束
         """
-        # 将数据转换为numpy数组，方便存储
-        experience = (np.array(state), action, reward, np.array(next_state), done)
-        self.buffer.append(experience)
+        self.buffer.append((state, action, reward, next_state, done))
 
-    def sample(self, batch_size):
-        """从缓冲区中随机采样一批数据
+    def sample(self, batch_size, device=torch.device('cpu')):
+        """
+        从缓冲区随机采样一批数据
         参数:
-            batch_size: 采样的批次大小
+            batch_size: 批次大小
+            device: 目标设备 (CPU或CUDA)
         返回:
-            批量的状态、动作、奖励、下一状态和done标志
+            states, actions, rewards, next_states, dones的批次数据
         """
         # 随机采样
-        experiences = random.sample(self.buffer, batch_size)
-
-        # 将数据分离并转换为PyTorch张量
-        states = torch.FloatTensor([exp[0] for exp in experiences])
-        actions = torch.LongTensor([exp[1] for exp in experiences]).unsqueeze(1)
-        rewards = torch.FloatTensor([exp[2] for exp in experiences]).unsqueeze(1)
-        next_states = torch.FloatTensor([exp[3] for exp in experiences])
-        dones = torch.FloatTensor([exp[4] for exp in experiences]).unsqueeze(1)
-
+        batch = random.sample(self.buffer, batch_size)
+        
+        # 解包并转换为张量，直接放到指定设备上
+        states, actions, rewards, next_states, dones = zip(*batch)
+        
+        states = torch.FloatTensor(np.array(states)).to(device)
+        actions = torch.LongTensor(actions).unsqueeze(1).to(device)
+        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(device)
+        next_states = torch.FloatTensor(np.array(next_states)).to(device)
+        dones = torch.FloatTensor(dones).unsqueeze(1).to(device)
+        
         return states, actions, rewards, next_states, dones
 
     def __len__(self):
@@ -114,6 +118,7 @@ class DQNAgent:
             epsilon_decay: 探索率衰减因子
             batch_size: 批次大小
             target_update: 目标网络更新频率
+            memory_capacity: 经验回放缓冲区容量
         """
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -125,9 +130,13 @@ class DQNAgent:
         self.batch_size = batch_size  # 训练批次大小
         self.target_update = target_update  # 目标网络更新步数间隔
 
+        # 设备管理：强制使用CPU，避免在没有GPU的环境中卡住
+        self.device = torch.device('cpu')
+        print(f"DQN使用设备: {self.device}")
+        
         # 创建策略网络和目标网络
-        self.policy_net = DQN(state_dim, action_dim)
-        self.target_net = DQN(state_dim, action_dim)
+        self.policy_net = DQN(state_dim, action_dim).to(self.device)
+        self.target_net = DQN(state_dim, action_dim).to(self.device)
         # 初始化目标网络的参数与策略网络相同
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()  # 目标网络设置为评估模式
@@ -156,7 +165,7 @@ class DQNAgent:
         else:
             # 利用：选择Q值最大的动作
             with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0)  # 增加一个维度作为批次
+                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)  # 移到指定设备
                 q_values = self.policy_net(state_tensor)
                 return q_values.max(1)[1].item()  # 返回Q值最大的动作索引
 
@@ -166,8 +175,8 @@ class DQNAgent:
         if len(self.memory) < self.batch_size:
             return
 
-        # 从缓冲区中采样一批数据
-        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
+        # 从缓冲区中采样一批数据，数据已在正确的设备上
+        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size, self.device)
 
         # 计算当前状态下的Q值
         current_q = self.policy_net(states).gather(1, actions)
@@ -182,6 +191,10 @@ class DQNAgent:
         loss = self.criterion(current_q, target_q)
         self.optimizer.zero_grad()  # 清空梯度
         loss.backward()  # 反向传播计算梯度
+        
+        # 梯度裁剪，防止梯度爆炸（对CPU训练特别重要）
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+        
         self.optimizer.step()  # 更新参数
 
         # 衰减探索率
@@ -204,56 +217,60 @@ class DQNAgent:
         参数:
             path: 加载路径
         """
-        self.policy_net.load_state_dict(torch.load(path))
+        # 强制使用CPU加载，避免在没有GPU的环境中出错
+        self.policy_net.load_state_dict(torch.load(path, map_location=self.device))
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
 
 # 示例使用代码
 if __name__ == "__main__":
-    """这里是一个简单的示例，展示如何使用上面定义的DQN模型
-    注意：这只是一个框架，实际使用时需要根据具体环境进行调整
-    """
-    # 假设环境的状态维度为4，动作维度为2
-    state_dim = 4
-    action_dim = 2
-
+    # 创建一个简单的DQN智能体示例
+    state_dim = 18  # 状态维度
+    action_dim = 25  # 动作维度
+    
     # 创建DQN智能体
-    agent = DQNAgent(state_dim, action_dim)
-
+    agent = DQNAgent(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        lr=0.001,
+        gamma=0.99,
+        epsilon=1.0,
+        epsilon_min=0.01,
+        epsilon_decay=0.995,
+        batch_size=64,
+        target_update=10,
+        memory_capacity=10000
+    )
+    
+    print(f"DQN智能体创建成功")
+    print(f"状态维度: {agent.state_dim}")
+    print(f"动作维度: {agent.action_dim}")
+    print(f"学习率: {agent.lr}")
+    print(f"探索率: {agent.epsilon}")
+    
     # 模拟训练过程
-    episodes = 1000
-    for episode in range(episodes):
-        # 重置环境，获取初始状态
-        # state = env.reset()
-        state = np.random.rand(state_dim)  # 这里用随机数模拟初始状态
-
-        total_reward = 0
+    print("\n开始模拟训练...")
+    for episode in range(10):
+        # 随机生成状态
+        state = np.random.randn(state_dim).astype(np.float32)
+        
+        # 选择动作
+        action = agent.select_action(state)
+        
+        # 模拟环境反馈
+        reward = np.random.randn()
+        next_state = np.random.randn(state_dim).astype(np.float32)
         done = False
-
-        while not done:
-            # 选择动作
-            action = agent.select_action(state)
-
-            # 在环境中执行动作，获取下一状态、奖励和done标志
-            # next_state, reward, done, _ = env.step(action)
-            # 这里用随机数模拟环境反馈
-            next_state = np.random.rand(state_dim)
-            reward = np.random.randn()
-            done = random.random() < 0.1  # 10%的概率结束回合
-
-            # 存储经验到回放缓冲区
-            agent.memory.push(state, action, reward, next_state, done)
-
-            # 更新当前状态
-            state = next_state
-            total_reward += reward
-
-            # 学习
+        
+        # 存储经验
+        agent.memory.push(state, action, reward, next_state, done)
+        
+        # 学习
+        if len(agent.memory) >= agent.batch_size:
             agent.learn()
+        
+        if (episode + 1) % 5 == 0:
+            print(f"Episode {episode + 1}: 探索率 = {agent.epsilon:.4f}, 训练步数 = {agent.steps_done}")
+    
+    print("\n训练完成！")
 
-        # 每100个回合打印一次结果
-        if episode % 100 == 0:
-            print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Epsilon: {agent.epsilon:.4f}")
-
-    # 保存模型
-    agent.save_model("dqn_model.pth")
