@@ -42,12 +42,12 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, enable_learning: Optional[bool] = None):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
-        :param enable_learning: 是否启用DQN学习（None表示从配置文件读取）
+        :param use_learned_weights: 是否使用学习的权重（DQN模型预测）
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -92,19 +92,12 @@ class MultiDroneAlgorithmServer:
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
         
-        # DQN学习相关初始化
-        # 如果enable_learning为None，则从配置文件读取
-        if enable_learning is None:
-            self.enable_learning = self.config_data.dqn_enabled
-        else:
-            self.enable_learning = enable_learning
-            
-        self.learning_envs = {}
-        self.dqn_agents = {}
+        # DQN权重预测（可选）
+        self.use_learned_weights = use_learned_weights
+        self.weight_model = None
+        if self.use_learned_weights:
+            self._init_weight_predictor()
         
-        if self.enable_learning:
-            self._init_dqn_learning()
-            
         # 初始化可视化组件
         self._init_visualization()
 
@@ -129,6 +122,30 @@ class MultiDroneAlgorithmServer:
             logger.error(f"配置文件加载失败: {str(e)}")
             raise
 
+    def _init_weight_predictor(self):
+        """初始化权重预测器（DDPG模型）"""
+        try:
+            logger.info("初始化权重预测器...")
+            from stable_baselines3 import DDPG
+            
+            model_path = os.path.join(os.path.dirname(__file__), 'DQN', 'models', 'weight_predictor_simple')
+            
+            if os.path.exists(model_path + '.zip'):
+                self.weight_model = DDPG.load(model_path)
+                logger.info(f"✓ 权重预测模型加载成功: {model_path}")
+            else:
+                logger.warning(f"权重预测模型不存在: {model_path}.zip")
+                logger.warning("将使用配置文件中的固定权重")
+                self.use_learned_weights = False
+                
+        except ImportError:
+            logger.error("stable-baselines3未安装，无法使用权重预测")
+            logger.info("安装方法: pip install stable-baselines3")
+            self.use_learned_weights = False
+        except Exception as e:
+            logger.error(f"权重预测器初始化失败: {str(e)}")
+            self.use_learned_weights = False
+    
     def _init_visualization(self):
         """初始化可视化组件"""
         if HAS_VISUALIZATION:
@@ -331,81 +348,98 @@ class MultiDroneAlgorithmServer:
             logger.error(f"处理Unity数据时发生错误: {str(e)}，堆栈信息: {traceback.format_exc()}")
 
 
-    def _init_dqn_learning(self):
-        """初始化DQN学习组件"""
-        import signal
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError("DQN初始化超时")
+    def _get_state_for_prediction(self, drone_name: str) -> np.ndarray:
+        """提取状态用于权重预测（18维）"""
+        try:
+            with self.data_lock:
+                runtime_data = self.unity_runtime_data[drone_name]
+                grid_data = self.grid_data
+                
+                # 位置 (3)
+                pos = runtime_data.position
+                position = [pos.x, pos.y, pos.z]
+                
+                # 速度 (3)
+                vel = runtime_data.finalMoveDir
+                velocity = [vel.x * self.config_data.moveSpeed, vel.y * self.config_data.moveSpeed, vel.z * self.config_data.moveSpeed]
+                
+                # 方向 (3)
+                fwd = runtime_data.forward
+                direction = [fwd.x, fwd.y, fwd.z]
+                
+                # 附近熵值 (3)
+                nearby_cells = [c for c in grid_data.cells[:50] if (c.center - pos).magnitude() < 10.0]
+                if nearby_cells:
+                    entropies = [c.entropy for c in nearby_cells]
+                    entropy_info = [float(np.mean(entropies)), float(np.max(entropies)), float(np.std(entropies))]
+                else:
+                    entropy_info = [50.0, 50.0, 0.0]
+                
+                # Leader相对位置 (3)
+                if runtime_data.leader_position:
+                    leader_rel = [
+                        runtime_data.leader_position.x - pos.x,
+                        runtime_data.leader_position.y - pos.y,
+                        runtime_data.leader_position.z - pos.z
+                    ]
+                else:
+                    leader_rel = [0.0, 0.0, 0.0]
+                
+                # 扫描进度 (3)
+                total = len(grid_data.cells)
+                scanned = sum(1 for c in grid_data.cells if c.entropy < 30)
+                scan_info = [scanned / max(total, 1), float(scanned), float(total - scanned)]
+                
+                state = position + velocity + direction + entropy_info + leader_rel + scan_info
+                return np.array(state, dtype=np.float32)
+                
+        except Exception as e:
+            logger.debug(f"状态提取失败: {str(e)}")
+            return np.zeros(18, dtype=np.float32)
+    
+    def _predict_weights(self, drone_name: str) -> Dict[str, float]:
+        """使用模型预测权重并进行平衡处理"""
+        if not self.weight_model:
+            return None
         
         try:
-            logger.info("开始初始化DQN学习组件...")
+            state = self._get_state_for_prediction(drone_name)
+            action, _ = self.weight_model.predict(state, deterministic=True)
             
-            # 使用正确的相对导入方式
-            import sys
-            import os
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            # 权重范围限制 [0.5, 5.0]
+            action = np.clip(action, 0.5, 5.0)
             
-            # 设置环境变量强制禁用CUDA
-            os.environ['CUDA_VISIBLE_DEVICES'] = ''
-            os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+            # 权重平衡处理：避免某个权重过高
+            action_mean = np.mean(action)
+            action_std = np.std(action)
             
-            logger.info("导入DQN模块...")
-            from multirotor.DQN.DqnLearning import DQNAgent
-            from multirotor.DQN.DroneLearningEnv import DroneLearningEnv
-            logger.info("DQN模块导入成功")
+            # 如果标准差过大，进行平滑
+            if action_std > 1.5:
+                action = action_mean + (action - action_mean) * 0.7
+                action = np.clip(action, 0.5, 5.0)
             
-            for drone_name in self.drone_names:
-                logger.info(f"为无人机{drone_name}创建DQN学习环境...")
-                
-                # 创建学习环境
-                env = DroneLearningEnv(self, drone_name)
-                self.learning_envs[drone_name] = env
-                logger.info(f"学习环境创建成功")
-                
-                # 从配置中读取DQN参数
-                config = self.config_data
-                
-                # 创建DQN智能体
-                logger.info(f"创建DQN智能体（state_dim={env.state_dim}, action_dim={env.action_dim}）...")
-                agent = DQNAgent(
-                    state_dim=env.state_dim,
-                    action_dim=env.action_dim,
-                    lr=config.dqn_learning_rate,
-                    gamma=config.dqn_gamma,
-                    epsilon=config.dqn_epsilon,
-                    epsilon_min=config.dqn_epsilon_min,
-                    epsilon_decay=config.dqn_epsilon_decay,
-                    batch_size=config.dqn_batch_size,
-                    target_update=config.dqn_target_update,
-                    memory_capacity=config.dqn_memory_capacity
-                )
-                self.dqn_agents[drone_name] = agent
-                logger.info(f"DQN智能体创建成功")
-                
-                # 尝试加载已训练的模型
-                try:
-                    dqn_dir = os.path.join(os.path.dirname(__file__), 'DQN')
-                    model_path = os.path.join(dqn_dir, f"dqn_{drone_name}_model.pth")
-                    if os.path.exists(model_path):
-                        agent.load_model(model_path)
-                        logger.info(f"已加载无人机{drone_name}的DQN模型: {model_path}")
-                    else:
-                        logger.info(f"未找到无人机{drone_name}的DQN模型文件，将从头开始训练")
-                except Exception as e:
-                    logger.info(f"加载无人机{drone_name}的DQN模型失败: {str(e)}")
+            # 确保最大权重不超过最小权重的5倍
+            min_weight = np.min(action)
+            max_weight = np.max(action)
+            if max_weight > min_weight * 5:
+                scale = (min_weight * 5) / max_weight
+                action = action * scale
+                action = np.clip(action, 0.5, 5.0)
             
-            logger.info("DQN学习组件初始化完成")
+            weights = {
+                'repulsionCoefficient': float(action[0]),
+                'entropyCoefficient': float(action[1]),
+                'distanceCoefficient': float(action[2]),
+                'leaderRangeCoefficient': float(action[3]),
+                'directionRetentionCoefficient': float(action[4])
+            }
             
-        except TimeoutError as e:
-            logger.error(f"DQN初始化超时，自动禁用DQN学习: {str(e)}")
-            logger.warning("建议在配置文件中设置 'dqn.enabled' 为 false")
-            self.enable_learning = False
+            logger.debug(f"预测权重(平衡后): {weights}")
+            return weights
+            
         except Exception as e:
-            logger.error(f"初始化DQN学习组件失败: {str(e)}")
-            logger.debug(f"详细错误:\n{traceback.format_exc()}")
-            logger.warning("DQN学习已自动禁用，系统将使用传统APF算法")
-            self.enable_learning = False
+            logger.error(f"权重预测失败: {str(e)}")
+            return None
     
     def _process_drone(self, drone_name: str) -> None:
         """无人机算法处理线程：计算移动方向并控制无人机"""
@@ -420,67 +454,22 @@ class MultiDroneAlgorithmServer:
                     time.sleep(1)
                     continue
 
-                if self.enable_learning and drone_name in self.learning_envs and drone_name in self.dqn_agents:
-                    # DQN学习模式
-                    try:
-                        # 获取当前状态
-                        state = self.learning_envs[drone_name].get_state()
-                        
-                        # DQN智能体选择动作
-                        action = self.dqn_agents[drone_name].select_action(state)
-                        
-                        # 执行动作并获取反馈
-                        next_state, reward, done, info = self.learning_envs[drone_name].step(action)
-                        
-                        # 存储经验
-                        self.dqn_agents[drone_name].memory.push(state, action, reward, next_state, done)
-                        
-                        # DQN智能体学习
-                        self.dqn_agents[drone_name].learn()
-                        
-                        # 定期保存模型
-                        save_interval = self.config_data.dqn_model_save_interval
-                        if self.dqn_agents[drone_name].steps_done % save_interval == 0:
-                            # 确保DQN目录存在
-                            dqn_dir = os.path.join(os.path.dirname(__file__), 'DQN')
-                            os.makedirs(dqn_dir, exist_ok=True)
-                            
-                            model_path = os.path.join(dqn_dir, f"dqn_{drone_name}_model_{self.dqn_agents[drone_name].steps_done}.pth")
-                            self.dqn_agents[drone_name].save_model(model_path)
-                            logger.info(f"已保存无人机{drone_name}的DQN模型: {model_path}")
-                        
-                        # 执行算法计算最终方向（使用调整后的权重）
-                        final_dir = self.algorithms[drone_name].update_runtime_data(
-                            self.grid_data, self.unity_runtime_data[drone_name]
-                        )
-                        
-                        # 控制无人机移动
-                        self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-                        
-                        # 发送处理后的数据到Unity
-                        self._send_processed_data(drone_name, final_dir)
-                        
-                    except Exception as e:
-                        logger.error(f"无人机{drone_name}DQN学习处理出错: {str(e)}")
-                        logger.debug(f"详细错误信息:\n{traceback.format_exc()}")
-                        # 出错时回退到传统模式
-                        final_dir = self.algorithms[drone_name].update_runtime_data(
-                            self.grid_data, self.unity_runtime_data[drone_name]
-                        )
-                        self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-                        self._send_processed_data(drone_name, final_dir)
-                else:
-                    # 传统人工势场算法模式
-                    # 执行算法计算最终方向
-                    final_dir = self.algorithms[drone_name].update_runtime_data(
-                        self.grid_data, self.unity_runtime_data[drone_name]
-                    )
-                    
-                    # 控制无人机移动
-                    self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-                    
-                    # 发送处理后的数据到Unity
-                    self._send_processed_data(drone_name, final_dir)
+                # 如果启用权重预测，更新APF权重
+                if self.use_learned_weights:
+                    predicted_weights = self._predict_weights(drone_name)
+                    if predicted_weights:
+                        self.algorithms[drone_name].set_coefficients(predicted_weights)
+                
+                # 执行算法计算最终方向
+                final_dir = self.algorithms[drone_name].update_runtime_data(
+                    self.grid_data, self.unity_runtime_data[drone_name]
+                )
+                
+                # 控制无人机移动
+                self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                
+                # 发送处理后的数据到Unity
+                self._send_processed_data(drone_name, final_dir)
 
                 # 按配置间隔休眠
                 time.sleep(self.config_data.updateInterval)
@@ -565,8 +554,20 @@ class MultiDroneAlgorithmServer:
         current_time = time.time()
         
         # 检查位置是否发生变化
-        if drone_name in self.last_positions:
+        if drone_name in self.last_positions and self.last_positions[drone_name]:
             last_pos = self.last_positions[drone_name]
+            
+            # 检查last_pos是否包含必要的键
+            if not all(key in last_pos for key in ['x', 'y', 'z', 'timestamp']):
+                # 如果数据不完整，更新为当前位置
+                self.last_positions[drone_name] = {
+                    'x': current_pos.x,
+                    'y': current_pos.y,
+                    'z': current_pos.z,
+                    'timestamp': current_time
+                }
+                return
+            
             distance = (current_pos - Vector3(last_pos['x'], last_pos['y'], last_pos['z'])).magnitude()
             time_diff = current_time - last_pos['timestamp']
             
@@ -593,6 +594,22 @@ class MultiDroneAlgorithmServer:
                     random_velocity_airsim.x, random_velocity_airsim.y, random_velocity_airsim.z,
                     1.0, drone_name  # 1秒的短时间移动
                 )
+                
+                # 更新位置记录
+                self.last_positions[drone_name] = {
+                    'x': current_pos.x,
+                    'y': current_pos.y,
+                    'z': current_pos.z,
+                    'timestamp': current_time
+                }
+        else:
+            # 首次记录位置
+            self.last_positions[drone_name] = {
+                'x': current_pos.x,
+                'y': current_pos.y,
+                'z': current_pos.z,
+                'timestamp': current_time
+            }
 
     def _send_processed_data(self, drone_name: str, scannerRuntimeData: ScannerRuntimeData) -> None:
         """发送处理后的运行时数据到Unity"""
@@ -655,9 +672,35 @@ class MultiDroneAlgorithmServer:
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='多无人机算法服务器')
+    parser.add_argument('--use-learned-weights', action='store_true', 
+                        help='使用DQN学习的权重（需要先训练模型）')
+    parser.add_argument('--drones', type=int, default=2,
+                        help='无人机数量（默认2）')
+    args = parser.parse_args()
+    
     try:
-        # 创建服务器实例，启用DQN学习功能
-        server = MultiDroneAlgorithmServer(enable_learning=False)
+        # 生成无人机名称列表
+        drone_names = [f"UAV{i}" for i in range(1, args.drones + 1)]
+        
+        logger.info("=" * 60)
+        logger.info(f"启动多无人机系统 - {args.drones}台无人机")
+        logger.info(f"无人机列表: {drone_names}")
+        if args.use_learned_weights:
+            logger.info("模式: DQN权重预测")
+        else:
+            logger.info("模式: 固定权重")
+        logger.info("=" * 60)
+        
+        # 创建服务器实例
+        server = MultiDroneAlgorithmServer(
+            drone_names=drone_names,
+            use_learned_weights=args.use_learned_weights
+        )
+        
         if server.start():
             server.start_mission()
             # 主循环保持运行

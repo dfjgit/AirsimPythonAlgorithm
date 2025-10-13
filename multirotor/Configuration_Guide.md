@@ -27,43 +27,6 @@
 - **targetSearchRange** (20.0): 目标搜索范围，单位：米
 - **revisitCooldown** (10.0): 重复访问冷却时间，单位：秒
 
-## DQN学习参数
-
-### 基础配置
-- **enabled** (false): 是否启用DQN学习
-- **learning_rate** (0.001): 学习率，控制模型学习速度
-- **gamma** (0.99): 折扣因子，控制未来奖励的重要性
-- **epsilon** (1.0): 初始探索率，控制随机探索的概率
-- **epsilon_min** (0.01): 最小探索率
-- **epsilon_decay** (0.995): 探索率衰减因子
-
-### 训练参数
-- **batch_size** (64): 训练批次大小
-- **target_update** (10): 目标网络更新频率，单位：步数
-- **memory_capacity** (10000): 经验回放缓冲区大小
-- **model_save_interval** (1000): 模型保存间隔，单位：步数
-
-## 奖励函数参数
-
-- **exploration_weight** (1.0): 探索奖励权重
-- **efficiency_weight** (0.5): 效率奖励权重
-- **collision_penalty** (-5.0): 碰撞惩罚值
-- **boundary_penalty** (-2.0): 越界惩罚值
-- **energy_penalty** (-0.1): 能耗惩罚值
-- **completion_reward** (100.0): 任务完成奖励值
-
-## 学习环境参数
-
-### 权重调整
-- **coefficient_step** (0.5): 权重调整步长
-
-### 权重范围限制
-- **repulsionCoefficient**: [0.1, 10.0] - 排斥力系数范围
-- **entropyCoefficient**: [0.1, 10.0] - 熵系数范围
-- **distanceCoefficient**: [0.1, 10.0] - 距离系数范围
-- **leaderRangeCoefficient**: [0.1, 10.0] - Leader范围系数范围
-- **directionRetentionCoefficient**: [0.1, 10.0] - 方向保持系数范围
-
 ## 系统参数
 
 - **name** ("ScannerConfigData"): 配置名称标识
@@ -73,6 +36,26 @@
 
 1. **首次使用**: 建议使用默认参数值
 2. **性能调优**: 根据实际环境调整权重系数
-3. **DQN训练**: 启用DQN学习时，建议先使用较小的学习率
-4. **安全设置**: 根据无人机尺寸调整安全距离参数
-5. **环境适应**: 根据扫描区域大小调整搜索范围参数
+3. **安全设置**: 根据无人机尺寸调整安全距离参数
+4. **环境适应**: 根据扫描区域大小调整搜索范围参数
+5. **速度调整**: 根据场景复杂度调整移动速度和更新间隔
+
+## 参数调优建议
+
+### 场景类型
+
+#### 开阔区域
+- 提高 `moveSpeed` (3.0-5.0)
+- 增大 `scanRadius` (5.0-8.0)
+- 提高 `updateInterval` (0.5-1.0)
+
+#### 密集障碍物
+- 降低 `moveSpeed` (1.0-2.0)
+- 减小 `scanRadius` (2.0-4.0)
+- 降低 `updateInterval` (0.2-0.5)
+- 提高 `repulsionCoefficient` (3.0-5.0)
+
+#### 多无人机协同
+- 提高 `minSafeDistance` (2.0-3.0)
+- 提高 `repulsionCoefficient` (3.0-4.0)
+- 平衡各权重系数

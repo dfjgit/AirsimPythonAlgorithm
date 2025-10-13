@@ -20,7 +20,7 @@ class SimpleVisualizer:
         self.server = server
         
         # 窗口设置
-        self.SCREEN_WIDTH = 1000
+        self.SCREEN_WIDTH = 1200
         self.SCREEN_HEIGHT = 800
         
         # 标记是否已经初始化pygame
@@ -82,14 +82,34 @@ class SimpleVisualizer:
         for cell in cells_to_draw:
             screen_x, screen_y = self.world_to_screen(cell.center)
             
-            # 根据熵值决定颜色（红色到绿色渐变，熵值越小越绿）
-            entropy_normalized = min(1.0, cell.entropy)
-            # 红色分量：熵值高时红色多
-            red = int(255 * entropy_normalized)
-            # 绿色分量：熵值低时绿色多
-            green = int(255 * (1 - entropy_normalized))
-            # 蓝色分量：固定为0
-            blue = 0
+            # 根据熵值决定颜色（绿色到红色渐变，0~100）
+            # 熵值范围: 0（绿色） -> 100（红色）
+            entropy_value = cell.entropy
+            
+            # 归一化到0-1范围
+            if entropy_value <= 0:
+                # 小于最小值：纯绿色
+                entropy_normalized = 0.0
+            elif entropy_value >= 100:
+                # 超过最大值：纯红色
+                entropy_normalized = 1.0
+            else:
+                # 0~100线性映射到0~1
+                entropy_normalized = entropy_value / 100.0
+            
+            # 颜色渐变：绿色(0,255,0) -> 黄色(255,255,0) -> 红色(255,0,0)
+            if entropy_normalized < 0.5:
+                # 前半段：绿色 -> 黄色
+                # 绿色固定255，红色从0增加到255
+                red = int(510 * entropy_normalized)
+                green = 255
+            else:
+                # 后半段：黄色 -> 红色
+                # 红色固定255，绿色从255减少到0
+                red = 255
+                green = int(255 * (2 - 2 * entropy_normalized))
+            
+            blue = 0  # 蓝色分量固定为0
             color = (red, green, blue)
             
             # 绘制单一的点
@@ -154,6 +174,72 @@ class SimpleVisualizer:
         except Exception as e:
             print(f"绘制无人机时出错: {str(e)}")
     
+    def draw_entropy_legend(self):
+        """绘制熵值颜色图例（紧凑版）"""
+        try:
+            if not self.font:
+                return
+            
+            # 图例位置（右上角）- 更小的尺寸
+            legend_x = self.SCREEN_WIDTH - 130
+            legend_y = 10
+            legend_width = 120
+            legend_height = 70
+            
+            # 绘制半透明背景框
+            background_rect = pygame.Rect(legend_x, legend_y, legend_width, legend_height)
+            # 半透明黑色背景
+            s = pygame.Surface((legend_width, legend_height))
+            s.set_alpha(180)
+            s.fill((0, 0, 0))
+            self.screen.blit(s, (legend_x, legend_y))
+            pygame.draw.rect(self.screen, self.WHITE, background_rect, 1)
+            
+            # 标题（使用小字体）
+            if not hasattr(self, '_legend_font'):
+                try:
+                    self._legend_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 14)
+                except:
+                    self._legend_font = pygame.font.Font(None, 14)
+            
+            title = self._legend_font.render("Entropy", True, self.WHITE)
+            self.screen.blit(title, (legend_x + 5, legend_y + 5))
+            
+            # 绘制颜色条（更小）
+            bar_x = legend_x + 5
+            bar_y = legend_y + 25
+            bar_width = legend_width - 10
+            bar_height = 15
+            
+            # 渐变颜色条
+            for i in range(bar_width):
+                # 计算当前位置的熵值归一化值
+                entropy_normalized = i / bar_width
+                
+                # 使用与网格点相同的颜色计算逻辑
+                if entropy_normalized < 0.5:
+                    red = int(510 * entropy_normalized)
+                    green = 255
+                else:
+                    red = 255
+                    green = int(255 * (2 - 2 * entropy_normalized))
+                
+                color = (red, green, 0)
+                pygame.draw.line(self.screen, color, (bar_x + i, bar_y), (bar_x + i, bar_y + bar_height))
+            
+            # 绘制刻度标签（小字体）
+            # 左侧（0）
+            label_0 = self._legend_font.render("0", True, self.WHITE)
+            self.screen.blit(label_0, (bar_x, bar_y + bar_height + 2))
+            
+            # 右侧（100）
+            label_100 = self._legend_font.render("100", True, self.WHITE)
+            label_100_rect = label_100.get_rect(right=bar_x + bar_width)
+            self.screen.blit(label_100, (label_100_rect.x, bar_y + bar_height + 2))
+            
+        except Exception as e:
+            print(f"绘制熵值图例时出错: {str(e)}")
+    
     def draw_leader(self, runtime_data_dict):
         """绘制领导者位置和扫描范围"""
         try:
@@ -190,40 +276,110 @@ class SimpleVisualizer:
             print(f"绘制领导者时出错: {str(e)}")
     
     def draw_status_info(self):
-        """绘制状态信息"""
+        """绘制状态信息（包含DQN权重）"""
         # 创建小字体用于状态信息
         if not hasattr(self, '_status_font'):
             try:
-                self._status_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 16)
+                self._status_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 14)
             except:
                 self._status_font = self.font
         
-        # 绘制状态面板背景
-        panel_rect = pygame.Rect(10, 10, 300, 120)
-        pygame.draw.rect(self.screen, self.GRAY, panel_rect)
+        # 计算面板高度（根据是否启用DQN和无人机数量）
+        use_dqn = self.server and hasattr(self.server, 'use_learned_weights') and self.server.use_learned_weights
+        
+        if use_dqn and self.server and self.server.drone_names:
+            # 每个无人机需要约50px高度
+            num_drones = min(len(self.server.drone_names), 2)  # 最多显示2个
+            panel_height = 160 + num_drones * 50
+        else:
+            panel_height = 120
+        
+        # 绘制状态面板背景（半透明）
+        panel_rect = pygame.Rect(10, 10, 320, panel_height)
+        s = pygame.Surface((320, panel_height))
+        s.set_alpha(200)
+        s.fill((0, 0, 0))
+        self.screen.blit(s, (10, 10))
         pygame.draw.rect(self.screen, self.WHITE, panel_rect, 2)
         
+        y_offset = 15
+        
         # 绘制标题
-        title = self._status_font.render("可视化状态", True, self.WHITE)
-        self.screen.blit(title, (20, 15))
+        title = self._status_font.render("系统状态", True, self.YELLOW)
+        self.screen.blit(title, (20, y_offset))
+        y_offset += 25
         
         # 绘制无人机数量
         if self.server and hasattr(self.server, 'drone_names'):
             drone_count = len(self.server.drone_names)
             text = self._status_font.render(f"无人机数量: {drone_count}", True, self.WHITE)
-            self.screen.blit(text, (20, 40))
+            self.screen.blit(text, (20, y_offset))
+            y_offset += 20
         
-        # 绘制是否启用学习
-        if self.server and hasattr(self.server, 'enable_learning'):
-            learning_status = "已启用" if self.server.enable_learning else "已禁用"
-            text = self._status_font.render(f"DQN学习: {learning_status}", True, self.WHITE)
-            self.screen.blit(text, (20, 60))
+        # 绘制DQN模式
+        if self.server and hasattr(self.server, 'use_learned_weights'):
+            if self.server.use_learned_weights:
+                mode_text = "DQN权重预测"
+                mode_color = self.GREEN
+            else:
+                mode_text = "固定权重"
+                mode_color = self.CYAN
+            text = self._status_font.render(f"模式: {mode_text}", True, mode_color)
+            self.screen.blit(text, (20, y_offset))
+            y_offset += 20
         
         # 绘制平均熵值
         avg_entropy = self._calculate_average_entropy()
         if avg_entropy is not None:
-            text = self._status_font.render(f"平均熵值: {avg_entropy:.3f}", True, self.WHITE)
-            self.screen.blit(text, (20, 80))
+            text = self._status_font.render(f"平均熵值: {avg_entropy:.2f}", True, self.WHITE)
+            self.screen.blit(text, (20, y_offset))
+            y_offset += 25
+        
+        # 如果启用DQN，显示当前权重（显示所有无人机）
+        if use_dqn and self.server.drone_names:
+            # 绘制权重标题
+            title = self._status_font.render("当前APF权重:", True, self.YELLOW)
+            self.screen.blit(title, (20, y_offset))
+            y_offset += 20
+            
+            # 显示每个无人机的权重（最多显示2个）
+            for idx, drone_name in enumerate(self.server.drone_names[:2]):
+                if drone_name in self.server.algorithms:
+                    try:
+                        weights = self.server.algorithms[drone_name].get_current_coefficients()
+                        
+                        # 无人机名称
+                        name_text = self._status_font.render(f"{drone_name}:", True, self.CYAN)
+                        self.screen.blit(name_text, (20, y_offset))
+                        y_offset += 16
+                        
+                        # 显示5个权重（紧凑格式）
+                        weight_texts = [
+                            f"α1={weights.get('repulsionCoefficient', 0):.1f}",
+                            f"α2={weights.get('entropyCoefficient', 0):.1f}",
+                            f"α3={weights.get('distanceCoefficient', 0):.1f}",
+                            f"α4={weights.get('leaderRangeCoefficient', 0):.1f}",
+                            f"α5={weights.get('directionRetentionCoefficient', 0):.1f}"
+                        ]
+                        
+                        # 分两行显示
+                        line1 = f"  {weight_texts[0]} {weight_texts[1]} {weight_texts[2]}"
+                        line2 = f"  {weight_texts[3]} {weight_texts[4]}"
+                        
+                        text1 = self._status_font.render(line1, True, self.LIGHT_BLUE)
+                        self.screen.blit(text1, (20, y_offset))
+                        y_offset += 16
+                        
+                        text2 = self._status_font.render(line2, True, self.LIGHT_BLUE)
+                        self.screen.blit(text2, (20, y_offset))
+                        y_offset += 18
+                        
+                    except Exception as e:
+                        pass
+            
+            # 显示权重说明
+            hint = self._status_font.render("(排斥/熵/距离/Leader/方向)", True, self.GRAY)
+            self.screen.blit(hint, (20, y_offset))
     
     def _calculate_average_entropy(self):
         """计算平均熵值"""
@@ -240,6 +396,110 @@ class SimpleVisualizer:
             return avg_entropy
         except Exception:
             return None
+    
+    def draw_dqn_weights_panel(self):
+        """绘制DQN权重详细面板"""
+        if not self.server or not hasattr(self.server, 'use_learned_weights'):
+            return
+        
+        if not self.server.use_learned_weights:
+            return
+        
+        # 创建字体
+        if not hasattr(self, '_weight_font'):
+            try:
+                self._weight_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 13)
+            except:
+                self._weight_font = self.font
+        
+        # 面板位置（左下角）
+        panel_x = 10
+        # 根据无人机数量调整高度
+        num_drones = min(len(self.server.drone_names), 2) if self.server.drone_names else 1
+        panel_height = 50 + num_drones * 140  # 每个无人机140px
+        panel_y = self.SCREEN_HEIGHT - panel_height - 10
+        panel_width = 380
+        
+        # 绘制半透明背景
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        s = pygame.Surface((panel_width, panel_height))
+        s.set_alpha(200)
+        s.fill((0, 0, 0))
+        self.screen.blit(s, (panel_x, panel_y))
+        pygame.draw.rect(self.screen, self.GREEN, panel_rect, 2)
+        
+        y = panel_y + 10
+        
+        # 标题
+        title = self._weight_font.render("🤖 DQN权重预测", True, self.GREEN)
+        self.screen.blit(title, (panel_x + 10, y))
+        y += 25
+        
+        # 显示所有无人机的权重（最多2个）
+        if self.server.drone_names:
+            for drone_idx, drone_name in enumerate(self.server.drone_names[:2]):
+                if drone_name in self.server.algorithms:
+                    try:
+                        # 无人机标题
+                        drone_title = self._weight_font.render(f"【{drone_name}】", True, self.CYAN)
+                        self.screen.blit(drone_title, (panel_x + 10, y))
+                        y += 20
+                        
+                        weights = self.server.algorithms[drone_name].get_current_coefficients()
+                        
+                        # 权重名称和说明
+                        weight_info = [
+                            ("α1 排斥", weights.get('repulsionCoefficient', 0), "避障"),
+                            ("α2 熵值", weights.get('entropyCoefficient', 0), "探索"),
+                            ("α3 距离", weights.get('distanceCoefficient', 0), "导航"),
+                            ("α4 Leader", weights.get('leaderRangeCoefficient', 0), "跟随"),
+                            ("α5 方向", weights.get('directionRetentionCoefficient', 0), "稳定")
+                        ]
+                        
+                        # 显示每个权重
+                        for name, value, desc in weight_info:
+                            # 权重名称和值
+                            text = self._weight_font.render(f"{name}: {value:.2f}", True, self.LIGHT_BLUE)
+                            self.screen.blit(text, (panel_x + 15, y))
+                            
+                            # 权重条（可视化）
+                            bar_x = panel_x + 130
+                            bar_y = y + 3
+                            bar_width = 120
+                            bar_height = 10
+                            
+                            # 背景条
+                            pygame.draw.rect(self.screen, self.GRAY, (bar_x, bar_y, bar_width, bar_height))
+                            
+                            # 填充条（根据权重值，范围0.5-5.0）
+                            fill_width = int(bar_width * min((value - 0.5) / 4.5, 1.0))
+                            if fill_width > 0:
+                                # 颜色根据值变化
+                                if value < 1.5:
+                                    color = self.GREEN
+                                elif value < 3.0:
+                                    color = self.YELLOW
+                                else:
+                                    color = self.RED
+                                pygame.draw.rect(self.screen, color, (bar_x, bar_y, fill_width, bar_height))
+                            
+                            # 边框
+                            pygame.draw.rect(self.screen, self.WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
+                            
+                            # 说明文字
+                            desc_text = self._weight_font.render(f"({desc})", True, self.GRAY)
+                            self.screen.blit(desc_text, (bar_x + bar_width + 5, y))
+                            
+                            y += 20
+                        
+                        # 无人机之间的分隔
+                        if drone_idx < min(len(self.server.drone_names), 2) - 1:
+                            y += 5
+                        
+                    except Exception as e:
+                        error_text = self._weight_font.render(f"{drone_name}权重获取失败", True, self.RED)
+                        self.screen.blit(error_text, (panel_x + 15, y))
+                        y += 20
     
     def draw_instructions(self):
         """绘制操作说明"""
@@ -390,10 +650,20 @@ class SimpleVisualizer:
                     print(f"绘制无人机时出错: {str(e)}")
                 
                 try:
+                    self.draw_entropy_legend()
+                except Exception as e:
+                    print(f"绘制熵值图例时出错: {str(e)}")
+                
+                try:
                     self.draw_status_info()
                     self.draw_instructions()
                 except Exception as e:
                     print(f"绘制UI时出错: {str(e)}")
+                
+                try:
+                    self.draw_dqn_weights_panel()
+                except Exception as e:
+                    print(f"绘制DQN权重面板时出错: {str(e)}")
                 
                 # 更新屏幕
                 pygame.display.flip()

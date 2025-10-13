@@ -28,30 +28,6 @@ class ScannerConfigData:
     targetSearchRange: float
     revisitCooldown: float
 
-    # DQN配置
-    dqn_enabled: bool
-    dqn_learning_rate: float
-    dqn_gamma: float
-    dqn_epsilon: float
-    dqn_epsilon_min: float
-    dqn_epsilon_decay: float
-    dqn_batch_size: int
-    dqn_target_update: int
-    dqn_memory_capacity: int
-    dqn_model_save_interval: int
-
-    # 奖励函数配置
-    reward_exploration_weight: float
-    reward_efficiency_weight: float
-    reward_collision_penalty: float
-    reward_boundary_penalty: float
-    reward_energy_penalty: float
-    reward_completion_reward: float
-
-    # 学习环境配置
-    learning_env_coefficient_step: float
-    learning_env_coefficient_ranges: dict
-
     def __init__(self, config_file: str = None):
         # 设置默认值
         self._set_default_values()
@@ -84,36 +60,6 @@ class ScannerConfigData:
         self.targetSearchRange = 20.0
         self.revisitCooldown = 60.0
 
-        # DQN配置默认值
-        self.dqn_enabled = False
-        self.dqn_learning_rate = 0.001
-        self.dqn_gamma = 0.99
-        self.dqn_epsilon = 1.0
-        self.dqn_epsilon_min = 0.01
-        self.dqn_epsilon_decay = 0.995
-        self.dqn_batch_size = 64
-        self.dqn_target_update = 10
-        self.dqn_memory_capacity = 10000
-        self.dqn_model_save_interval = 1000
-
-        # 奖励函数配置默认值
-        self.reward_exploration_weight = 1.0
-        self.reward_efficiency_weight = 0.5
-        self.reward_collision_penalty = -5.0
-        self.reward_boundary_penalty = -2.0
-        self.reward_energy_penalty = -0.1
-        self.reward_completion_reward = 100.0
-
-        # 学习环境配置默认值
-        self.learning_env_coefficient_step = 0.5
-        self.learning_env_coefficient_ranges = {
-            'repulsionCoefficient': (0.1, 10.0),
-            'entropyCoefficient': (0.1, 10.0),
-            'distanceCoefficient': (0.1, 10.0),
-            'leaderRangeCoefficient': (0.1, 10.0),
-            'directionRetentionCoefficient': (0.1, 10.0)
-        }
-
     def parse_json_data(self, json_data: Dict[str, Any]) -> None:
         """从JSON字典解析数据到对象属性"""
         # 解析基础参数
@@ -136,47 +82,6 @@ class ScannerConfigData:
         self.targetSearchRange = self._get_float(json_data, 'targetSearchRange', 20.0)
         self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 60.0)
 
-        # 解析DQN配置
-        dqn_config = json_data.get('dqn', {})
-        self.dqn_enabled = dqn_config.get('enabled', False)
-        self.dqn_learning_rate = self._get_float(dqn_config, 'learning_rate', 0.001)
-        self.dqn_gamma = self._get_float(dqn_config, 'gamma', 0.99)
-        self.dqn_epsilon = self._get_float(dqn_config, 'epsilon', 1.0)
-        self.dqn_epsilon_min = self._get_float(dqn_config, 'epsilon_min', 0.01)
-        self.dqn_epsilon_decay = self._get_float(dqn_config, 'epsilon_decay', 0.995)
-        self.dqn_batch_size = self._get_int(dqn_config, 'batch_size', 64)
-        self.dqn_target_update = self._get_int(dqn_config, 'target_update', 10)
-        self.dqn_memory_capacity = self._get_int(dqn_config, 'memory_capacity', 10000)
-        self.dqn_model_save_interval = self._get_int(dqn_config, 'model_save_interval', 1000)
-
-        # 解析奖励函数配置
-        reward_config = json_data.get('reward', {})
-        self.reward_exploration_weight = self._get_float(reward_config, 'exploration_weight', 1.0)
-        self.reward_efficiency_weight = self._get_float(reward_config, 'efficiency_weight', 0.5)
-        self.reward_collision_penalty = self._get_float(reward_config, 'collision_penalty', -5.0)
-        self.reward_boundary_penalty = self._get_float(reward_config, 'boundary_penalty', -2.0)
-        self.reward_energy_penalty = self._get_float(reward_config, 'energy_penalty', -0.1)
-        self.reward_completion_reward = self._get_float(reward_config, 'completion_reward', 100.0)
-
-        # 解析学习环境配置
-        learning_env_config = json_data.get('learning_env', {})
-        self.learning_env_coefficient_step = self._get_float(learning_env_config, 'coefficient_step', 0.5)
-        
-        # 解析权重范围配置
-        coefficient_ranges_config = learning_env_config.get('coefficient_ranges', {})
-        self.learning_env_coefficient_ranges = {}
-        for key, default_range in [
-            ('repulsionCoefficient', (0.1, 10.0)),
-            ('entropyCoefficient', (0.1, 10.0)),
-            ('distanceCoefficient', (0.1, 10.0)),
-            ('leaderRangeCoefficient', (0.1, 10.0)),
-            ('directionRetentionCoefficient', (0.1, 10.0))
-        ]:
-            range_config = coefficient_ranges_config.get(key, default_range)
-            if isinstance(range_config, list) and len(range_config) == 2:
-                self.learning_env_coefficient_ranges[key] = (float(range_config[0]), float(range_config[1]))
-            else:
-                self.learning_env_coefficient_ranges[key] = default_range
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:
@@ -220,39 +125,7 @@ class ScannerConfigData:
             # 目标选择策略
             'avoidRevisits': self.avoidRevisits,
             'targetSearchRange': self.targetSearchRange,
-            'revisitCooldown': self.revisitCooldown,
-
-            # DQN配置
-            'dqn': {
-                'enabled': self.dqn_enabled,
-                'learning_rate': self.dqn_learning_rate,
-                'gamma': self.dqn_gamma,
-                'epsilon': self.dqn_epsilon,
-                'epsilon_min': self.dqn_epsilon_min,
-                'epsilon_decay': self.dqn_epsilon_decay,
-                'batch_size': self.dqn_batch_size,
-                'target_update': self.dqn_target_update,
-                'memory_capacity': self.dqn_memory_capacity,
-                'model_save_interval': self.dqn_model_save_interval
-            },
-
-            # 奖励函数配置
-            'reward': {
-                'exploration_weight': self.reward_exploration_weight,
-                'efficiency_weight': self.reward_efficiency_weight,
-                'collision_penalty': self.reward_collision_penalty,
-                'boundary_penalty': self.reward_boundary_penalty,
-                'energy_penalty': self.reward_energy_penalty,
-                'completion_reward': self.reward_completion_reward
-            },
-
-            # 学习环境配置
-            'learning_env': {
-                'coefficient_step': self.learning_env_coefficient_step,
-                'coefficient_ranges': {
-                    key: list(range_tuple) for key, range_tuple in self.learning_env_coefficient_ranges.items()
-                }
-            }
+            'revisitCooldown': self.revisitCooldown
         }
 
     def to_json(self) -> str:

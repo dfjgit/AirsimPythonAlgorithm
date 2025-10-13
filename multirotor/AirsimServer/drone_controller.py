@@ -29,6 +29,10 @@ class DroneController:
         self.default_vehicle = "UAV1"
         self.connection_status = False
         
+        # API调用锁（保护多线程并发调用）
+        import threading
+        self.api_lock = threading.Lock()
+        
         # 无人机状态跟踪（仅保留可获取的状态）
         self.vehicle_states = defaultdict(lambda: {
             "armed": False,  # 无法直接获取，通过操作记录
@@ -65,7 +69,8 @@ class DroneController:
         """启用/禁用API控制"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
-            self.client.enableApiControl(enable, vehicle_name)
+            with self.api_lock:
+                self.client.enableApiControl(enable, vehicle_name)
             # 无法直接获取API状态，通过操作结果记录
             self.vehicle_states[vehicle_name]["api_enabled"] = enable
             logger.info(f"无人机{vehicle_name}API控制已{'启用' if enable else '禁用'}")
@@ -81,8 +86,9 @@ class DroneController:
             if not self.vehicle_states[vehicle_name]["api_enabled"]:
                 logger.error(f"无人机{vehicle_name}API控制未启用，无法执行解锁/上锁操作")
                 return False
-                
-            self.client.armDisarm(arm, vehicle_name)
+            
+            with self.api_lock:
+                self.client.armDisarm(arm, vehicle_name)
             # 无法直接获取解锁状态，通过操作结果记录
             self.vehicle_states[vehicle_name]["armed"] = arm
             logger.info(f"无人机{vehicle_name}已{'解锁' if arm else '上锁'}")
@@ -105,7 +111,8 @@ class DroneController:
                 return True
 
             # 执行起飞（示例中的调用方式，不传递超时到join()）
-            self.client.takeoffAsync(vehicle_name=vehicle_name).join()
+            with self.api_lock:
+                self.client.takeoffAsync(vehicle_name=vehicle_name).join()
             # 假设起飞成功
             self.vehicle_states[vehicle_name]["flying"] = True
             self._update_vehicle_position(vehicle_name)
@@ -124,7 +131,8 @@ class DroneController:
                 return True
 
             # 执行降落
-            self.client.landAsync(vehicle_name=vehicle_name).join()
+            with self.api_lock:
+                self.client.landAsync(vehicle_name=vehicle_name).join()
             self.vehicle_states[vehicle_name]["flying"] = False
             self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}降落完成")
@@ -176,10 +184,12 @@ class DroneController:
                 logger.debug(f"无人机{vehicle_name}速度过小({velocity_magnitude:.3f})，跳过移动")
                 return True
 
-            # 使用moveByVelocityAsync，但不等待完成，避免阻塞
-            self.client.moveByVelocityAsync(
-                x, y, z, duration, vehicle_name=vehicle_name
-            )
+            # 使用锁保护API调用，避免多线程冲突
+            with self.api_lock:
+                # 使用moveByVelocityAsync，但不等待完成，避免阻塞
+                self.client.moveByVelocityAsync(
+                    x, y, z, duration, vehicle_name=vehicle_name
+                )
 
             logger.debug(f"无人机{vehicle_name}移动向量({x:.3f},{y:.3f},{z:.3f})，持续时间{duration}秒")
             return True
