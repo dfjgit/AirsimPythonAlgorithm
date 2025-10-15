@@ -15,7 +15,7 @@ logger = logging.getLogger("UnitySocketServer")
 class UnitySocketServer:
     """与Unity通信的Socket服务器核心类"""
 
-    def __init__(self, host='localhost', port=5000, buffer_size=4096):
+    def __init__(self, host='localhost', port=5000, buffer_size=8192):  # 优化：增大缓冲区
         self.host = host
         self.port = port
         self.buffer_size = buffer_size
@@ -34,6 +34,10 @@ class UnitySocketServer:
         self.received_grid = None
         self.received_runtimes = []  # 存储多个运行时数据
         self.data_callback = None  # 数据接收回调函数
+        
+        # 性能统计
+        self.stats_grid_updates = 0
+        self.stats_runtime_updates = 0
 
     def start(self) -> bool:
         """启动Socket服务器并监听连接"""
@@ -101,6 +105,26 @@ class UnitySocketServer:
             # logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
+    
+    def send_reset_command(self) -> None:
+        """发送环境重置命令到Unity"""
+        try:
+            pack = DataPacks()
+            pack.type = PackType.reset_env
+            pack.time_span = str(time.time())
+            pack.pack_data_list = {}  # 重置命令不需要额外数据
+            self.pending_packs.append(pack)
+            logger.info("[重置] 已发送环境重置命令到Unity")
+        except Exception as e:
+            logger.error(f"发送重置命令失败: {str(e)}")
+    
+    def get_stats(self) -> dict:
+        """获取通信统计信息"""
+        return {
+            'grid_updates': self.stats_grid_updates,
+            'runtime_updates': self.stats_runtime_updates,
+            'is_connected': self.is_connected()
+        }
 
     def set_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """设置数据接收回调函数"""
@@ -144,16 +168,26 @@ class UnitySocketServer:
         """接收数据并解析JSON"""
         try:
             data = conn.recv(self.buffer_size).decode('utf-8')
-            if data:
-                self.receive_buffer += data
-                self._parse_buffer()
+            if not data:
+                # 收到空数据可能意味着连接关闭
+                raise ConnectionResetError("收到空数据，连接可能已关闭")
+            self.receive_buffer += data
+            self._parse_buffer()
         except socket.timeout:
-            pass
+            pass  # 超时是正常的，继续等待
         except ConnectionResetError:
-            logger.warning("Unity强制断开连接")
-            raise
+            logger.warning("Unity断开连接")
+            raise  # 重新抛出，让上层处理
+        except OSError as e:
+            # Windows错误 10038: 在一个非套接字上尝试了一个操作
+            if e.winerror == 10038:
+                logger.warning("Socket已关闭，等待重新连接")
+                raise ConnectionResetError("Socket已关闭")
+            logger.error(f"接收数据OS错误: {str(e)}")
+            raise  # 重新抛出严重错误
         except Exception as e:
-            logger.error(f"接收数据错误: {str(e)}")
+            # 其他错误记录但不断开连接
+            logger.warning(f"接收数据时出现异常: {str(e)}")
 
 
     def _parse_buffer(self) -> None:
@@ -205,10 +239,13 @@ class UnitySocketServer:
             # grid_data的pack_data_list是字典（包含cells字段）
             self.received_grid = pack_data_list if isinstance(pack_data_list, dict) else None
             callback_data['grid_data'] = self.received_grid
+            self.stats_grid_updates += 1
+            # logger.debug(f"收到网格数据，cells数量: {len(self.received_grid.get('cells', [])) if self.received_grid else 0}")
         elif data_type == PackType.runtime_data.value:
             # runtime_data的pack_data_list是列表，每个元素包含uavname
             self.received_runtimes = pack_data_list if isinstance(pack_data_list, list) else []
             callback_data['runtime_data'] = self.received_runtimes
+            self.stats_runtime_updates += 1
 
         if 'time_span' in data:
             callback_data['time_span'] = data['time_span']

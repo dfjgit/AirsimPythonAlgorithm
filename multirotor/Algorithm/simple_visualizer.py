@@ -64,22 +64,21 @@ class SimpleVisualizer:
         return int(screen_x), int(screen_y)
         
     def draw_grid(self, grid_data):
-        """绘制网格（优化性能）"""
+        """绘制网格（显示所有熵值）"""
         if not grid_data or not hasattr(grid_data, 'cells'):
             return
         
         # 缓存小字体，避免重复创建
         if not hasattr(self, '_small_font'):
             try:
-                self._small_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 12)
+                self._small_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 10)
             except:
                 self._small_font = None
         
-        # 限制绘制的网格数量，避免性能问题
-        max_cells = 500  # 最多绘制500个网格点
-        cells_to_draw = grid_data.cells[:max_cells] if len(grid_data.cells) > max_cells else grid_data.cells
+        # 显示所有cells（移除500个限制）
+        total_cells = len(grid_data.cells)
         
-        for cell in cells_to_draw:
+        for cell in grid_data.cells:
             screen_x, screen_y = self.world_to_screen(cell.center)
             
             # 根据熵值决定颜色（绿色到红色渐变，0~100）
@@ -112,15 +111,25 @@ class SimpleVisualizer:
             blue = 0  # 蓝色分量固定为0
             color = (red, green, blue)
             
-            # 绘制单一的点
-            pygame.draw.circle(self.screen, color, (screen_x, screen_y), 3)
-            
-            # 显示熵值数值（减少文本渲染频率）
-            if self._small_font and cell.entropy > 0.1:  # 只显示有意义的熵值
-                entropy_text = f"{cell.entropy:.1f}"  # 减少精度
-                text_surface = self._small_font.render(entropy_text, True, self.WHITE)
-                text_rect = text_surface.get_rect(center=(screen_x, screen_y - 15))
-                self.screen.blit(text_surface, text_rect)
+            # 检查是否在屏幕范围内（优化：只绘制可见区域）
+            if 0 <= screen_x <= self.SCREEN_WIDTH and 0 <= screen_y <= self.SCREEN_HEIGHT:
+                # 绘制cell点（根据熵值大小调整点的大小）
+                if cell.entropy < 30:
+                    radius = 2  # 低熵值小点
+                elif cell.entropy < 70:
+                    radius = 3  # 中等熵值中点
+                else:
+                    radius = 4  # 高熵值大点
+                
+                pygame.draw.circle(self.screen, color, (screen_x, screen_y), radius)
+                
+                # 可选：显示熵值数值（只在缩放较大或熵值较高时显示）
+                # 降低文本显示频率以提升性能
+                if self._small_font and self.scale > 15 and cell.entropy > 50:
+                    entropy_text = f"{int(cell.entropy)}"  # 整数显示
+                    text_surface = self._small_font.render(entropy_text, True, self.WHITE)
+                    text_rect = text_surface.get_rect(center=(screen_x, screen_y - 10))
+                    self.screen.blit(text_surface, text_rect)
     
     def draw_hexagon(self, x, y, color):
         """绘制六边形"""
@@ -327,11 +336,19 @@ class SimpleVisualizer:
             self.screen.blit(text, (20, y_offset))
             y_offset += 20
         
-        # 绘制平均熵值
-        avg_entropy = self._calculate_average_entropy()
-        if avg_entropy is not None:
-            text = self._status_font.render(f"平均熵值: {avg_entropy:.2f}", True, self.WHITE)
-            self.screen.blit(text, (20, y_offset))
+        # 绘制网格统计信息
+        grid_stats = self._calculate_grid_stats()
+        if grid_stats:
+            text1 = self._status_font.render(f"网格数量: {grid_stats['total']}", True, self.WHITE)
+            self.screen.blit(text1, (20, y_offset))
+            y_offset += 18
+            
+            text2 = self._status_font.render(f"平均熵值: {grid_stats['avg']:.1f}", True, self.WHITE)
+            self.screen.blit(text2, (20, y_offset))
+            y_offset += 18
+            
+            text3 = self._status_font.render(f"已扫描: {grid_stats['scanned']} ({grid_stats['scan_ratio']:.1f}%)", True, self.GREEN)
+            self.screen.blit(text3, (20, y_offset))
             y_offset += 25
         
         # 显示当前权重（所有无人机共享同一套权重）
@@ -378,8 +395,8 @@ class SimpleVisualizer:
             hint = self._status_font.render("(排斥/熵/距离/Leader/方向)", True, self.GRAY)
             self.screen.blit(hint, (20, y_offset))
     
-    def _calculate_average_entropy(self):
-        """计算平均熵值"""
+    def _calculate_grid_stats(self):
+        """计算网格统计信息"""
         try:
             if not self.server or not hasattr(self.server, 'grid_data') or not self.server.grid_data:
                 return None
@@ -388,9 +405,20 @@ class SimpleVisualizer:
             if not hasattr(grid_data, 'cells') or not grid_data.cells:
                 return None
             
+            total = len(grid_data.cells)
             total_entropy = sum(cell.entropy for cell in grid_data.cells)
-            avg_entropy = total_entropy / len(grid_data.cells)
-            return avg_entropy
+            avg_entropy = total_entropy / total
+            
+            # 统计已扫描的cells（熵值<30认为已扫描）
+            scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30)
+            scan_ratio = (scanned / total * 100) if total > 0 else 0
+            
+            return {
+                'total': total,
+                'avg': avg_entropy,
+                'scanned': scanned,
+                'scan_ratio': scan_ratio
+            }
         except Exception:
             return None
     
@@ -509,6 +537,7 @@ class SimpleVisualizer:
         
         instructions = [
             "- 实时显示环境、无人机和领导者位置",
+            "- 点击右上角'重置仿真'按钮重置环境",
             "- ESC键退出可视化"
         ]
         
@@ -517,6 +546,48 @@ class SimpleVisualizer:
             text = self._instruction_font.render(instruction, True, self.LIGHT_GRAY)
             self.screen.blit(text, (20, instruction_y))
             instruction_y += 25
+    
+    def draw_reset_button(self):
+        """绘制重置仿真按钮"""
+        # 创建按钮字体
+        if not hasattr(self, '_button_font'):
+            try:
+                self._button_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 16)
+            except:
+                self._button_font = self.font
+        
+        # 按钮位置（右上角，在熵值图例下方）
+        button_width = 120
+        button_height = 35
+        button_x = self.SCREEN_WIDTH - button_width - 15
+        button_y = 90  # 在熵值图例下方
+        
+        # 按钮矩形
+        button_rect = pygame.Rect(button_x, button_y, button_width, button_height)
+        
+        # 检查鼠标是否悬停在按钮上
+        mouse_pos = pygame.mouse.get_pos()
+        is_hovered = button_rect.collidepoint(mouse_pos)
+        
+        # 按钮颜色（悬停时变亮）
+        if is_hovered:
+            button_color = (255, 100, 100)  # 浅红色
+            border_color = (255, 150, 150)  # 浅红色边框
+        else:
+            button_color = (200, 50, 50)    # 红色
+            border_color = (255, 100, 100)  # 红色边框
+        
+        # 绘制按钮背景
+        pygame.draw.rect(self.screen, button_color, button_rect)
+        pygame.draw.rect(self.screen, border_color, button_rect, 2)
+        
+        # 绘制按钮文字
+        button_text = self._button_font.render("重置仿真", True, self.WHITE)
+        text_rect = button_text.get_rect(center=button_rect.center)
+        self.screen.blit(button_text, text_rect)
+        
+        # 存储按钮矩形供点击检测使用
+        self.reset_button_rect = button_rect
     
     def handle_events(self):
         """处理基本事件，确保窗口响应"""
@@ -534,8 +605,41 @@ class SimpleVisualizer:
                     elif event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
                             self.running = False
+                    elif event.type == pygame.MOUSEBUTTONDOWN:
+                        if event.button == 1:  # 左键点击
+                            self._handle_mouse_click(event.pos)
         except Exception as e:
             print(f"事件处理出错: {str(e)}")
+    
+    def _handle_mouse_click(self, pos):
+        """处理鼠标点击事件"""
+        try:
+            # 检查是否点击了重置按钮
+            if hasattr(self, 'reset_button_rect') and self.reset_button_rect.collidepoint(pos):
+                self._handle_reset_button_click()
+        except Exception as e:
+            print(f"处理鼠标点击时出错: {str(e)}")
+    
+    def _handle_reset_button_click(self):
+        """处理重置按钮点击"""
+        try:
+            print("[重置] 用户点击了重置仿真按钮")
+            
+            if not self.server:
+                print("[重置] 错误: 服务器引用不存在")
+                return
+            
+            # 调用服务器的重置功能
+            if hasattr(self.server, 'reset_simulation'):
+                success = self.server.reset_simulation()
+                if success:
+                    print("[重置] ✅ 仿真重置成功")
+                else:
+                    print("[重置] ❌ 仿真重置失败")
+            else:
+                print("[重置] 错误: 服务器不支持重置功能")
+        except Exception as e:
+            print(f"[重置] 重置操作出错: {str(e)}")
     
     def update_data(self):
         """更新可视化数据，优化性能避免卡顿"""
@@ -650,6 +754,11 @@ class SimpleVisualizer:
                     self.draw_entropy_legend()
                 except Exception as e:
                     print(f"绘制熵值图例时出错: {str(e)}")
+                
+                try:
+                    self.draw_reset_button()
+                except Exception as e:
+                    print(f"绘制重置按钮时出错: {str(e)}")
                 
                 try:
                     self.draw_status_info()

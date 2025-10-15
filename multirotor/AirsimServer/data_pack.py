@@ -7,6 +7,7 @@ class PackType(Enum):
     grid_data = "grid_data"  # HexGridDataModel，地图数据
     config_data = "config_data"  # ScannerConfigData
     runtime_data = "runtime_data"  # ScannerRuntimeData
+    reset_env = "reset_env"  # 重置环境命令
 
 
 # 数据包数据结构（通信发送的数据包）

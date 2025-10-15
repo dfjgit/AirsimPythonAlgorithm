@@ -319,7 +319,8 @@ class MultiDroneAlgorithmServer:
                 elif 'grid_data' in received_data:
                     grid_data = received_data['grid_data']
                     if isinstance(grid_data, dict) and 'cells' in grid_data:
-                        # logger.info(f"收到网格数据，包含{len(grid_data['cells'])}个单元")
+                        cells_count = len(grid_data['cells'])
+                        # logger.debug(f"收到网格数据，包含{cells_count}个单元（Delta更新）")
                         with self.grid_lock:
                             self.grid_data.update_from_dict(grid_data)
                     else:
@@ -613,15 +614,36 @@ class MultiDroneAlgorithmServer:
 
     def _send_processed_data(self, drone_name: str, scannerRuntimeData: ScannerRuntimeData) -> None:
         """发送处理后的运行时数据到Unity"""
+        # 检查是否正在重置（通过checking运行状态）
+        if not self.running:
+            return  # 重置期间不发送数据
+            
         with self.data_lock:
-            # 直接使用传入的scannerRuntimeData数据
-            self.processed_runtime_data[drone_name] = scannerRuntimeData
-            self.processed_runtime_data[drone_name].drone_name = drone_name
-            # 发送到Unity - 注意：send_runtime需要一个可迭代对象（列表）
-            self.unity_socket.send_runtime([self.processed_runtime_data[drone_name]])
-            # logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
+            try:
+                # 直接使用传入的scannerRuntimeData数据
+                self.processed_runtime_data[drone_name] = scannerRuntimeData
+                self.processed_runtime_data[drone_name].drone_name = drone_name
+                # 发送到Unity - 注意：send_runtime需要一个可迭代对象（列表）
+                self.unity_socket.send_runtime([self.processed_runtime_data[drone_name]])
+                # logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
+            except Exception as e:
+                # 捕获发送异常，避免影响主流程
+                logger.warning(f"发送运行时数据到Unity失败: {str(e)}")
 
 
+    def reset_environment(self) -> None:
+        """重置Unity环境（网格熵值、无人机位置、Leader等）"""
+        logger.info("[重置] 正在重置Unity环境...")
+        if self.unity_socket and self.unity_socket.is_connected():
+            self.unity_socket.send_reset_command()
+            time.sleep(1.5)  # 等待Unity完成重置并发送完整网格数据
+            logger.info("[重置] Unity环境重置完成，等待接收新的完整网格数据")
+        else:
+            logger.warning("[重置] Unity未连接，无法重置环境")
+            # 清空Python端的网格数据
+            with self.grid_lock:
+                self.grid_data.cells.clear()
+    
     def stop(self) -> None:
         """停止服务：降落无人机，断开连接，清理资源"""
         self.running = False
@@ -669,6 +691,116 @@ class MultiDroneAlgorithmServer:
             logger.info("已断开与AirSim的连接")
         except Exception as e:
             logger.error(f"断开AirSim连接出错: {str(e)}")
+
+    def reset_simulation(self) -> bool:
+        """重置仿真环境（AirSim和Unity）"""
+        try:
+            logger.info("=" * 60)
+            logger.info("🔄 开始重置仿真环境...")
+            logger.info("=" * 60)
+            
+            # 保存当前运行状态
+            was_running = self.running
+            
+            # 重要：检查Unity连接状态
+            if not self.unity_socket.is_connected():
+                logger.warning("[重置] Unity未连接，无法执行重置")
+                return False
+            
+            # 1. 停止算法处理线程（但不影响Unity socket）
+            if was_running:
+                logger.info("[步骤1/8] 停止算法处理线程...")
+                self.running = False
+                
+                # 等待所有线程结束
+                logger.info("等待算法线程结束...")
+                for drone_name, thread in self.drone_threads.items():
+                    if thread and thread.is_alive():
+                        thread.join(timeout=5.0)  # 最多等待5秒
+                        if thread.is_alive():
+                            logger.warning(f"无人机{drone_name}算法线程未能正常结束")
+                        else:
+                            logger.info(f"无人机{drone_name}算法线程已停止")
+                time.sleep(0.5)  # 减少等待时间
+            else:
+                logger.info("[步骤1/8] 跳过（算法未运行）")
+            
+            # 2. 所有无人机降落
+            logger.info("[步骤2/8] 所有无人机降落...")
+            self._land_all()
+            time.sleep(1)  # 减少等待时间
+            
+            # 3. 发送Unity重置命令
+            logger.info("[步骤3/8] 发送重置命令到Unity...")
+            self.unity_socket.send_reset_command()
+            time.sleep(2)  # 等待Unity处理重置命令并完成
+            
+            # 4. 重置AirSim模拟器
+            logger.info("[步骤4/8] 重置AirSim模拟器...")
+            if not self.drone_controller.reset():
+                logger.error("AirSim模拟器重置失败")
+                return False
+            time.sleep(1.5)  # 等待AirSim重置完成
+            
+            # 5. 清理本地数据
+            logger.info("[步骤5/8] 清理本地数据...")
+            self._clear_local_data()
+            
+            # 6. 重新初始化无人机
+            logger.info("[步骤6/8] 重新初始化无人机...")
+            if not self._init_drones():
+                logger.error("无人机重新初始化失败")
+                return False
+            time.sleep(1)
+            
+            # 7. 发送配置数据到Unity（包含Leader位置等初始配置）
+            logger.info("[步骤7/8] 发送配置数据到Unity...")
+            self.unity_socket.send_config(self.config_data)
+            time.sleep(0.5)
+            
+            # 8. 如果之前在运行，重新启动任务
+            if was_running:
+                logger.info("[步骤8/8] 重新启动任务...")
+                if not self.start_mission():
+                    logger.error("任务重新启动失败")
+                    return False
+            else:
+                logger.info("[步骤8/8] 跳过（之前未运行任务）")
+            
+            logger.info("=" * 60)
+            logger.info("✅ 仿真环境重置成功！")
+            logger.info("=" * 60)
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 重置仿真环境失败: {str(e)}")
+            logger.error(f"错误详情: {traceback.format_exc()}")
+            # 尝试恢复运行状态
+            if was_running and not self.running:
+                logger.info("尝试恢复系统运行...")
+                self.start_mission()
+            return False
+
+    def _clear_local_data(self) -> None:
+        """清理本地数据状态"""
+        try:
+            # 重置运行时数据
+            for drone_name in self.drone_names:
+                self.unity_runtime_data[drone_name] = ScannerRuntimeData()
+                self.processed_runtime_data[drone_name] = ScannerRuntimeData()
+                self.last_positions[drone_name] = {}
+            
+            # 重置网格数据
+            self.grid_data = HexGridDataModel()
+            
+            # 重新创建算法实例
+            self.algorithms = {
+                name: ScannerAlgorithm(self.config_data) for name in self.drone_names
+            }
+            
+            logger.info("本地数据清理完成")
+        except Exception as e:
+            logger.error(f"清理本地数据失败: {str(e)}")
 
 
 if __name__ == "__main__":

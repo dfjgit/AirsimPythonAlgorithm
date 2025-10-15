@@ -86,11 +86,8 @@ class HexGridDataModel:
         return model
 
     def update_from_dict(self, data: Dict[str, Any]) -> None:
-        """更新现有对象的数据，而不是创建新对象"""
+        """更新现有对象的数据（支持完整更新和Delta增量更新）"""
         try:
-            # 清空现有cells
-            self.cells.clear()
-
             # 安全处理数据：首先检查data是否是字典类型
             if not isinstance(data, dict):
                 logging.warning(f"HexGridDataModel.update_from_dict: 数据类型无效，期望dict，得到: {type(data).__name__}")
@@ -99,12 +96,50 @@ class HexGridDataModel:
             # 安全处理单元格数据
             cells_data = data.get('cells')
             if isinstance(cells_data, list):
-                self.cells = [
-                    HexCell.from_dict(cell_data)
-                    for cell_data in cells_data
-                    if isinstance(cell_data, dict)
-                ]
-                # logging.info(f"HexGridDataModel.update_from_dict: 已更新 {len(self.cells)} 个蜂窝单元")
+                cells_count = len(cells_data)
+                
+                if len(self.cells) == 0:
+                    # 首次接收：直接设置所有cells（完整数据）
+                    self.cells = [
+                        HexCell.from_dict(cell_data)
+                        for cell_data in cells_data
+                        if isinstance(cell_data, dict)
+                    ]
+                    print(f"[初始化] 接收完整网格数据：{len(self.cells)} 个cells")
+                else:
+                    # Delta更新：合并更新，不清空原有数据
+                    # 建立位置到cell的映射
+                    cell_map = {}
+                    for cell in self.cells:
+                        key = (round(cell.center.x, 2), round(cell.center.y, 2), round(cell.center.z, 2))
+                        cell_map[key] = cell
+                    
+                    updated_count = 0
+                    new_count = 0
+                    
+                    for cell_data in cells_data:
+                        if isinstance(cell_data, dict):
+                            center_data = cell_data.get('center', {})
+                            if isinstance(center_data, dict):
+                                # 使用相同的精度构造key
+                                key = (
+                                    round(center_data.get('x', 0), 2),
+                                    round(center_data.get('y', 0), 2),
+                                    round(center_data.get('z', 0), 2)
+                                )
+                                
+                                if key in cell_map:
+                                    # 更新现有cell的熵值
+                                    cell_map[key].entropy = cell_data.get('entropy', 100.0)
+                                    updated_count += 1
+                                else:
+                                    # 新cell（添加到列表）
+                                    new_cell = HexCell.from_dict(cell_data)
+                                    self.cells.append(new_cell)
+                                    new_count += 1
+                    
+                    if updated_count > 0 or new_count > 0:
+                        print(f"[Delta更新] 更新了 {updated_count} 个cells，新增了 {new_count} 个cells，总计 {len(self.cells)} 个")
             else:
                 logging.warning(f"HexGridDataModel.update_from_dict: cells字段不是列表类型，而是: {type(cells_data).__name__}")
         except Exception as e:

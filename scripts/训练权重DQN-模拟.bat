@@ -13,10 +13,10 @@ echo.
 
 REM 激活虚拟环境
 echo [1/4] 激活Python虚拟环境...
-call .venv\Scripts\activate.bat
+call %~dp0..\.venv\Scripts\activate.bat
 if %ERRORLEVEL% NEQ 0 (
     echo 错误: 虚拟环境激活失败
-    echo 请先运行 run_two_drones.bat 确保虚拟环境已创建
+    echo 请先运行 运行系统-固定权重.bat 确保虚拟环境已创建
     pause
     exit /b 1
 )
@@ -33,17 +33,11 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 
-REM 切换到DQN目录
-echo [3/4] 切换到DQN目录...
-cd multirotor\DQN
-echo [OK] 当前目录: %CD%
-echo.
-
 REM 开始训练
-echo [4/4] 开始DQN训练...
+echo [3/4] 开始DQN训练...
 echo ============================================================
 echo.
-python train_simple.py
+python %~dp0..\multirotor\DQN_Weight\train_simple.py
 
 REM 检查训练结果
 if %ERRORLEVEL% EQU 0 (
@@ -52,7 +46,7 @@ if %ERRORLEVEL% EQU 0 (
     echo [SUCCESS] 训练成功完成！
     echo ============================================================
     echo.
-    echo 模型已保存到: multirotor\DQN\models\weight_predictor_simple.zip
+    echo 模型已保存到: multirotor\DQN_Weight\models\weight_predictor_simple.zip
     echo.
     echo 下一步操作:
     echo   1. 测试模型: python test_trained_model.py
@@ -76,7 +70,3 @@ if %ERRORLEVEL% EQU 0 (
 
 echo 按任意键退出...
 pause >nul
-
-REM 返回项目根目录
-cd ..\..
-
