@@ -128,7 +128,7 @@ class MultiDroneAlgorithmServer:
             logger.info("初始化权重预测器...")
             from stable_baselines3 import DDPG
             
-            model_path = os.path.join(os.path.dirname(__file__), 'DQN', 'models', 'weight_predictor_simple')
+            model_path = os.path.join(os.path.dirname(__file__), 'DQN_Weight', 'models', 'weight_predictor_simple')
             
             if os.path.exists(model_path + '.zip'):
                 self.weight_model = DDPG.load(model_path)

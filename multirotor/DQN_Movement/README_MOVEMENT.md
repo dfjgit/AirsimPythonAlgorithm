@@ -18,8 +18,10 @@
 ### Step 1: 安装依赖
 
 ```bash
-pip install torch stable-baselines3 numpy gym
+pip install torch stable-baselines3 numpy gymnasium
 ```
+
+> **注意**: 使用 `gymnasium` 而不是旧版的 `gym`
 
 ### Step 2: 开始训练（纯模拟）
 
@@ -30,7 +32,7 @@ train_movement_dqn.bat
 
 **Linux/Mac**:
 ```bash
-python multirotor/DQN/train_movement_dqn.py
+python multirotor/DQN_Movement/train_movement_dqn.py
 ```
 
 ### Step 3: 测试模型
@@ -42,19 +44,21 @@ python multirotor/DQN/train_movement_dqn.py
 test_movement_dqn.bat
 
 # Linux/Mac
-python multirotor/DQN/test_movement_dqn.py
+python multirotor/DQN_Movement/test_movement_dqn.py
 ```
 
 ## 📂 文件说明
 
 ```
-DQN/
+DQN_Movement/
 ├── 📄 movement_env.py              # 环境定义（核心）
 ├── ⚙️ movement_dqn_config.json    # 配置文件
 ├── 🎓 train_movement_dqn.py       # 纯模拟训练
 ├── 🎮 train_movement_with_airsim.py # AirSim训练
 ├── 🧪 test_movement_dqn.py        # 模型测试
-└── 📚 MOVEMENT_DQN.md             # 完整文档
+├── 📚 MOVEMENT_DQN.md             # 完整文档
+├── 📝 README_MOVEMENT.md          # 快速指南（本文档）
+└── 📁 models/                     # 训练模型保存目录
 ```
 
 ## 🎮 两种训练模式
@@ -111,7 +115,7 @@ train_movement_with_airsim.bat
 使用Tensorboard查看训练曲线：
 
 ```bash
-tensorboard --logdir=multirotor/DQN/logs/movement_dqn/
+tensorboard --logdir=multirotor/DQN_Movement/logs/movement_dqn/
 ```
 
 然后访问 `http://localhost:6006`
@@ -135,7 +139,7 @@ tensorboard --logdir=multirotor/DQN/logs/movement_dqn/
 3. 检查探索率设置
 
 ### Q: 找不到模型文件？
-**A**: 模型保存在 `multirotor/DQN/models/` 目录
+**A**: 模型保存在 `multirotor/DQN_Movement/models/` 目录
 
 ## 📚 更多信息
 

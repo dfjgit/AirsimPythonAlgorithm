@@ -18,8 +18,7 @@
 | **movement_env.py** | Python | ~500 | 核心环境类，定义动作/观察空间和奖励函数 |
 | **train_movement_dqn.py** | Python | ~250 | 纯模拟训练脚本（推荐入门使用） |
 | **train_movement_with_airsim.py** | Python | ~280 | AirSim集成训练脚本（真实环境） |
-| **test_movement_dqn.py** | Python | ~150 | 模型测试和性能评估脚本 |
-| **dqn_reward_config_data.py** | Python | ~180 | 配置文件加载和管理类 |
+| **test_movement_dqn.py** | Python | ~180 | 模型测试和性能评估脚本 |
 
 ### ⚙️ 配置类 (Configuration)
 
@@ -39,7 +38,7 @@
 ### 📁 目录结构
 
 ```
-DQN/
+DQN_Movement/
 ├── 📘 文档
 │   ├── README_MOVEMENT.md          ⭐ 从这里开始
 │   ├── MOVEMENT_DQN.md             📖 详细文档
@@ -47,11 +46,10 @@ DQN/
 │   └── INDEX.md                    📚 本文件
 │
 ├── 💻 核心代码
-│   ├── movement_env.py             🎮 环境类（核心）
+│   ├── movement_env.py             🎮 环境类（核心）- 使用gymnasium
 │   ├── train_movement_dqn.py       🎓 纯模拟训练
 │   ├── train_movement_with_airsim.py 🎯 AirSim训练
-│   ├── test_movement_dqn.py        🧪 模型测试
-│   └── dqn_reward_config_data.py   ⚙️ 配置管理
+│   └── test_movement_dqn.py        🧪 模型测试
 │
 ├── ⚙️ 配置文件
 │   ├── movement_dqn_config.json    🔧 核心配置
@@ -238,6 +236,11 @@ python dqn_reward_config_data.py
 - ✅ 详细的中文文档
 - ✅ 一键启动脚本
 
+### v1.0.1 (2025-10-16)
+- 📝 更新文档路径引用
+- 🔄 明确使用 gymnasium 而不是 gym
+- 📂 完善文件结构说明
+
 ---
 
 **提示**: 建议从 **README_MOVEMENT.md** 开始阅读！
@@ -246,6 +249,6 @@ python dqn_reward_config_data.py
 
 **遇到问题**: 查看 **INSTALL_GUIDE.md**
 
-**最后更新**: 2024-10-14  
+**最后更新**: 2025-10-16  
 **维护状态**: ✅ 活跃维护
 

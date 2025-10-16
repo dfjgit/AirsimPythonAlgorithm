@@ -23,8 +23,8 @@ python --version
 #### 方法A: 使用requirements文件（推荐）
 
 ```bash
-# 进入DQN目录
-cd AirsimAlgorithmPython/multirotor/DQN
+# 进入DQN_Movement目录
+cd AirsimAlgorithmPython/multirotor/DQN_Movement
 
 # 安装依赖
 pip install -r requirements_movement.txt
@@ -33,8 +33,10 @@ pip install -r requirements_movement.txt
 #### 方法B: 手动安装
 
 ```bash
-pip install torch stable-baselines3 numpy gym tensorboard
+pip install torch stable-baselines3 numpy gymnasium tensorboard
 ```
+
+> **重要**: 使用 `gymnasium` 而不是旧版的 `gym`
 
 #### 方法C: 使用国内镜像（中国用户推荐）
 
@@ -74,9 +76,9 @@ python movement_env.py
 | 包名 | 版本 | 用途 |
 |-----|------|------|
 | torch | >=1.9.0 | 深度学习框架 |
-| stable-baselines3 | >=1.5.0 | 强化学习算法库 |
+| stable-baselines3 | >=2.0.0 | 强化学习算法库（支持gymnasium） |
 | numpy | >=1.19.0 | 数值计算 |
-| gym | >=0.21.0 | 强化学习环境接口 |
+| gymnasium | >=0.26.0 | 强化学习环境接口（gym的升级版） |
 
 ### 可选依赖
 
@@ -229,11 +231,11 @@ python -c "import stable_baselines3; print('SB3: OK')"
 # 4. 检查numpy
 python -c "import numpy; print(f'NumPy: {numpy.__version__}')"
 
-# 5. 检查gym
-python -c "import gym; print(f'Gym: {gym.__version__}')"
+# 5. 检查gymnasium
+python -c "import gymnasium; print(f'Gymnasium: {gymnasium.__version__}')"
 
 # 6. 测试环境
-python multirotor/DQN/movement_env.py
+python multirotor/DQN_Movement/movement_env.py
 ```
 
 如果所有命令都正常执行，说明安装成功！
@@ -261,6 +263,13 @@ python multirotor/DQN/movement_env.py
 
 ---
 
-**最后更新**: 2024-10-14  
-**文档版本**: v1.0.0
+**最后更新**: 2025-10-16  
+**文档版本**: v1.0.1
+
+## 📝 更新说明
+
+### v1.0.1 (2025-10-16)
+- 更新依赖：从 `gym` 改为 `gymnasium`
+- 修正文档路径：从 `DQN/` 改为 `DQN_Movement/`
+- 更新依赖版本要求
 

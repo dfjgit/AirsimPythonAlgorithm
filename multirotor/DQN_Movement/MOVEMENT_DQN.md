@@ -15,13 +15,19 @@
 ## 📁 文件结构
 
 ```
-DQN/
-├── movement_env.py                    # 无人机移动环境类
+DQN_Movement/
+├── movement_env.py                    # 无人机移动环境类（核心）⭐
 ├── movement_dqn_config.json          # 配置文件（奖励、阈值、训练参数）
 ├── train_movement_dqn.py             # 纯模拟训练脚本
 ├── train_movement_with_airsim.py    # AirSim集成训练脚本
 ├── test_movement_dqn.py              # 模型测试脚本
-├── MOVEMENT_DQN.md                   # 本文档
+├── README_MOVEMENT.md                # 快速开始指南
+├── MOVEMENT_DQN.md                   # 本文档（完整说明）
+├── INDEX.md                          # 文件索引
+├── INSTALL_GUIDE.md                  # 安装指南
+├── requirements_movement.txt         # Python依赖
+├── logs/                             # 训练日志目录
+│   └── movement_dqn/
 └── models/                           # 训练模型保存目录
     ├── movement_dqn_final.zip
     └── movement_dqn_checkpoint_*.zip
@@ -34,8 +40,10 @@ DQN/
 确保已安装必要的依赖：
 
 ```bash
-pip install torch stable-baselines3 numpy gym
+pip install torch stable-baselines3 numpy gymnasium
 ```
+
+> **注意**: 本项目使用 `gymnasium`（gym的升级版本），而不是旧版的 `gym`
 
 ### 2. 纯模拟训练（推荐入门）
 
@@ -46,7 +54,7 @@ pip install torch stable-baselines3 numpy gym
 train_movement_dqn.bat
 
 # 或者直接运行Python
-python multirotor/DQN/train_movement_dqn.py
+python multirotor/DQN_Movement/train_movement_dqn.py
 ```
 
 **优点**:
@@ -67,7 +75,7 @@ python multirotor/DQN/train_movement_dqn.py
 train_movement_with_airsim.bat
 
 # 或者
-python multirotor/DQN/train_movement_with_airsim.py
+python multirotor/DQN_Movement/train_movement_with_airsim.py
 ```
 
 **优点**:
@@ -88,7 +96,7 @@ python multirotor/DQN/train_movement_with_airsim.py
 test_movement_dqn.bat
 
 # 或者
-python multirotor/DQN/test_movement_dqn.py
+python multirotor/DQN_Movement/test_movement_dqn.py
 ```
 
 ## ⚙️ 配置说明
@@ -178,10 +186,10 @@ python multirotor/DQN/test_movement_dqn.py
 
 ```bash
 # 纯模拟训练日志
-tensorboard --logdir=multirotor/DQN/logs/movement_dqn/
+tensorboard --logdir=multirotor/DQN_Movement/logs/movement_dqn/
 
 # AirSim集成训练日志
-tensorboard --logdir=multirotor/DQN/logs/movement_dqn_airsim/
+tensorboard --logdir=multirotor/DQN_Movement/logs/movement_dqn_airsim/
 ```
 
 ### 关键指标
@@ -320,8 +328,13 @@ class MultiDroneAlgorithmServer:
 - 📈 训练和测试脚本
 - 📝 完整文档
 
+### v1.0.1 (2025-10-16)
+- 📝 更新文档，修正路径引用
+- 🔄 明确使用 gymnasium 而不是 gym
+- 📂 完善文件结构说明
+
 ---
 
 **作者**: AirsimProject Team  
-**最后更新**: 2024-10-14
+**最后更新**: 2025-10-16
 
