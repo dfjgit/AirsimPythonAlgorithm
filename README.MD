@@ -115,15 +115,21 @@ AirsimAlgorithmPython/
 │   │   ├── simple_visualizer.py    # 可视化组件
 │   │   ├── scanner_config_data.py  # 配置数据类
 │   │   └── ...
-│   ├── DQN/                         # DQN相关（已归档）
-│   │   ├── README.md               # DQN设计文档
-│   │   ├── README_V1_ARCHIVED.md   # V1归档
-│   │   ├── V2_REQUIREMENTS.md      # V2需求模板
-│   │   └── CPU_OPTIMIZATION.md     # 性能优化指南
+│   ├── DQN_Movement/               # DQN移动控制模块
+│   │   ├── movement_env.py         # 移动控制环境
+│   │   ├── train_movement_dqn.py   # 训练脚本
+│   │   ├── test_movement_dqn.py    # 测试脚本
+│   │   └── README.md               # 模块文档
+│   ├── DQN_Weight/                 # DQN权重学习模块
+│   │   ├── simple_weight_env.py    # 权重学习环境
+│   │   ├── train_simple.py         # 训练脚本
+│   │   ├── test_trained_model.py   # 测试脚本
+│   │   └── README.md               # 模块文档
 │   ├── AlgorithmServer.py          # 主服务器
 │   ├── scanner_config.json         # 配置文件
 │   └── Configuration_Guide.md      # 配置指南
 ├── docs/                            # 文档目录
+│   ├── DQN/                        # DQN设计文档（V1已归档）
 │   ├── images/                     # 图片资源
 │   ├── IMAGES_REFERENCE.md         # 图片说明
 │   └── README.md                   # 文档索引
@@ -194,7 +200,9 @@ drone_names = ["UAV1", "UAV2", "UAV3"]  # 添加更多无人机
 
 - [配置指南](multirotor/Configuration_Guide.md) - 详细的参数配置说明
 - [图片说明](docs/IMAGES_REFERENCE.md) - 架构图和流程图说明
-- [DQN文档](multirotor/DQN/README.md) - DQN相关设计（已归档）
+- [DQN移动控制](multirotor/DQN_Movement/README.md) - 使用DQN直接控制无人机移动
+- [DQN权重学习](multirotor/DQN_Weight/README.md) - 使用DDPG优化APF权重系数
+- [DQN V1文档](docs/DQN/README.md) - DQN V1设计文档（已归档）
 
 ---
 
@@ -208,6 +216,76 @@ drone_names = ["UAV1", "UAV2", "UAV3"]  # 添加更多无人机
 - 🚀 快速开始: [docs/DQN/QUICK_START.md](docs/DQN/QUICK_START.md)
 
 当前系统使用**纯APF算法**，性能稳定流畅。
+
+---
+
+## 🤖 两种DQN实现方向
+
+项目中开发了两种不同的强化学习实现方案，分别针对不同的控制策略：
+
+### 1️⃣ DQN移动控制 (DQN_Movement)
+
+**核心思想**: 使用深度强化学习直接控制无人机移动
+
+- **算法**: DQN (Deep Q-Network)
+- **动作空间**: 6个离散动作（上/下/左/右/前/后）
+- **观察空间**: 21维状态（位置、速度、熵值、Leader信息等）
+- **控制方式**: AI直接决策下一步往哪个方向移动
+- **适用场景**:
+  - 简单直接的移动决策
+  - 快速响应的场景
+  - 需要精确控制移动方向的任务
+
+📂 代码位置: `multirotor/DQN_Movement/`
+📖 详细文档: [DQN_Movement/README.md](multirotor/DQN_Movement/README.md)
+
+### 2️⃣ DQN权重学习 (DQN_Weight)
+
+**核心思想**: 使用深度强化学习优化APF算法的权重系数
+
+- **算法**: DDPG (Deep Deterministic Policy Gradient)
+- **动作空间**: 5个连续权重系数（α1-α5: 排斥力、熵值、距离、Leader范围、方向保持）
+- **观察空间**: 18维状态（位置、速度、熵值、Leader信息等）
+- **控制方式**: AI动态调整APF算法的5个权重参数，间接影响移动行为
+- **适用场景**:
+  - 复杂多变的环境
+  - 需要平衡多个目标（避障、探索、编队）
+  - 利用现有APF算法框架的场景
+
+📂 代码位置: `multirotor/DQN_Weight/`
+📖 详细文档: [DQN_Weight/README.md](multirotor/DQN_Weight/README.md)
+
+### 📊 两种方案对比
+
+| 特性 | 移动控制 (DQN_Movement) | 权重学习 (DQN_Weight) |
+|------|----------------------|-------------------|
+| **算法** | DQN | DDPG |
+| **动作类型** | 离散动作（6个方向） | 连续动作（5个权重） |
+| **动作空间** | `Discrete(6)` | `Box(5)` |
+| **控制层级** | 底层（直接控制移动） | 高层（调整行为策略） |
+| **响应速度** | 快速直接 | 通过APF间接响应 |
+| **灵活性** | 固定6个方向 | 无限连续权重组合 |
+| **复杂度** | 相对简单 | 相对复杂 |
+| **训练时间** | 10-30分钟 | 视情况而定 |
+| **可解释性** | 较低（黑盒决策） | 较高（可观察权重变化） |
+| **与APF结合** | 独立于APF | 增强APF算法 |
+
+### 🎯 选择建议
+
+**选择移动控制 (DQN_Movement)**，如果你需要：
+- ✅ 简单快速的实现
+- ✅ 完全由AI主导的移动决策
+- ✅ 不依赖现有算法框架
+
+**选择权重学习 (DQN_Weight)**，如果你需要：
+- ✅ 利用现有的APF算法
+- ✅ 更高的可解释性和可控性
+- ✅ 动态适应不同场景的能力
+- ✅ 在多个优化目标间寻找平衡
+
+### 💡 实现状态
+
+两种方案目前都处于**实验开发阶段**，包含完整的训练和测试代码。可根据具体应用需求选择合适的方案进行进一步开发和优化。
 
 ---
 
@@ -234,5 +312,5 @@ drone_names = ["UAV1", "UAV2", "UAV3"]  # 添加更多无人机
 
 ---
 
-**最后更新**: 2025-10-13
+**最后更新**: 2025-10-16
 
