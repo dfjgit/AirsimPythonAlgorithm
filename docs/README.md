@@ -1,105 +1,233 @@
-# 项目文档目录
+# AirSim无人机仿真系统-Python端
 
-本目录包含项目的所有文档和图片资源。
+基于AirSim的多无人机协同扫描算法实现，集成APF算法和DQN强化学习
 
 ---
 
-## 📚 文档结构
+## 📋 项目简介
+
+本项目实现了一个多无人机协同扫描系统，使用**人工势场（APF）算法**进行路径规划和区域探索。系统集成了AirSim仿真环境和Unity可视化界面，支持实时数据交互和算法可视化。
+
+### 核心功能
+- ✅ 多无人机协同控制
+- ✅ 人工势场算法（APF）
+- ✅ 基于熵值的探索策略
+- ✅ Leader-Follower模式
+- ✅ 实时可视化
+- ✅ Unity-AirSim双向通信
+- ✅ DQN强化学习（移动控制 + 权重优化）
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+- Python 3.7+
+- AirSim 仿真器
+- Unity (可选，用于3D可视化)
+
+### 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+### 运行程序
+```bash
+# 使用主菜单（推荐）
+start.bat
+
+# 或直接运行
+python multirotor/AlgorithmServer.py
+```
+
+---
+
+## 📊 系统架构
+
+![系统架构](images/system_architecture_with_dqn.png)
+
+### 主要组件
+
+#### 1. AlgorithmServer
+- 核心算法服务器
+- 负责无人机控制和算法执行
+- 处理AirSim和Unity的数据交互
+
+#### 2. APF算法
+- 人工势场算法实现
+- 多因素权重计算：
+  - 排斥力（避障）
+  - 熵值（探索）
+  - 距离（导航）
+  - Leader范围（保持编队）
+  - 方向保持（稳定飞行）
+
+#### 3. 可视化组件
+- 实时2D可视化
+- 熵值颜色渐变显示（绿→黄→红）
+- 无人机位置和运动方向
+- Leader位置和扫描范围
+
+---
+
+## 🎨 可视化说明
+
+### 熵值颜色系统
+- 🟢 **绿色 (0-30)**: 区域已充分扫描
+- 🟡 **黄色 (30-70)**: 区域部分扫描
+- 🔴 **红色 (70-100)**: 区域未扫描
+
+### 显示元素
+- **绿色圆圈**: 无人机
+- **淡蓝色圆圈**: Leader
+- **白色箭头**: 移动方向
+- **绿色圆环**: 扫描范围
+- **彩色点**: 网格单元（按熵值着色）
+
+---
+
+## ⚙️ 配置说明
+
+### 配置文件
+主配置文件: `multirotor/scanner_config.json`
+
+### 核心参数
+```json
+{
+    "repulsionCoefficient": 2.0,      // 排斥力权重
+    "entropyCoefficient": 2.0,        // 熵权重
+    "distanceCoefficient": 2.0,       // 距离权重
+    "leaderRangeCoefficient": 2.0,    // Leader范围权重
+    "directionRetentionCoefficient": 2.0,  // 方向保持权重
+    "updateInterval": 1,               // 更新间隔（秒）
+    "moveSpeed": 2.0,                  // 移动速度（米/秒）
+    "scanRadius": 3.0,                 // 扫描半径（米）
+    "altitude": 2.0                    // 飞行高度（米）
+}
+```
+
+---
+
+## 📁 项目结构
 
 ```
-docs/
-├── images/                          # 图片资源目录
-│   ├── system_architecture_with_dqn.png      # 系统整体架构图
-│   ├── dqn_architecture_detailed.png         # DQN详细架构图
-│   ├── dqn_workflow_simple.png               # DQN简化工作流程
-│   ├── dqn_training_workflow.png             # DQN训练工作流程
-│   └── airsim_dqn_workflow.png               # AirSim-DQN工作流程
-├── IMAGES_REFERENCE.md              # 图片说明文档
-└── README.md                        # 本文档
+AirsimAlgorithmPython/
+├── multirotor/                      # 核心代码目录
+│   ├── Algorithm/                   # 算法实现
+│   │   ├── scanner_algorithm.py    # APF算法核心
+│   │   ├── simple_visualizer.py    # 可视化组件
+│   │   ├── scanner_config_data.py  # 配置数据类
+│   │   └── ...
+│   ├── DQN_Movement/               # DQN移动控制模块
+│   │   ├── movement_env.py         # 移动控制环境
+│   │   ├── train_movement_dqn.py   # 训练脚本
+│   │   ├── test_movement_dqn.py    # 测试脚本
+│   │   └── README.md               # 模块文档
+│   ├── DQN_Weight/                 # DQN权重学习模块
+│   │   ├── simple_weight_env.py    # 权重学习环境
+│   │   ├── train_simple.py         # 训练脚本
+│   │   ├── test_trained_model.py   # 测试脚本
+│   │   └── README.md               # 模块文档
+│   ├── AlgorithmServer.py          # 主服务器
+│   ├── scanner_config.json         # 配置文件
+│   └── Configuration_Guide.md      # 配置指南
+├── docs/                            # 文档目录
+│   ├── DQN/                        # DQN设计文档（V1已归档）
+│   ├── images/                     # 图片资源
+│   ├── IMAGES_REFERENCE.md         # 图片说明
+│   └── README.md                   # 文档索引
+├── requirements.txt                 # Python依赖
+└── README.MD                        # 本文档
 ```
 
 ---
 
-## 📖 核心文档索引
+## 🎓 算法说明
 
-### 配置文档
-- [Configuration_Guide.md](../multirotor/Configuration_Guide.md) - 配置文件参数说明
+### 人工势场算法（APF）
 
-### DQN相关文档
-- [DQN主文档](./DQN/README.md) - DQN集成设计文档
-- [快速开始](./DQN/QUICK_START.md) - 快速上手指南
-- [V2设计](./DQN/V2_DESIGN.md) - V2详细设计
-- [实现指南](./DQN/IMPLEMENTATION_GUIDE.md) - 实现指南
-- [V2需求](./DQN/V2_REQUIREMENTS.md) - V2版本需求规划
-- [V1归档](./DQN/README_V1_ARCHIVED.md) - V1版本完整记录
-- [CPU优化](./DQN/CPU_OPTIMIZATION.md) - DQN性能优化
+APF算法通过组合多个"势场力"来计算无人机的最终移动方向：
 
-### 图片资源
-- [IMAGES_REFERENCE.md](./IMAGES_REFERENCE.md) - 所有图片的详细说明
+1. **排斥力**: 避免与其他无人机碰撞
+2. **熵引力**: 吸引无人机探索高熵值（未知）区域
+3. **距离引力**: 引导无人机向目标区域移动
+4. **Leader范围力**: 保持无人机在Leader扫描范围内
+5. **方向保持力**: 维持飞行方向的稳定性
 
----
+最终方向 = 各力的加权和
 
-## 🎯 快速导航
+### 熵值计算
 
-### 新用户
-1. 阅读项目README: [../README.MD](../README.MD)
-2. 查看配置指南: [Configuration_Guide.md](../multirotor/Configuration_Guide.md)
-3. 了解系统架构: 查看 [system_architecture_with_dqn.png](./images/system_architecture_with_dqn.png)
-
-### 开发者
-1. 查看代码文档: `multirotor/` 目录
-2. 理解APF算法: `multirotor/Algorithm/` 目录
-3. DQN开发参考: `multirotor/DQN/` 目录
-
-### V2开发
-1. 阅读V1归档: [README_V1_ARCHIVED.md](../multirotor/DQN/README_V1_ARCHIVED.md)
-2. 填写V2需求: [V2_REQUIREMENTS.md](../multirotor/DQN/V2_REQUIREMENTS.md)
-3. 参考架构图: [dqn_architecture_detailed.png](./images/dqn_architecture_detailed.png)
+熵值表示区域的不确定性：
+- 高熵值：区域未被扫描，信息不确定
+- 低熵值：区域已被扫描，信息确定
 
 ---
 
-## 📊 图片资源快览
+## 🔧 开发指南
 
-### 系统架构
-![系统架构](./images/system_architecture_with_dqn.png)
-*完整系统架构，包含AirSim、Unity、DQN等组件*
+### 添加新的无人机
+修改 `AlgorithmServer.py` 中的无人机列表：
+```python
+drone_names = ["UAV1", "UAV2", "UAV3"]  # 添加更多无人机
+```
 
-### DQN架构
-![DQN架构](./images/dqn_architecture_detailed.png)
-*DQN详细架构，展示训练、推理、APF流程*
+### 调整算法参数
+修改 `scanner_config.json` 中的权重系数
 
-### DQN工作流
-![DQN简化流程](./images/dqn_workflow_simple.png)
-*DQN核心工作流程*
-
----
-
-## 🔄 文档维护
-
-### 添加新文档
-1. 将Markdown文档放在 `docs/` 根目录
-2. 将图片放在 `docs/images/` 目录
-3. 更新本README的索引
-
-### 图片命名规范
-格式: `{主题}_{类型}_{描述}.png`
-
-示例:
-- `system_architecture_overview.png` - 系统架构总览
-- `algorithm_flowchart_apf.png` - APF算法流程图
-- `ui_screenshot_main.png` - 主界面截图
+### 自定义可视化
+修改 `Algorithm/simple_visualizer.py`
 
 ---
 
-## 📞 相关链接
+## 🐛 故障排查
 
-- **项目主页**: [../README.MD](../README.MD)
-- **源代码**: `../multirotor/`
-- **配置文件**: `../multirotor/scanner_config.json`
-- **问题追踪**: *[添加Issue链接]*
+### 程序启动卡住
+- 检查AirSim是否正在运行
+- 确认Unity客户端连接状态
+- 查看日志输出定位问题
+
+### 可视化不显示
+- 确认pygame已正确安装
+- 检查是否有图形界面环境
+- 查看控制台错误信息
+
+### 性能问题
+- 降低 `updateInterval`
+- 减少同时运行的无人机数量
+- 关闭不必要的可视化
 
 ---
 
-**创建日期**: 2025-10-13  
-**维护者**: 项目团队
+## 📚 文档资源
 
+- [DQN使用指南](docs/DQN使用指南.md) - DQN强化学习完整指南
+- [配置和故障排除](docs/配置和故障排除.md) - 详细配置说明和问题解决
+- [图片说明](docs/IMAGES_REFERENCE.md) - 架构图和流程图说明
+
+---
+
+## 🤝 贡献指南
+
+欢迎提交Issue和Pull Request！
+
+### 代码规范
+- 遵循PEP 8编码规范
+- 添加适当的注释和文档
+- 提交前进行测试
+
+---
+
+## 📄 许可证
+
+*[添加许可证信息]*
+
+---
+
+## 📞 联系方式
+
+*[添加联系方式]*
+
+---
+
+**最后更新**: 2025-01-16
