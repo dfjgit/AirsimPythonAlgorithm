@@ -40,7 +40,8 @@ print("步骤1: 创建训练环境")
 print("=" * 60)
 
 # 创建环境（无server，使用模拟数据）
-env = SimpleWeightEnv(server=None, drone_name="UAV1")
+# reset_unity参数对离线训练无效（没有Unity）
+env = SimpleWeightEnv(server=None, drone_name="UAV1", reset_unity=False)
 
 print(f"✓ 环境创建成功")
 print(f"  观察空间: {env.observation_space.shape}")

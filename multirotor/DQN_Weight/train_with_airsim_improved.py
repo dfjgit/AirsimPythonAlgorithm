@@ -139,19 +139,17 @@ def main():
         
         print("[OK] AlgorithmServer已连接")
         
-        # 只让无人机起飞，不启动算法线程（避免冲突）
-        print("\n[2/5] 让无人机起飞...")
-        print("[重要] 训练模式：不启动算法线程，避免与训练环境冲突")
+        # 启动无人机和算法线程
+        print("\n[2/5] 启动无人机任务...")
+        print("[重要] 训练模式：启动算法线程，训练环境动态改变权重")
         
-        # 手动起飞，不调用start_mission()
-        for drone_name in DRONE_NAMES:
-            print(f"  起飞 {drone_name}...")
-            if not server.drone_controller.takeoff(drone_name):
-                print(f"[错误] {drone_name}起飞失败")
-                server.stop()
-                return
+        # 调用start_mission()启动完整流程
+        if not server.start_mission():
+            print("[错误] 任务启动失败")
+            server.stop()
+            return
         
-        print("[OK] 无人机已起飞（未启动算法线程）")
+        print("[OK] 无人机已起飞，算法线程运行中")
         
         # 等待系统稳定
         print("\n[3/5] 等待系统稳定...")
@@ -159,11 +157,21 @@ def main():
         
         # 创建训练环境
         print("\n[4/5] 创建训练环境...")
+        # reset_unity=True: 标准episode训练，每次重置Unity环境
+        # reset_unity=False: 连续学习，不重置Unity环境
+        # step_duration: 每步让无人机飞行的时长（秒）
+        STEP_DURATION = 5.0  # 每步飞行5秒
+        
         env = SimpleWeightEnv(
             server=server,
-            drone_name=DRONE_NAMES[0]
+            drone_name=DRONE_NAMES[0],
+            reset_unity=True,  # 使用标准模式
+            step_duration=STEP_DURATION  # 每步飞行5秒
         )
         print(f"[OK] 环境创建成功")
+        print(f"  - 模式: 标准episode训练（每次重置Unity）")
+        print(f"  - 每步飞行时长: {STEP_DURATION}秒")
+        print(f"  - 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * STEP_DURATION / 60:.1f}分钟")
         
         # 创建DDPG模型（降低复杂度）
         print("\n[5/5] 创建DDPG模型...")
@@ -210,9 +218,11 @@ def main():
             verbose=1
         )
         
+        print("\n开始训练...\n")
+        
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
-            log_interval=None,  # 关闭日志
+            log_interval=None,
             callback=training_callback
         )
         print("\n[OK] 训练完成！")

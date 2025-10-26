@@ -16,11 +16,13 @@ class SimpleWeightEnv(gym.Env):
     目标: 学习5个权重系数 (α1, α2, α3, α4, α5)
     """
     
-    def __init__(self, server=None, drone_name="UAV1", reward_config_path=None):
+    def __init__(self, server=None, drone_name="UAV1", reward_config_path=None, reset_unity=True, step_duration=5.0):
         super(SimpleWeightEnv, self).__init__()
         
         self.server = server
         self.drone_name = drone_name
+        self.reset_unity = reset_unity  # 是否每次episode重置Unity环境
+        self.step_duration = step_duration  # 每步飞行时长（秒）
         
         # 加载奖励配置
         if reward_config_path is None:
@@ -51,41 +53,52 @@ class SimpleWeightEnv(gym.Env):
         
         # 记录上一步的状态
         self.prev_scanned_cells = 0
-        self.prev_position = None
         self.step_count = 0
         
     def reset(self):
         """重置环境"""
-        print("[DQN] 环境重置中...")
+        import time
         
-        # 如果有server，等待数据就绪
+        # 如果有server
         if self.server:
-            import time
-            max_wait = 10  # 最多等待10秒
+            # 模式A：标准episode训练（重置Unity环境）
+            if self.reset_unity:
+                print(f"\n[Episode] 重置Unity环境...")
+                self.server.reset_environment()
+                time.sleep(3)  # 等待Unity重置
+                print(f"[Episode] 重置完成，等待数据...")
+            
+            # 等待数据就绪
+            max_wait = 10
             wait_time = 0
             while wait_time < max_wait:
                 has_grid = bool(self.server.grid_data.cells)
                 has_runtime = bool(self.server.unity_runtime_data.get(self.drone_name))
                 
                 if has_grid and has_runtime:
-                    print(f"[DQN] 数据就绪 (网格:{len(self.server.grid_data.cells)}个单元)")
+                    print(f"[Episode] 数据就绪 (网格:{len(self.server.grid_data.cells)}个单元)")
                     break
-                
-                if wait_time % 2 == 0:
-                    print(f"[DQN] 等待数据... (网格:{has_grid}, 运行时:{has_runtime})")
                 
                 time.sleep(0.5)
                 wait_time += 0.5
             
             if wait_time >= max_wait:
-                print("[DQN警告] 等待数据超时，使用默认状态")
+                print("[警告] 等待数据超时")
         
-        self.prev_scanned_cells = self._count_scanned_cells()
-        self.prev_position = None
+        # 重置内部状态
+        if self.reset_unity:
+            self.prev_scanned_cells = 0
+        else:
+            if self.server:
+                with self.server.data_lock:
+                    self.prev_scanned_cells = self._count_scanned_cells()
+            else:
+                self.prev_scanned_cells = 0
+        
         self.step_count = 0
         
         state = self._get_state()
-        print(f"[DQN] 环境重置完成，状态维度: {state.shape}")
+        print(f"[Episode] 开始新episode (max_steps={self.reward_config.max_steps})\n")
         return state
     
     def step(self, action):
@@ -95,29 +108,8 @@ class SimpleWeightEnv(gym.Env):
         :param action: [α1, α2, α3, α4, α5] - 5个权重系数
         :return: observation, reward, done, info
         """
-        # 确保action在有效范围内（使用配置）
+        # 确保action在有效范围内
         action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
-        
-        # 权重归一化：避免某个权重过高导致行为失衡
-        # 方法1: 软归一化（保持相对比例，但限制最大差异）
-        action_mean = np.mean(action)
-        action_std = np.std(action)
-        
-        # 如果标准差过大，进行平滑（使用配置）
-        if action_std > self.reward_config.std_threshold:
-            # 将极端值拉回到均值附近
-            action = action_mean + (action - action_mean) * self.reward_config.std_smoothing
-            action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
-        
-        # 方法2: 确保所有权重在合理范围内
-        # 最大值不超过最小值的N倍（使用配置）
-        min_weight = np.min(action)
-        max_weight = np.max(action)
-        if max_weight > min_weight * self.reward_config.max_min_ratio:
-            # 缩放权重
-            scale = (min_weight * self.reward_config.max_min_ratio) / max_weight
-            action = action * scale
-            action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
         
         # 将权重设置到APF算法
         weights = {
@@ -129,7 +121,12 @@ class SimpleWeightEnv(gym.Env):
         }
         
         if self.server:
+            # 设置权重（算法线程会使用新权重飞行）
             self.server.algorithms[self.drone_name].set_coefficients(weights)
+            
+            # 等待无人机用新权重飞行一段时间
+            import time
+            time.sleep(self.step_duration)
         
         # 获取新状态
         next_state = self._get_state()
@@ -137,14 +134,18 @@ class SimpleWeightEnv(gym.Env):
         # 计算奖励
         reward = self._calculate_reward()
         
-        # 判断是否结束（使用配置）
+        # 判断是否结束
         self.step_count += 1
         done = self.step_count >= self.reward_config.max_steps
+        
+        # 每10步打印一次进度
+        if self.step_count % 10 == 0:
+            print(f"[Episode] 步数: {self.step_count}/{self.reward_config.max_steps}, 奖励: {reward:.2f}")
         
         # 额外信息
         info = {
             'weights': weights,
-            'scanned_cells': self._count_scanned_cells()
+            'scanned_cells': self.prev_scanned_cells
         }
         
         return next_state, reward, done, info
@@ -202,7 +203,7 @@ class SimpleWeightEnv(gym.Env):
             return np.zeros(18, dtype=np.float32)
     
     def _calculate_reward(self):
-        """计算奖励（使用配置文件中的系数）"""
+        """计算奖励（简化版：只考虑探索和越界）"""
         if not self.server:
             return 0.0
         
@@ -211,46 +212,34 @@ class SimpleWeightEnv(gym.Env):
         try:
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data[self.drone_name]
+                grid_data = self.server.grid_data
                 
-                # 1. 探索奖励：新扫描的单元格（使用配置）
-                current_scanned = self._count_scanned_cells()
+                # 1. 探索奖励：新扫描的单元格
+                current_scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30) if grid_data.cells else 0
                 new_scanned = current_scanned - self.prev_scanned_cells
                 reward += new_scanned * self.reward_config.exploration_reward
                 self.prev_scanned_cells = current_scanned
                 
-                # 2. 碰撞惩罚（使用配置）
-                min_dist = self._get_min_distance_to_others(runtime_data)
-                if min_dist < self.reward_config.collision_distance:
-                    reward -= self.reward_config.collision_penalty
-                
-                # 3. 越界惩罚（使用配置）
+                # 2. 越界惩罚
                 if runtime_data.leader_position:
                     dist_to_leader = (runtime_data.position - runtime_data.leader_position).magnitude()
                     if runtime_data.leader_scan_radius > 0 and dist_to_leader > runtime_data.leader_scan_radius:
                         reward -= self.reward_config.out_of_range_penalty
                 
-                # 4. 平滑运动奖励（使用配置）
-                if self.prev_position:
-                    movement = (runtime_data.position - self.prev_position).magnitude()
-                    if self.reward_config.movement_min < movement < self.reward_config.movement_max:
-                        reward += self.reward_config.smooth_movement_reward
-                
-                self.prev_position = runtime_data.position
-                
         except Exception as e:
-            print(f"计算奖励失败: {str(e)}")
+            print(f"[错误] 计算奖励失败: {str(e)}")
         
         return reward
     
     def _get_entropy_info(self, grid_data, position):
-        """获取附近熵值信息（使用配置）"""
+        """获取附近熵值信息"""
         if not grid_data or not grid_data.cells:
             return [50.0, 50.0, 0.0]
         
-        # 找附近N米内的单元格（使用配置）
+        # 找附近10米内的单元格
         nearby_cells = [
-            cell for cell in grid_data.cells[:100]  # 限制数量避免卡顿
-            if (cell.center - position).magnitude() < self.reward_config.nearby_entropy_distance
+            cell for cell in grid_data.cells[:100]
+            if (cell.center - position).magnitude() < 10.0
         ]
         
         if not nearby_cells:
@@ -264,12 +253,12 @@ class SimpleWeightEnv(gym.Env):
         ]
     
     def _get_scan_info(self, grid_data):
-        """获取扫描进度（使用配置）"""
+        """获取扫描进度"""
         if not grid_data or not grid_data.cells:
             return [0.0, 0.0, 0.0]
         
         total = len(grid_data.cells)
-        scanned = sum(1 for cell in grid_data.cells if cell.entropy < self.reward_config.scanned_entropy_threshold)
+        scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30)
         
         return [
             scanned / max(total, 1),
@@ -278,53 +267,32 @@ class SimpleWeightEnv(gym.Env):
         ]
     
     def _count_scanned_cells(self):
-        """统计已扫描单元格（使用配置）"""
+        """统计已扫描单元格（不加锁版本，由调用者加锁）"""
         if not self.server or not self.server.grid_data:
             return 0
         
         try:
-            with self.server.data_lock:
-                return sum(1 for cell in self.server.grid_data.cells if cell.entropy < self.reward_config.scanned_entropy_threshold)
+            # 注意：不在这里加锁，避免嵌套锁
+            # 调用者应该已经持有data_lock
+            return sum(1 for cell in self.server.grid_data.cells if cell.entropy < 30)
         except:
             return 0
-    
-    def _get_min_distance_to_others(self, runtime_data):
-        """获取到其他无人机的最小距离"""
-        if not runtime_data.otherScannerPositions:
-            return 999.0
-        
-        distances = [
-            (runtime_data.position - other_pos).magnitude()
-            for other_pos in runtime_data.otherScannerPositions
-        ]
-        return min(distances) if distances else 999.0
 
 
 # 测试代码
 if __name__ == "__main__":
     print("测试SimpleWeightEnv...")
     
-    # 创建环境（无server，用于测试）
-    env = SimpleWeightEnv(server=None, drone_name="UAV1")
+    # 测试两种模式
+    print("\n[模式A] 标准episode训练:")
+    env_a = SimpleWeightEnv(server=None, drone_name="UAV1", reset_unity=True)
+    print(f"  观察空间: {env_a.observation_space.shape}")
+    print(f"  动作空间: {env_a.action_space.shape}")
     
-    print(f"观察空间: {env.observation_space}")
-    print(f"动作空间: {env.action_space}")
+    print("\n[模式B] 连续学习:")
+    env_b = SimpleWeightEnv(server=None, drone_name="UAV1", reset_unity=False)
+    print(f"  观察空间: {env_b.observation_space.shape}")
+    print(f"  动作空间: {env_b.action_space.shape}")
     
-    # 重置环境
-    state = env.reset()
-    print(f"初始状态shape: {state.shape}")
-    print(f"初始状态: {state[:5]}...")
-    
-    # 执行几步
-    for i in range(5):
-        # 随机动作（5个权重）
-        action = env.action_space.sample()
-        print(f"\n步骤 {i+1}:")
-        print(f"  动作(权重): {action}")
-        
-        state, reward, done, info = env.step(action)
-        print(f"  奖励: {reward:.2f}")
-        print(f"  完成: {done}")
-    
-    print("\n[OK] 环境测试通过！")
+    print("\n[OK] 两种模式都可用！")
 
