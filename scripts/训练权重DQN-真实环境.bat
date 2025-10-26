@@ -1,5 +1,10 @@
 @echo off
-chcp 65001 >nul
+REM ============================================================
+REM DQN训练 - 使用真实AirSim环境
+REM ============================================================
+chcp 65001 >nul 2>&1
+cls
+
 echo ============================================================
 echo DQN训练 - 使用真实AirSim环境
 echo ============================================================
@@ -36,25 +41,44 @@ echo.
 echo [OK] 继续训练准备...
 echo.
 
-REM 激活虚拟环境
-echo [1/4] 激活Python虚拟环境...
-call %~dp0..\.venv\Scripts\activate.bat
-if %ERRORLEVEL% NEQ 0 (
-    echo 错误: 虚拟环境激活失败
-    echo 请先运行 运行系统-固定权重.bat 确保虚拟环境已创建
-    pause
-    exit /b 1
+REM 激活虚拟环境（如果存在）
+if exist "%~dp0..\.venv\Scripts\activate.bat" (
+    echo [1/4] 激活Python虚拟环境...
+    call "%~dp0..\.venv\Scripts\activate.bat"
+    if %ERRORLEVEL% NEQ 0 (
+        echo 警告: 虚拟环境激活失败，将使用系统Python
+        echo.
+    ) else (
+        echo [OK] 虚拟环境已激活
+        echo.
+    )
+) else (
+    echo [1/4] 使用系统Python环境
+    echo.
 )
-echo [OK] 虚拟环境已激活
-echo.
 
 REM 检查依赖
 echo [2/4] 检查训练依赖...
-python -c "import torch; import stable_baselines3; print('[OK] 依赖检查通过')" 2>nul
+python -c "import torch; import stable_baselines3; import gym; import numpy; import shimmy; print('[OK] 依赖检查通过')" 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo 警告: 缺少必要的依赖库
-    echo 正在安装依赖...
-    pip install torch stable-baselines3 -i https://pypi.tuna.tsinghua.edu.cn/simple
+    echo.
+    echo 需要安装以下依赖:
+    echo   - torch
+    echo   - stable-baselines3
+    echo   - gym
+    echo   - numpy
+    echo   - shimmy
+    echo.
+    set /p install=是否现在安装？(Y/N): 
+    if /i "%install%"=="Y" (
+        echo 正在安装依赖...
+        pip install torch stable-baselines3 gym numpy shimmy
+    ) else (
+        echo 已取消，请手动安装依赖后重试
+        pause
+        exit /b 1
+    )
 )
 echo.
 
@@ -77,7 +101,8 @@ echo.
 echo ============================================================
 echo.
 
-python %~dp0..\multirotor\DQN_Weight\train_with_airsim.py
+cd /d "%~dp0..\multirotor\DQN_Weight"
+python train_with_airsim.py
 
 REM 检查训练结果
 if %ERRORLEVEL% EQU 0 (
@@ -119,5 +144,6 @@ if %ERRORLEVEL% EQU 0 (
     echo.
 )
 
+echo.
 echo 按任意键退出...
 pause >nul

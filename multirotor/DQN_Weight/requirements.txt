@@ -1,0 +1,18 @@
+# DQN权重训练所需依赖
+# 安装方法: pip install -r requirements.txt
+
+# 深度学习框架
+torch>=2.0.0
+
+# 强化学习库
+stable-baselines3>=2.0.0
+gym>=0.26.0
+shimmy>=2.0.0        # gym与gymnasium兼容层（stable-baselines3需要）
+
+# 数据处理
+numpy>=1.21.0
+
+# 可选：加速和可视化
+# tensorboard>=2.0.0  # 训练可视化
+# matplotlib>=3.5.0   # 结果绘图
+

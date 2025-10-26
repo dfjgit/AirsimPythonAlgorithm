@@ -56,11 +56,37 @@ class SimpleWeightEnv(gym.Env):
         
     def reset(self):
         """重置环境"""
+        print("[DQN] 环境重置中...")
+        
+        # 如果有server，等待数据就绪
+        if self.server:
+            import time
+            max_wait = 10  # 最多等待10秒
+            wait_time = 0
+            while wait_time < max_wait:
+                has_grid = bool(self.server.grid_data.cells)
+                has_runtime = bool(self.server.unity_runtime_data.get(self.drone_name))
+                
+                if has_grid and has_runtime:
+                    print(f"[DQN] 数据就绪 (网格:{len(self.server.grid_data.cells)}个单元)")
+                    break
+                
+                if wait_time % 2 == 0:
+                    print(f"[DQN] 等待数据... (网格:{has_grid}, 运行时:{has_runtime})")
+                
+                time.sleep(0.5)
+                wait_time += 0.5
+            
+            if wait_time >= max_wait:
+                print("[DQN警告] 等待数据超时，使用默认状态")
+        
         self.prev_scanned_cells = self._count_scanned_cells()
         self.prev_position = None
         self.step_count = 0
         
-        return self._get_state()
+        state = self._get_state()
+        print(f"[DQN] 环境重置完成，状态维度: {state.shape}")
+        return state
     
     def step(self, action):
         """
