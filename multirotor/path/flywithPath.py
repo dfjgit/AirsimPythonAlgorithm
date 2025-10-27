@@ -4,6 +4,9 @@
 无人机路径飞行和比较脚本
 使用AirSim单无人机从Path1的起点到终点飞行直线，
 并按照Path1的时间戳采样记录实际位置，对比预期路径与实际飞行路径
+
+使用速度控制方式（moveByVelocityAsync）而非位置控制（moveToPositionAsync）
+以避免高度方向的固有偏差（约0.5m）
 """
 
 import json
@@ -153,7 +156,7 @@ class PathFlightController:
             return False
     
     def fly_path(self, path_points: List[Dict[str, float]], path_name: str = "路径") -> bool:
-        """按路径飞行"""
+        """按路径飞行（使用速度控制）"""
         if not path_points:
             logger.error("路径点为空，无法飞行")
             return False
@@ -162,40 +165,51 @@ class PathFlightController:
             logger.error("未连接到AirSim，无法飞行")
             return False
         
-        logger.info(f"开始飞行 {path_name}，共 {len(path_points)} 个路径点")
+        logger.info(f"开始飞行 {path_name}（使用速度控制），共 {len(path_points)} 个路径点")
         self.actual_path = []
         
         try:
             for i, point in enumerate(path_points):
                 x, y, z = point['x'], point['y'], point['z']
                 # 坐标系转换：使用地面Z作为参考
-                # 目标Z = 地面Z - 目标高度
                 airsim_z = self.ground_z - z
                 
-                # 获取当前位置
-                current_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-                current_pos = current_state.kinematics_estimated.position
-                
-                # 计算到目标点的距离
-                distance = math.sqrt(
-                    (x - current_pos.x_val)**2 +
-                    (y - current_pos.y_val)**2 +
-                    (airsim_z - current_pos.z_val)**2
-                )
-                
-                # 计算合适的速度
-                speed = self.calculate_appropriate_speed(distance)
-                
                 if i % 5 == 0 or i == len(path_points) - 1:
-                    logger.info(f"路径点 {i+1}/{len(path_points)}: ({x:.2f}, {y:.2f}, {z:.2f}), 距离: {distance:.2f}m")
+                    logger.info(f"飞向路径点 {i+1}/{len(path_points)}: ({x:.2f}, {y:.2f}, {z:.2f})")
                 
-                # 移动到指定位置
-                self.client.moveToPositionAsync(
-                    x, y, airsim_z, speed, vehicle_name=self.vehicle_name
-                ).join()
+                # 使用速度控制飞到目标点
+                max_wait_time = 30.0
+                wait_start = time.time()
+                last_report_time = wait_start
                 
-                # 等待到达目标点并稳定
-                self._wait_for_position_reached(x, y, airsim_z)
+                while time.time() - wait_start < max_wait_time:
+                    # 获取当前状态
+                    current_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
+                    current_pos = current_state.kinematics_estimated.position
+                    
+                    # 计算距离和方向
+                    dx = x - current_pos.x_val
+                    dy = y - current_pos.y_val
+                    dz = airsim_z - current_pos.z_val
+                    distance = math.sqrt(dx**2 + dy**2 + dz**2)
+                    
+                    # 检查是否到达
+                    if distance < self.position_tolerance:
+                        self.client.moveByVelocityAsync(0, 0, 0, 0.5, vehicle_name=self.vehicle_name)
+                        break
+                    
+                    # 计算合适的速度
+                    speed = self.calculate_appropriate_speed(distance)
+                    
+                    # 计算速度向量
+                    vx = (dx / distance) * speed
+                    vy = (dy / distance) * speed
+                    vz = (dz / distance) * speed
+                    
+                    # 发送速度控制指令
+                    self.client.moveByVelocityAsync(vx, vy, vz, 0.5, vehicle_name=self.vehicle_name)
+                    
+                    time.sleep(0.5)
                 
                 # 记录实际位置
                 state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
@@ -208,9 +222,9 @@ class PathFlightController:
                     'time': point.get('time', i * 0.2)
                 })
                 
-                time.sleep(0.1)
+                time.sleep(0.5)  # 在点上稳定一下
             
-            logger.info(f"{path_name} 飞行完成")
+            logger.info(f"✓ {path_name} 飞行完成")
             return True
             
         except Exception as e:
@@ -283,101 +297,51 @@ class PathFlightController:
             if distance_to_target < 0.3:
                 logger.info(f"✓ 已在起点附近 (距离={distance_to_target:.3f}m < 0.3m)，无需移动")
             else:
-                # 方案1: 先尝试取消所有之前的移动指令
-                logger.info("取消之前的移动指令...")
+                # 使用速度控制飞行到起点
+                logger.info("使用速度控制飞行到起点...")
                 self.client.cancelLastTask(self.vehicle_name)
-                time.sleep(0.5)
+                time.sleep(0.3)
                 
-                # 方案2: 使用 moveToPositionAsync（不带lookahead参数）
-                logger.info(f"发送移动指令: moveToPositionAsync(x={start_x:.4f}, y={start_y:.4f}, z={start_airsim_z:.4f}, speed=1)")
-                move_task = self.client.moveToPositionAsync(
-                    start_x, start_y, start_airsim_z, 1, 
-                    vehicle_name=self.vehicle_name
-                )
-                
-                # 主动等待到达目标位置（不依赖join）
-                logger.info("实时监控移动进度...")
-                max_wait_time = 30.0  # 最多等待30秒
+                max_wait_time = 60.0
                 wait_start = time.time()
                 last_report_time = wait_start
-                no_movement_count = 0  # 记录无移动次数
-                last_position = current_p
+                flight_speed = 0.5  # 使用0.5 m/s的速度
                 
                 while time.time() - wait_start < max_wait_time:
+                    # 获取当前状态
                     current_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
                     current_pos = current_state.kinematics_estimated.position
                     
-                    # 计算当前距离目标的距离
-                    dist_to_target = math.sqrt(
-                        (current_pos.x_val - start_x)**2 +
-                        (current_pos.y_val - start_y)**2 +
-                        (current_pos.z_val - start_airsim_z)**2
-                    )
+                    # 计算距离和方向
+                    dx = start_x - current_pos.x_val
+                    dy = start_y - current_pos.y_val
+                    dz = start_airsim_z - current_pos.z_val
+                    distance = math.sqrt(dx**2 + dy**2 + dz**2)
                     
-                    # 检查是否有移动
-                    position_change = math.sqrt(
-                        (current_pos.x_val - last_position.x_val)**2 +
-                        (current_pos.y_val - last_position.y_val)**2 +
-                        (current_pos.z_val - last_position.z_val)**2
-                    )
+                    # 检查是否到达
+                    if distance < 0.3:
+                        # 停止移动
+                        self.client.moveByVelocityAsync(0, 0, 0, 1.0, vehicle_name=self.vehicle_name)
+                        logger.info(f"✓ 到达起点，最终距离: {distance:.3f}m")
+                        break
                     
-                    if position_change < 0.01:  # 几乎没有移动
-                        no_movement_count += 1
-                    else:
-                        no_movement_count = 0
-                        last_position = current_pos
+                    # 计算速度向量
+                    vx = (dx / distance) * flight_speed
+                    vy = (dy / distance) * flight_speed
+                    vz = (dz / distance) * flight_speed
                     
-                    # 如果连续10次检查都没有移动，说明moveToPositionAsync可能失效
-                    if no_movement_count >= 10:
-                        logger.warning("⚠️ 检测到无人机未移动，尝试使用备选方案...")
-                        # 备选方案：使用moveByVelocityAsync
-                        dx = start_x - current_pos.x_val
-                        dy = start_y - current_pos.y_val
-                        dz = start_airsim_z - current_pos.z_val
-                        distance = math.sqrt(dx**2 + dy**2 + dz**2)
-                        
-                        if distance > 0.1:
-                            # 计算单位方向向量
-                            vx = (dx / distance) * 1.0  # 速度1 m/s
-                            vy = (dy / distance) * 1.0
-                            vz = (dz / distance) * 1.0
-                            duration = distance / 1.0  # 按1m/s计算时间
-                            
-                            logger.info(f"使用速度控制: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, 持续{duration:.1f}秒")
-                            self.client.moveByVelocityAsync(
-                                vx, vy, vz, duration,
-                                vehicle_name=self.vehicle_name
-                            )
-                        no_movement_count = 0
+                    # 发送速度控制指令
+                    self.client.moveByVelocityAsync(vx, vy, vz, 0.5, vehicle_name=self.vehicle_name)
                     
                     # 每2秒报告一次进度
                     if time.time() - last_report_time >= 2.0:
-                        logger.info(f"  移动中... 距目标: {dist_to_target:.3f}m, "
-                                   f"当前位置: ({current_pos.x_val:.2f}, {current_pos.y_val:.2f}, {current_pos.z_val:.2f})")
+                        logger.info(f"  移动中... 距目标: {distance:.2f}m")
                         last_report_time = time.time()
                     
-                    # 检查是否到达目标（容差0.5米）
-                    if dist_to_target < 0.5:
-                        logger.info(f"✓ 到达起点，剩余距离: {dist_to_target:.3f}m")
-                        break
-                    
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                 
                 # 等待稳定
-                time.sleep(2)
-                
-                # 检查最终位置
-                after_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-                after_p = after_state.kinematics_estimated.position
-                logger.info(f"最终位置(NED): X={after_p.x_val:.4f}, Y={after_p.y_val:.4f}, Z={after_p.z_val:.4f}")
-                
-                # 计算实际移动的距离
-                moved_distance = math.sqrt(
-                    (after_p.x_val - current_p.x_val)**2 +
-                    (after_p.y_val - current_p.y_val)**2 +
-                    (after_p.z_val - current_p.z_val)**2
-                )
-                logger.info(f"实际移动距离: {moved_distance:.4f}m")
+                time.sleep(1)
             
             # 验证起点位置
             state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
@@ -414,74 +378,84 @@ class PathFlightController:
             theoretical_speed = straight_distance / flight_duration if flight_duration > 0 else 0
             
             logger.info("=" * 60)
-            logger.info("步骤2: 直线飞行到终点")
+            logger.info("步骤2: 使用速度控制直线飞行到终点")
             logger.info(f"终点: ({end_x:.2f}, {end_y:.2f}, {end_z:.2f})")
             logger.info(f"距离: {straight_distance:.2f}m, 时间: {flight_duration:.1f}s, 速度: {flight_speed:.2f}m/s")
             logger.info("=" * 60)
             
-            # 开始异步飞行到终点
-            flight_task = self.client.moveToPositionAsync(
-                end_x, end_y, end_airsim_z, flight_speed, vehicle_name=self.vehicle_name
-            )
+            # 取消之前的任务
+            self.client.cancelLastTask(self.vehicle_name)
+            time.sleep(0.3)
             
             # 记录飞行开始的实际时间
             actual_start_time = time.time()
+            last_control_time = actual_start_time
+            sample_index = 0
             
-            # 按照path_points的时间戳采样
-            for i, point in enumerate(path_points):
-                point_time = point.get('time', i * 0.2)
-                relative_time = point_time - start_time
+            # 持续飞行并采样，直到到达终点或采样完成
+            while sample_index < len(path_points):
+                current_time = time.time()
                 
-                # 等待到达采样时间点
-                elapsed_time = time.time() - actual_start_time
-                wait_time = relative_time - elapsed_time
-                
-                if wait_time > 0:
-                    time.sleep(wait_time)
-                
-                # 记录当前实际位置
+                # 获取当前状态
                 state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
                 position = state.kinematics_estimated.position
-                # 转换为相对地面的高度
-                actual_z = -(position.z_val - self.ground_z)  # 实际高度 = -(当前Z - 地面Z)
                 
-                self.actual_path.append({
-                    'x': position.x_val,
-                    'y': position.y_val,
-                    'z': actual_z,  # 相对地面的高度
-                    'time': point_time
-                })
+                # 计算到终点的距离和方向
+                dx = end_x - position.x_val
+                dy = end_y - position.y_val
+                dz = end_airsim_z - position.z_val
+                distance_to_end = math.sqrt(dx**2 + dy**2 + dz**2)
                 
-                if i % 20 == 0 or i == len(path_points) - 1:
-                    logger.info(f"采样 {i+1}/{len(path_points)}: ({position.x_val:.2f}, {position.y_val:.2f}, {actual_z:.2f})")
-            
-            # 等待飞行到终点
-            logger.info(f"采样完成，共记录 {len(self.actual_path)} 个数据点")
-            logger.info("等待到达终点...")
-            
-            try:
-                max_wait_time = 30.0
-                wait_start = time.time()
-                while time.time() - wait_start < max_wait_time:
-                    state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-                    pos = state.kinematics_estimated.position
-                    distance_to_end = math.sqrt(
-                        (pos.x_val - end_x)**2 +
-                        (pos.y_val - end_y)**2 +
-                        (pos.z_val - end_airsim_z)**2
-                    )
-                    
-                    if distance_to_end < 0.5:
-                        logger.info(f"✓ 到达终点，距离: {distance_to_end:.2f}m")
-                        break
-                    
-                    if int(time.time() - wait_start) % 3 == 0:
-                        logger.info(f"距终点: {distance_to_end:.2f}m")
-                    
-                    time.sleep(0.5)
+                # 检查是否需要采样
+                point_time = path_points[sample_index].get('time', sample_index * 0.2)
+                relative_time = point_time - start_time
+                elapsed_time = current_time - actual_start_time
                 
-            except Exception as e:
-                logger.warning(f"等待任务时出错: {str(e)}")
+                if elapsed_time >= relative_time:
+                    # 采样时间到了，记录当前位置
+                    actual_z = -(position.z_val - self.ground_z)
+                    self.actual_path.append({
+                        'x': position.x_val,
+                        'y': position.y_val,
+                        'z': actual_z,
+                        'time': point_time
+                    })
+                    
+                    if sample_index % 20 == 0 or sample_index == len(path_points) - 1:
+                        logger.info(f"采样 {sample_index+1}/{len(path_points)}: ({position.x_val:.2f}, {position.y_val:.2f}, {actual_z:.2f}), 距终点: {distance_to_end:.2f}m")
+                    
+                    sample_index += 1
+                
+                # 如果到达终点，停止移动
+                if distance_to_end < 0.3:
+                    self.client.moveByVelocityAsync(0, 0, 0, 1.0, vehicle_name=self.vehicle_name)
+                    logger.info(f"✓ 到达终点，距离: {distance_to_end:.2f}m")
+                    
+                    # 继续采样剩余的点（在终点位置）
+                    while sample_index < len(path_points):
+                        point_time = path_points[sample_index].get('time', sample_index * 0.2)
+                        actual_z = -(position.z_val - self.ground_z)
+                        self.actual_path.append({
+                            'x': position.x_val,
+                            'y': position.y_val,
+                            'z': actual_z,
+                            'time': point_time
+                        })
+                        sample_index += 1
+                    break
+                
+                # 每0.5秒更新一次速度控制
+                if current_time - last_control_time >= 0.5:
+                    # 计算速度向量
+                    vx = (dx / distance_to_end) * flight_speed
+                    vy = (dy / distance_to_end) * flight_speed
+                    vz = (dz / distance_to_end) * flight_speed
+                    
+                    # 发送速度控制指令
+                    self.client.moveByVelocityAsync(vx, vy, vz, 0.5, vehicle_name=self.vehicle_name)
+                    last_control_time = current_time
+                
+                time.sleep(0.1)  # 小睡眠，避免CPU占用过高
             
             logger.info(f"✓ {path_name} 飞行完成，记录 {len(self.actual_path)} 个数据点")
             
@@ -491,53 +465,8 @@ class PathFlightController:
             logger.error(f"直线飞行 {path_name} 时发生错误: {str(e)}")
             return False
     
-    def _wait_for_position_reached(self, target_x: float, target_y: float, target_z: float, timeout: float = 10.0) -> bool:
-        """等待无人机到达目标位置"""
-        start_time = time.time()
-        tolerance = self.position_tolerance
-        stable_count = 0
-        required_stable_count = 5
-        
-        while time.time() - start_time < timeout:
-            try:
-                state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-                position = state.kinematics_estimated.position
-                velocity = state.kinematics_estimated.linear_velocity
-                
-                distance = math.sqrt(
-                    (position.x_val - target_x)**2 + 
-                    (position.y_val - target_y)**2 + 
-                    (position.z_val - target_z)**2
-                )
-                
-                speed = math.sqrt(
-                    velocity.x_val**2 + velocity.y_val**2 + velocity.z_val**2
-                )
-                
-                if distance <= tolerance and speed < 0.2:
-                    stable_count += 1
-                    if stable_count >= required_stable_count:
-                        logger.info(f"✓ 到达目标，距离: {distance:.3f}m")
-                        return True
-                else:
-                    stable_count = 0
-                
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.warning(f"检查位置出错: {str(e)}")
-                time.sleep(0.1)
-        
-        # 超时
-        state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-        position = state.kinematics_estimated.position
-        final_distance = math.sqrt(
-            (position.x_val - target_x)**2 + 
-            (position.y_val - target_y)**2 + 
-            (position.z_val - target_z)**2
-        )
-        logger.warning(f"⚠️ 等待超时，距目标: {final_distance:.3f}m")
-        return False
+    # 注：此方法已弃用，改用速度控制方式，不再需要此等待函数
+    # def _wait_for_position_reached(...) - 已删除，使用速度控制循环替代
     
     def land_and_disconnect(self) -> bool:
         """降落并断开连接"""

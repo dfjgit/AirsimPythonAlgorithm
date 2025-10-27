@@ -4,6 +4,9 @@
 测试AirSim随机位置飞行
 生成5个随机目标点，测试无人机能否到达
 
+使用速度控制方式（moveByVelocityAsync）而非位置控制（moveToPositionAsync）
+以避免高度方向的固有偏差（约0.5m）
+
 配置参数说明（在 RandomFlightTester 类中修改）：
 - FLIGHT_SPEED: 飞行速度（m/s），默认0.5，越小越慢越稳定
 - POSITION_TOLERANCE: 位置容差（m），默认0.3，越小越精确但耗时更长
@@ -167,22 +170,15 @@ class RandomFlightTester:
         self.client.cancelLastTask(self.vehicle_name)
         time.sleep(0.3)
         
-        # 发送移动指令
-        logger.info(f"发送移动指令（速度: {self.FLIGHT_SPEED} m/s，容差: {self.POSITION_TOLERANCE} m）...")
+        # 使用速度控制飞行
+        logger.info(f"使用速度控制飞行（速度: {self.FLIGHT_SPEED} m/s，容差: {self.POSITION_TOLERANCE} m）...")
         start_time = time.time()
         
-        self.client.moveToPositionAsync(
-            target_x, target_y, target_z, self.FLIGHT_SPEED,
-            vehicle_name=self.vehicle_name
-        )
-        
         # 监控移动过程
-        logger.info("监控移动过程...")
+        logger.info("开始速度控制飞行...")
         min_distance = initial_distance
         last_report_time = start_time
-        no_movement_count = 0
         last_pos = start_pos
-        used_velocity_control = False
         
         while time.time() - start_time < timeout:
             # 获取当前状态
@@ -191,87 +187,82 @@ class RandomFlightTester:
             velocity = state.kinematics_estimated.linear_velocity
             
             # 计算距离目标的距离
-            distance = math.sqrt(
-                (target_x - current_pos.x_val)**2 +
-                (target_y - current_pos.y_val)**2 +
-                (target_z - current_pos.z_val)**2
-            )
+            dx = target_x - current_pos.x_val
+            dy = target_y - current_pos.y_val
+            dz = target_z - current_pos.z_val
+            distance = math.sqrt(dx**2 + dy**2 + dz**2)
             
             # 更新最小距离
             if distance < min_distance:
                 min_distance = distance
             
-            # 计算速度
+            # 计算当前速度
             speed = math.sqrt(velocity.x_val**2 + velocity.y_val**2 + velocity.z_val**2)
             
-            # 检查位置变化
-            position_change = math.sqrt(
-                (current_pos.x_val - last_pos.x_val)**2 +
-                (current_pos.y_val - last_pos.y_val)**2 +
-                (current_pos.z_val - last_pos.z_val)**2
-            )
-            
-            if position_change < 0.01:
-                no_movement_count += 1
+            # 使用速度控制向目标飞行
+            if distance > self.POSITION_TOLERANCE:
+                # 计算单位方向向量和速度
+                vx = (dx / distance) * self.FLIGHT_SPEED
+                vy = (dy / distance) * self.FLIGHT_SPEED
+                vz = (dz / distance) * self.FLIGHT_SPEED
+                
+                # 发送速度控制指令（持续0.5秒）
+                self.client.moveByVelocityAsync(
+                    vx, vy, vz, 0.5,
+                    vehicle_name=self.vehicle_name
+                )
+                
+                # 每2秒报告一次进度
+                if time.time() - last_report_time >= 2.0:
+                    logger.info(f"  进度: 距离={distance:.2f}m, 速度={speed:.2f}m/s, "
+                               f"位置=({current_pos.x_val:.2f}, {current_pos.y_val:.2f}, {current_pos.z_val:.2f})")
+                    last_report_time = time.time()
             else:
-                no_movement_count = 0
-                last_pos = current_pos
-            
-            # 如果10次检查都没移动，使用速度控制
-            if no_movement_count >= 10 and not used_velocity_control:
-                logger.warning("⚠️ moveToPositionAsync可能失效，切换到速度控制...")
-                dx = target_x - current_pos.x_val
-                dy = target_y - current_pos.y_val
-                dz = target_z - current_pos.z_val
-                dist = math.sqrt(dx**2 + dy**2 + dz**2)
+                # 已到达，停止并悬停
+                self.client.moveByVelocityAsync(0, 0, 0, 1.0, vehicle_name=self.vehicle_name)
+                time.sleep(1)
                 
-                if dist > 0.1:
-                    vx = (dx / dist) * self.FLIGHT_SPEED
-                    vy = (dy / dist) * self.FLIGHT_SPEED
-                    vz = (dz / dist) * self.FLIGHT_SPEED
-                    duration = dist / self.FLIGHT_SPEED
-                    
-                    logger.info(f"使用速度控制: 方向({vx:.2f}, {vy:.2f}, {vz:.2f}), 持续{duration:.1f}秒")
-                    self.client.moveByVelocityAsync(vx, vy, vz, duration, vehicle_name=self.vehicle_name)
-                    used_velocity_control = True
-                    no_movement_count = 0
-            
-            # 每2秒报告一次
-            if time.time() - last_report_time >= 2.0:
-                logger.info(f"  进度: 距离={distance:.2f}m, 速度={speed:.2f}m/s, "
-                           f"位置=({current_pos.x_val:.2f}, {current_pos.y_val:.2f}, {current_pos.z_val:.2f})")
-                last_report_time = time.time()
-            
-            # 检查是否到达
-            if distance < self.POSITION_TOLERANCE:
-                # 计算向量差
-                dx = current_pos.x_val - target_x
-                dy = current_pos.y_val - target_y
-                dz = current_pos.z_val - target_z
+                # 重新获取最终位置
+                state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
+                final_pos = state.kinematics_estimated.position
                 
-                logger.info(f"✓ 到达目标！最终距离: {distance:.2f}m")
-                logger.info(f"  向量差: ΔX={dx:.3f}m, ΔY={dy:.3f}m, ΔZ={dz:.3f}m")
+                # 计算最终向量差
+                final_dx = final_pos.x_val - target_x
+                final_dy = final_pos.y_val - target_y
+                final_dz = final_pos.z_val - target_z
+                final_distance = math.sqrt(final_dx**2 + final_dy**2 + final_dz**2)
+                
+                logger.info(f"✓ 到达目标！最终距离: {final_distance:.3f}m")
+                logger.info(f"  向量差: ΔX={final_dx:+.3f}m, ΔY={final_dy:+.3f}m, ΔZ={final_dz:+.3f}m")
                 elapsed_time = time.time() - start_time
                 
                 result = {
                     'point_id': point_id,
                     'target': (target_x, target_y, target_z),
-                    'final_position': (current_pos.x_val, current_pos.y_val, current_pos.z_val),
+                    'final_position': (final_pos.x_val, final_pos.y_val, final_pos.z_val),
                     'reached': True,
-                    'final_distance': distance,
+                    'final_distance': final_distance,
                     'min_distance': min_distance,
-                    'vector_error': (dx, dy, dz),
+                    'vector_error': (final_dx, final_dy, final_dz),
                     'time_taken': elapsed_time,
-                    'used_velocity_control': used_velocity_control
+                    'used_velocity_control': True
                 }
                 
-                # 稳定2秒
-                time.sleep(2)
+                # 稳定1秒后返回
+                time.sleep(1)
                 return result
             
-            time.sleep(0.2)
+            # 控制循环频率（每0.5秒更新一次）
+            time.sleep(0.5)
         
-        # 超时 - 获取最终位置
+        # 超时 - 停止并获取最终位置
+        logger.warning(f"⚠️ 超时！最小接近距离: {min_distance:.3f}m")
+        
+        # 停止移动
+        self.client.moveByVelocityAsync(0, 0, 0, 1.0, vehicle_name=self.vehicle_name)
+        time.sleep(1)
+        
+        # 获取最终位置
         state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
         final_pos = state.kinematics_estimated.position
         
@@ -279,12 +270,10 @@ class RandomFlightTester:
         dx = final_pos.x_val - target_x
         dy = final_pos.y_val - target_y
         dz = final_pos.z_val - target_z
-        
         final_distance = math.sqrt(dx**2 + dy**2 + dz**2)
         
-        logger.warning(f"⚠️ 超时！最小接近距离: {min_distance:.2f}m")
         logger.warning(f"  最终位置: ({final_pos.x_val:.2f}, {final_pos.y_val:.2f}, {final_pos.z_val:.2f})")
-        logger.warning(f"  向量差: ΔX={dx:.3f}m, ΔY={dy:.3f}m, ΔZ={dz:.3f}m")
+        logger.warning(f"  向量差: ΔX={dx:+.3f}m, ΔY={dy:+.3f}m, ΔZ={dz:+.3f}m")
         elapsed_time = time.time() - start_time
         
         result = {
@@ -296,7 +285,7 @@ class RandomFlightTester:
             'min_distance': min_distance,
             'vector_error': (dx, dy, dz),
             'time_taken': elapsed_time,
-            'used_velocity_control': used_velocity_control
+            'used_velocity_control': True
         }
         
         return result
@@ -304,9 +293,10 @@ class RandomFlightTester:
     def run_test(self, test_points):
         """运行测试"""
         logger.info("=" * 60)
-        logger.info("开始随机位置飞行测试")
+        logger.info("开始随机位置飞行测试（使用速度控制）")
         logger.info("=" * 60)
         logger.info(f"配置: 飞行速度={self.FLIGHT_SPEED} m/s, 位置容差={self.POSITION_TOLERANCE} m")
+        logger.info(f"控制方式: moveByVelocityAsync (速度方向控制)")
         logger.info("=" * 60)
         
         for point in test_points:
@@ -336,7 +326,6 @@ class RandomFlightTester:
         logger.info("-" * 60)
         for result in self.test_results:
             status = "✓ 成功" if result['reached'] else "✗ 失败"
-            velocity_used = "是" if result['used_velocity_control'] else "否"
             vec_err = result['vector_error']
             
             logger.info(f"点{result['point_id']}: {status}")
@@ -346,7 +335,6 @@ class RandomFlightTester:
             logger.info(f"  最终距离: {result['final_distance']:.3f}m")
             logger.info(f"  最小距离: {result['min_distance']:.3f}m")
             logger.info(f"  耗时: {result['time_taken']:.1f}秒")
-            logger.info(f"  使用速度控制: {velocity_used}")
             logger.info("")
         
         logger.info("=" * 60)
