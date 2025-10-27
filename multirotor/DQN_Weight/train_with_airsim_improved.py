@@ -160,13 +160,13 @@ def main():
         # reset_unity=True: 标准episode训练，每次重置Unity环境
         # reset_unity=False: 连续学习，不重置Unity环境
         # step_duration: 每步让无人机飞行的时长（秒）
-        STEP_DURATION = 5.0  # 每步飞行5秒
+        STEP_DURATION = 60.0  # 每步飞行60秒
         
         env = SimpleWeightEnv(
             server=server,
             drone_name=DRONE_NAMES[0],
             reset_unity=True,  # 使用标准模式
-            step_duration=STEP_DURATION  # 每步飞行5秒
+            step_duration=STEP_DURATION  # 每步飞行60秒
         )
         print(f"[OK] 环境创建成功")
         print(f"  - 模式: 标准episode训练（每次重置Unity）")

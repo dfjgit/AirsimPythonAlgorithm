@@ -102,7 +102,7 @@ class PathFlightController:
             # 提取路径点（假设路径在"1"键下）
             if "1" in data and isinstance(data["1"], list):
                 path_points = data["1"]
-                logger.info(f"成功加载路径文件 {path_file}，包含 {len(path_points)} 个路径点")
+                logger.info(f"✓ 加载路径文件，包含 {len(path_points)} 个路径点")
                 return path_points
             else:
                 logger.error(f"路径文件 {path_file} 格式不正确")
@@ -121,41 +121,30 @@ class PathFlightController:
             # 确认连接
             self.client.confirmConnection()
             self.connected = True
-            logger.info("成功连接到AirSim模拟器")
+            logger.info("✓ 连接到AirSim")
             
             self.client.reset()
-            # 启用API控制
+            # 启用API控制和解锁
             self.client.enableApiControl(True, self.vehicle_name)
-            logger.info(f"无人机{self.vehicle_name}API控制已启用")
-            
-            # 解锁无人机
             self.client.armDisarm(True, self.vehicle_name)
-            logger.info(f"无人机{self.vehicle_name}已解锁")
             
-            # 起飞前记录位置（这是地面的Z坐标）
+            # 起飞前记录地面Z坐标
             state_before_takeoff = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
             pos_before = state_before_takeoff.kinematics_estimated.position
-            self.ground_z = pos_before.z_val  # 记录地面Z坐标
-            logger.info(f"起飞前位置(NED): X={pos_before.x_val:.4f}, Y={pos_before.y_val:.4f}, Z={pos_before.z_val:.4f}")
-            logger.info(f"🔵 地面Z坐标: {self.ground_z:.4f}m (这是地面的参考点)")
+            self.ground_z = pos_before.z_val
+            logger.info(f"地面Z坐标: {self.ground_z:.4f}m")
             
             # 起飞
             self.client.takeoffAsync(vehicle_name=self.vehicle_name).join()
-            logger.info(f"无人机{self.vehicle_name}起飞完成")
-            
-            # 等待起飞稳定
             time.sleep(2)
             
             # 起飞后记录位置
             state_after_takeoff = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
             pos_after = state_after_takeoff.kinematics_estimated.position
-            self.takeoff_z = pos_after.z_val  # 记录起飞后Z坐标
-            takeoff_height_from_ground = -(pos_after.z_val - self.ground_z)  # 相对地面的高度
-            logger.info(f"起飞后位置(NED): X={pos_after.x_val:.4f}, Y={pos_after.y_val:.4f}, Z={pos_after.z_val:.4f}")
-            logger.info(f"🔵 起飞后离地高度: {takeoff_height_from_ground:.4f}m")
-            logger.info(f"⚠️ 重要：后续高度将相对于地面Z={self.ground_z:.4f}计算")
-            
-            logger.info("无人机设置完成，准备飞行")
+            self.takeoff_z = pos_after.z_val
+            takeoff_height_from_ground = -(pos_after.z_val - self.ground_z)
+            logger.info(f"✓ 起飞完成，离地高度: {takeoff_height_from_ground:.2f}m")
+            logger.info(f"准备飞行...")
             return True
             
         except Exception as e:
@@ -197,8 +186,8 @@ class PathFlightController:
                 # 计算合适的速度
                 speed = self.calculate_appropriate_speed(distance)
                 
-                logger.info(f"飞行到路径点 {i+1}/{len(path_points)}: ({x:.3f}, {y:.3f}, {z:.3f}) -> AirSim坐标({x:.3f}, {y:.3f}, {airsim_z:.3f})")
-                logger.info(f"  距离: {distance:.3f}m, 速度: {speed:.2f} m/s")
+                if i % 5 == 0 or i == len(path_points) - 1:
+                    logger.info(f"路径点 {i+1}/{len(path_points)}: ({x:.2f}, {y:.2f}, {z:.2f}), 距离: {distance:.2f}m")
                 
                 # 移动到指定位置
                 self.client.moveToPositionAsync(
@@ -208,21 +197,17 @@ class PathFlightController:
                 # 等待到达目标点并稳定
                 self._wait_for_position_reached(x, y, airsim_z)
                 
-                # 记录实际位置（转换为相对地面的高度）
+                # 记录实际位置
                 state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
                 position = state.kinematics_estimated.position
-                # 转换为相对地面的高度
                 actual_z = -(position.z_val - self.ground_z)
                 self.actual_path.append({
                     'x': position.x_val,
                     'y': position.y_val, 
-                    'z': actual_z,  # 相对地面的高度
+                    'z': actual_z,
                     'time': point.get('time', i * 0.2)
                 })
                 
-                logger.info(f"实际到达位置: ({position.x_val:.3f}, {position.y_val:.3f}, {actual_z:.3f})")
-                
-                # 短暂等待
                 time.sleep(0.1)
             
             logger.info(f"{path_name} 飞行完成")
@@ -254,108 +239,163 @@ class PathFlightController:
         start_airsim_z = self.ground_z - start_z  # 地面Z - 目标高度 = 目标Z
         end_airsim_z = self.ground_z - end_z
         
-        logger.info(f"🔵 坐标转换:")
-        logger.info(f"   地面Z参考: {self.ground_z:.4f}m")
-        logger.info(f"   起点高度: {start_z:.4f}m → AirSim Z: {start_airsim_z:.4f}m")
-        logger.info(f"   终点高度: {end_z:.4f}m → AirSim Z: {end_airsim_z:.4f}m")
-        
-        logger.info(f"开始直线飞行 {path_name}")
-        logger.info(f"起点: ({start_x:.3f}, {start_y:.3f}, {start_z:.3f})")
-        logger.info(f"终点: ({end_x:.3f}, {end_y:.3f}, {end_z:.3f})")
-        logger.info(f"将按照 {len(path_points)} 个时间戳采样记录实际位置")
+        logger.info(f"开始直线飞行: 起点({start_x:.2f}, {start_y:.2f}, {start_z:.2f}) -> 终点({end_x:.2f}, {end_y:.2f}, {end_z:.2f})")
+        logger.info(f"采样点数: {len(path_points)}")
         
         self.actual_path = []
         
         try:
-            # 移动到起点并校准位置
-            logger.info("=" * 60)
-            logger.info("第一步：移动到起点并校准位置")
-            logger.info(f"目标起点 - X:{start_x:.4f}, Y:{start_y:.4f}, Z(高度):{start_z:.4f}")
-            logger.info(f"AirSim坐标 - X:{start_x:.4f}, Y:{start_y:.4f}, Z(NED):{start_airsim_z:.4f}")
-            logger.info(f"位置容差: {self.position_tolerance} m")
-            logger.info("=" * 60)
- 
             # 移动到起点
-            # 记录当前位置
+            logger.info("=" * 60)
+            logger.info("步骤1: 移动到起点")
+            
+            # 获取当前位置
             current_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
             current_p = current_state.kinematics_estimated.position
-            logger.info(f"当前位置(NED): X={current_p.x_val:.4f}, Y={current_p.y_val:.4f}, Z={current_p.z_val:.4f}")
             
-            # 计算当前位置到目标起点的距离
+            # 打印当前位置和目标位置（带详细信息）
+            logger.info(f"当前位置(NED): X={current_p.x_val:.4f}, Y={current_p.y_val:.4f}, Z={current_p.z_val:.4f}")
+            logger.info(f"目标起点(路径): X={start_x:.4f}, Y={start_y:.4f}, Z(高度)={start_z:.4f}")
+            logger.info(f"目标起点(NED): X={start_x:.4f}, Y={start_y:.4f}, Z={start_airsim_z:.4f}")
+            logger.info(f"地面Z参考: {self.ground_z:.4f}")
+            
+            # 计算距离
             distance_to_target = math.sqrt(
                 (current_p.x_val - start_x)**2 +
                 (current_p.y_val - start_y)**2 +
                 (current_p.z_val - start_airsim_z)**2
             )
             
-            # 根据距离计算合适的速度
-            appropriate_speed = self.calculate_appropriate_speed(distance_to_target)
-            logger.info(f"到起点距离: {distance_to_target:.4f}m，使用速度: {appropriate_speed:.2f} m/s")
+            logger.info(f"到起点3D距离: {distance_to_target:.4f}m")
             
+            # 检查无人机状态
+            logger.info("检查无人机状态...")
+            is_api_enabled = self.client.isApiControlEnabled(self.vehicle_name)
+            logger.info(f"  API控制状态: {is_api_enabled}")
             
-            self.client.moveToPositionAsync(
-               start_x, start_y, -0.48, 0.5, vehicle_name=self.vehicle_name,lookahead=0.3
-            )
-            time.sleep(10)
-            # 发送移动到起点的指令
-            logger.info(f"发送移动指令: moveToPositionAsync(x={start_x:.4f}, y={start_y:.4f}, z={start_airsim_z:.4f}, speed={appropriate_speed:.2f})")
-            move_task = self.client.moveToPositionAsync(
-                start_x, start_y, -0.48, 0.5, vehicle_name=self.vehicle_name,lookahead=0.3
-            )
+            # 如果API控制未启用，重新启用
+            if not is_api_enabled:
+                logger.warning("⚠️ API控制未启用，正在重新启用...")
+                self.client.enableApiControl(True, self.vehicle_name)
+                time.sleep(0.5)
             
-            # 等待移动任务完成
-            logger.info("等待移动任务完成...")
-            move_task.join()
-            logger.info("✓ 移动任务已完成")
-            time.sleep(10)
-            # 记录任务完成后的位置和速度
-            after_move_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
-            after_move_p = after_move_state.kinematics_estimated.position
-            after_move_v = after_move_state.kinematics_estimated.linear_velocity
-            after_move_speed = math.sqrt(after_move_v.x_val**2 + after_move_v.y_val**2 + after_move_v.z_val**2)
-            logger.info(f"移动完成后位置(NED): X={after_move_p.x_val:.4f}, Y={after_move_p.y_val:.4f}, Z={after_move_p.z_val:.4f}")
-            logger.info(f"移动完成后速度: {after_move_speed:.4f} m/s")
+            # 如果距离太近，不需要移动
+            if distance_to_target < 0.3:
+                logger.info(f"✓ 已在起点附近 (距离={distance_to_target:.3f}m < 0.3m)，无需移动")
+            else:
+                # 方案1: 先尝试取消所有之前的移动指令
+                logger.info("取消之前的移动指令...")
+                self.client.cancelLastTask(self.vehicle_name)
+                time.sleep(0.5)
+                
+                # 方案2: 使用 moveToPositionAsync（不带lookahead参数）
+                logger.info(f"发送移动指令: moveToPositionAsync(x={start_x:.4f}, y={start_y:.4f}, z={start_airsim_z:.4f}, speed=1)")
+                move_task = self.client.moveToPositionAsync(
+                    start_x, start_y, start_airsim_z, 1, 
+                    vehicle_name=self.vehicle_name
+                )
+                
+                # 主动等待到达目标位置（不依赖join）
+                logger.info("实时监控移动进度...")
+                max_wait_time = 30.0  # 最多等待30秒
+                wait_start = time.time()
+                last_report_time = wait_start
+                no_movement_count = 0  # 记录无移动次数
+                last_position = current_p
+                
+                while time.time() - wait_start < max_wait_time:
+                    current_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
+                    current_pos = current_state.kinematics_estimated.position
+                    
+                    # 计算当前距离目标的距离
+                    dist_to_target = math.sqrt(
+                        (current_pos.x_val - start_x)**2 +
+                        (current_pos.y_val - start_y)**2 +
+                        (current_pos.z_val - start_airsim_z)**2
+                    )
+                    
+                    # 检查是否有移动
+                    position_change = math.sqrt(
+                        (current_pos.x_val - last_position.x_val)**2 +
+                        (current_pos.y_val - last_position.y_val)**2 +
+                        (current_pos.z_val - last_position.z_val)**2
+                    )
+                    
+                    if position_change < 0.01:  # 几乎没有移动
+                        no_movement_count += 1
+                    else:
+                        no_movement_count = 0
+                        last_position = current_pos
+                    
+                    # 如果连续10次检查都没有移动，说明moveToPositionAsync可能失效
+                    if no_movement_count >= 10:
+                        logger.warning("⚠️ 检测到无人机未移动，尝试使用备选方案...")
+                        # 备选方案：使用moveByVelocityAsync
+                        dx = start_x - current_pos.x_val
+                        dy = start_y - current_pos.y_val
+                        dz = start_airsim_z - current_pos.z_val
+                        distance = math.sqrt(dx**2 + dy**2 + dz**2)
+                        
+                        if distance > 0.1:
+                            # 计算单位方向向量
+                            vx = (dx / distance) * 1.0  # 速度1 m/s
+                            vy = (dy / distance) * 1.0
+                            vz = (dz / distance) * 1.0
+                            duration = distance / 1.0  # 按1m/s计算时间
+                            
+                            logger.info(f"使用速度控制: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, 持续{duration:.1f}秒")
+                            self.client.moveByVelocityAsync(
+                                vx, vy, vz, duration,
+                                vehicle_name=self.vehicle_name
+                            )
+                        no_movement_count = 0
+                    
+                    # 每2秒报告一次进度
+                    if time.time() - last_report_time >= 2.0:
+                        logger.info(f"  移动中... 距目标: {dist_to_target:.3f}m, "
+                                   f"当前位置: ({current_pos.x_val:.2f}, {current_pos.y_val:.2f}, {current_pos.z_val:.2f})")
+                        last_report_time = time.time()
+                    
+                    # 检查是否到达目标（容差0.5米）
+                    if dist_to_target < 0.5:
+                        logger.info(f"✓ 到达起点，剩余距离: {dist_to_target:.3f}m")
+                        break
+                    
+                    time.sleep(0.2)
+                
+                # 等待稳定
+                time.sleep(2)
+                
+                # 检查最终位置
+                after_state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
+                after_p = after_state.kinematics_estimated.position
+                logger.info(f"最终位置(NED): X={after_p.x_val:.4f}, Y={after_p.y_val:.4f}, Z={after_p.z_val:.4f}")
+                
+                # 计算实际移动的距离
+                moved_distance = math.sqrt(
+                    (after_p.x_val - current_p.x_val)**2 +
+                    (after_p.y_val - current_p.y_val)**2 +
+                    (after_p.z_val - current_p.z_val)**2
+                )
+                logger.info(f"实际移动距离: {moved_distance:.4f}m")
             
-            # 验证最终位置
-            logger.info("=" * 60)
+            # 验证起点位置
             state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
             current_pos = state.kinematics_estimated.position
-            # 转换为相对地面的高度
             actual_start_z = -(current_pos.z_val - self.ground_z)
             
-            # 计算位置误差
             dx = current_pos.x_val - start_x
             dy = current_pos.y_val - start_y
             dz = actual_start_z - start_z
             distance_error = math.sqrt(dx**2 + dy**2 + dz**2)
             
-            logger.info("起点位置验证:")
-            logger.info(f"  目标位置(路径坐标): X={start_x:.4f}, Y={start_y:.4f}, Z={start_z:.4f}")
-            logger.info(f"  AirSim返回位置(NED): X={current_pos.x_val:.4f}, Y={current_pos.y_val:.4f}, Z={current_pos.z_val:.4f}")
-            logger.info(f"  实际位置(转换后): X={current_pos.x_val:.4f}, Y={current_pos.y_val:.4f}, Z={actual_start_z:.4f}")
-            logger.info(f"  位置偏差: ΔX={dx:.4f}, ΔY={dy:.4f}, ΔZ={dz:.4f}")
-            logger.info(f"  3D距离误差: {distance_error:.4f} m")
-            
-            # 检查位置误差（仅作为参考，不影响继续执行）
             if distance_error <= self.position_tolerance:
-                logger.info(f"✓ 起点到位精确！误差 {distance_error:.4f}m ≤ 容差 {self.position_tolerance}m")
+                logger.info(f"✓ 到达起点，误差: {distance_error:.3f}m")
             else:
-                logger.warning(f"⚠️ 起点有偏差！误差 {distance_error:.4f}m > 容差 {self.position_tolerance}m")
-                
-                # 特别检查高度偏差
-                if abs(dz) > 0.3:
-                    logger.warning(f"⚠️ 特别注意：高度偏差很大 (ΔZ={dz:.4f}m)！")
-                    logger.warning(f"   目标高度(路径坐标): {start_z:.4f}m")
-                    logger.warning(f"   目标Z(AirSim NED): {start_airsim_z:.4f}m")
-                    logger.warning(f"   实际Z(AirSim NED): {current_pos.z_val:.4f}m")
-                    logger.warning(f"   实际高度(转换后): {actual_start_z:.4f}m")
+                logger.warning(f"⚠️ 起点偏差: {distance_error:.3f}m (ΔX={dx:.2f}, ΔY={dy:.2f}, ΔZ={dz:.2f})")
             
-            logger.info("=" * 60)
-            
-            # 在起点停稳3秒
-            logger.info("\n在起点停稳3秒...")
+            logger.info("在起点稳定3秒...")
             time.sleep(3)
-            logger.info("停稳完成，准备开始飞行")
             
             # 获取起点和终点的时间
             start_time = path_points[0].get('time', 0)
@@ -374,13 +414,9 @@ class PathFlightController:
             theoretical_speed = straight_distance / flight_duration if flight_duration > 0 else 0
             
             logger.info("=" * 60)
-            logger.info("第二步：开始直线飞行到终点")
-            logger.info(f"起点到终点直线距离: {straight_distance:.4f}m")
-            logger.info(f"预计飞行时间: {flight_duration:.2f}秒")
-            logger.info(f"理论所需速度: {theoretical_speed:.2f} m/s")
-            logger.info(f"实际使用速度: {flight_speed:.2f} m/s (限制在 {self.min_speed}-{self.max_speed} m/s)")
-            logger.info(f"终点位置: X={end_x:.4f}, Y={end_y:.4f}, Z(高度)={end_z:.4f}")
-            logger.info(f"发送移动指令: moveToPositionAsync(x={end_x:.4f}, y={end_y:.4f}, z={end_airsim_z:.4f}, speed={flight_speed:.2f})")
+            logger.info("步骤2: 直线飞行到终点")
+            logger.info(f"终点: ({end_x:.2f}, {end_y:.2f}, {end_z:.2f})")
+            logger.info(f"距离: {straight_distance:.2f}m, 时间: {flight_duration:.1f}s, 速度: {flight_speed:.2f}m/s")
             logger.info("=" * 60)
             
             # 开始异步飞行到终点
@@ -416,25 +452,17 @@ class PathFlightController:
                     'time': point_time
                 })
                 
-                if i % 10 == 0 or i == len(path_points) - 1:
-                    logger.info(f"采样点 {i+1}/{len(path_points)}: "
-                              f"时间={point_time:.3f}s, "
-                              f"AirSim位置(NED)=({position.x_val:.3f}, {position.y_val:.3f}, {position.z_val:.3f}), "
-                              f"转换后位置=({position.x_val:.3f}, {position.y_val:.3f}, {actual_z:.3f})")
+                if i % 20 == 0 or i == len(path_points) - 1:
+                    logger.info(f"采样 {i+1}/{len(path_points)}: ({position.x_val:.2f}, {position.y_val:.2f}, {actual_z:.2f})")
             
-            # 等待飞行任务完成（设置超时）
-            logger.info("等待飞行到终点任务完成...")
-            logger.info(f"(采样已完成，共记录 {len(self.actual_path)} 个位置数据点)")
+            # 等待飞行到终点
+            logger.info(f"采样完成，共记录 {len(self.actual_path)} 个数据点")
+            logger.info("等待到达终点...")
             
             try:
-                # 使用超时等待，避免无限期卡住
-                # 计算预期剩余时间：如果还没到终点，给足够的时间
-                max_wait_time = 30.0  # 最多等待30秒
-                logger.info(f"最多等待 {max_wait_time} 秒...")
-                
+                max_wait_time = 30.0
                 wait_start = time.time()
                 while time.time() - wait_start < max_wait_time:
-                    # 检查是否接近终点
                     state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
                     pos = state.kinematics_estimated.position
                     distance_to_end = math.sqrt(
@@ -443,25 +471,19 @@ class PathFlightController:
                         (pos.z_val - end_airsim_z)**2
                     )
                     
-                    if distance_to_end < 0.5:  # 距离终点小于0.5米
-                        logger.info(f"✓ 已接近终点，距离: {distance_to_end:.3f}m")
+                    if distance_to_end < 0.5:
+                        logger.info(f"✓ 到达终点，距离: {distance_to_end:.2f}m")
                         break
                     
-                    # 每秒输出一次进度
-                    if int(time.time() - wait_start) % 2 == 0:
-                        logger.info(f"等待中...距离终点: {distance_to_end:.3f}m")
+                    if int(time.time() - wait_start) % 3 == 0:
+                        logger.info(f"距终点: {distance_to_end:.2f}m")
                     
                     time.sleep(0.5)
                 
-                # 尝试 join，但不要永久等待
-                logger.info("正在完成飞行任务...")
-                # 由于可能还在移动，这里直接继续，不强制等待join完成
-                
             except Exception as e:
-                logger.warning(f"等待飞行任务时出错: {str(e)}")
+                logger.warning(f"等待任务时出错: {str(e)}")
             
-            logger.info(f"{path_name} 直线飞行和采样完成")
-            logger.info(f"实际记录了 {len(self.actual_path)} 个位置数据点")
+            logger.info(f"✓ {path_name} 飞行完成，记录 {len(self.actual_path)} 个数据点")
             
             return True
             
@@ -473,10 +495,8 @@ class PathFlightController:
         """等待无人机到达目标位置"""
         start_time = time.time()
         tolerance = self.position_tolerance
-        stable_count = 0  # 稳定计数器
-        required_stable_count = 5  # 需要连续5次检查都稳定
-        
-        logger.info(f"等待到达目标位置(AirSim NED坐标): X={target_x:.4f}, Y={target_y:.4f}, Z={target_z:.4f}, 容差={tolerance}m")
+        stable_count = 0
+        required_stable_count = 5
         
         while time.time() - start_time < timeout:
             try:
@@ -484,38 +504,31 @@ class PathFlightController:
                 position = state.kinematics_estimated.position
                 velocity = state.kinematics_estimated.linear_velocity
                 
-                # 计算距离
                 distance = math.sqrt(
                     (position.x_val - target_x)**2 + 
                     (position.y_val - target_y)**2 + 
                     (position.z_val - target_z)**2
                 )
                 
-                # 计算速度
                 speed = math.sqrt(
                     velocity.x_val**2 + velocity.y_val**2 + velocity.z_val**2
                 )
                 
-                # 检查是否到达并稳定
                 if distance <= tolerance and speed < 0.2:
                     stable_count += 1
-                    logger.debug(f"稳定检查 {stable_count}/{required_stable_count}: 距离={distance:.4f}m, 速度={speed:.4f}m/s")
-                    
                     if stable_count >= required_stable_count:
-                        logger.info(f"✓ 已到达目标位置并稳定: 距离={distance:.4f}m, 速度={speed:.4f}m/s")
+                        logger.info(f"✓ 到达目标，距离: {distance:.3f}m")
                         return True
                 else:
-                    stable_count = 0  # 重置计数器
-                    if (time.time() - start_time) % 2 < 0.1:  # 每2秒输出一次进度
-                        logger.debug(f"移动中... 距离={distance:.4f}m, 速度={speed:.4f}m/s")
+                    stable_count = 0
                 
                 time.sleep(0.1)
                 
             except Exception as e:
-                logger.warning(f"检查位置时出错: {str(e)}")
+                logger.warning(f"检查位置出错: {str(e)}")
                 time.sleep(0.1)
         
-        # 超时，记录最终位置
+        # 超时
         state = self.client.getMultirotorState(vehicle_name=self.vehicle_name)
         position = state.kinematics_estimated.position
         final_distance = math.sqrt(
@@ -523,10 +536,7 @@ class PathFlightController:
             (position.y_val - target_y)**2 + 
             (position.z_val - target_z)**2
         )
-        logger.warning(f"⚠️ 等待超时！")
-        logger.warning(f"   目标位置(NED): X={target_x:.4f}, Y={target_y:.4f}, Z={target_z:.4f}")
-        logger.warning(f"   当前位置(NED): X={position.x_val:.4f}, Y={position.y_val:.4f}, Z={position.z_val:.4f}")
-        logger.warning(f"   距离目标: {final_distance:.4f}m")
+        logger.warning(f"⚠️ 等待超时，距目标: {final_distance:.3f}m")
         return False
     
     def land_and_disconnect(self) -> bool:
@@ -538,21 +548,14 @@ class PathFlightController:
             
             # 降落
             self.client.landAsync(vehicle_name=self.vehicle_name).join()
-            logger.info(f"无人机{self.vehicle_name}降落完成")
-            
-            # 等待降落稳定
             time.sleep(2)
             
-            # 上锁
+            # 上锁并禁用API控制
             self.client.armDisarm(False, self.vehicle_name)
-            logger.info(f"无人机{self.vehicle_name}已上锁")
-            
-            # 禁用API控制
             self.client.enableApiControl(False, self.vehicle_name)
-            logger.info(f"无人机{self.vehicle_name}API控制已禁用")
             
             self.connected = False
-            logger.info("无人机操作完成")
+            logger.info("✓ 降落完成")
             return True
             
         except Exception as e:
@@ -583,7 +586,7 @@ class PathComparator:
     def set_actual_path(self, actual_path: List[Dict[str, float]]):
         """设置实际飞行路径"""
         self.actual_path_data = actual_path
-        logger.info(f"设置实际飞行路径: {len(self.actual_path_data)} 个点")
+        logger.info(f"✓ 设置实际路径: {len(self.actual_path_data)} 个点")
     
     def calculate_path_statistics(self, path_data: List[Dict[str, float]], path_name: str) -> Dict[str, float]:
         """计算路径统计信息"""
@@ -743,7 +746,6 @@ class PathComparator:
             """
             
             print(stats_text)
-            logger.info("路径比较结果已打印")
             
             # 打印前10个点的详细误差
             if position_errors.get('point_errors'):
@@ -787,70 +789,57 @@ class PathComparator:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(comparison_data, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"路径比较数据已保存到: {filename}")
+            logger.info(f"✓ 数据已保存: {filename}")
             
         except Exception as e:
             logger.error(f"保存路径比较数据失败: {str(e)}")
 
 def main():
     """主函数"""
-    logger.info("开始无人机路径飞行和比较程序")
+    logger.info("=" * 60)
+    logger.info("无人机路径飞行和比较程序")
+    logger.info("=" * 60)
     
     # 获取脚本所在目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # 文件路径
     path1_file = os.path.join(script_dir, "path1.json")
     
-    # 检查文件是否存在
     if not os.path.exists(path1_file):
         logger.error(f"路径文件 {path1_file} 不存在")
         return
     
-    # 创建路径比较器
+    # 创建路径比较器和飞行控制器
     comparator = PathComparator()
     if not comparator.load_expected_path(path1_file):
-        logger.error("加载预期路径文件失败")
         return
     
-    # 创建飞行控制器
     flight_controller = PathFlightController()
     
     try:
         # 连接并设置无人机
         if not flight_controller.connect_and_setup():
-            logger.error("无人机设置失败")
             return
         
         # 按照Path1的起点和终点飞行直线
-        logger.info("=" * 50)
-        logger.info("开始按照 Path1 的起点和终点飞行直线")
-        logger.info("=" * 50)
         expected_path_points = comparator.expected_path_data
         if flight_controller.fly_straight_with_sampling(expected_path_points, "Path1"):
-            # 保存实际飞行路径
             comparator.set_actual_path(flight_controller.actual_path)
-            logger.info("Path1 直线飞行完成")
         else:
-            logger.error("Path1 直线飞行失败")
+            logger.error("飞行失败")
             return
         
         # 降落
         flight_controller.land_and_disconnect()
         
         # 进行路径比较
-        logger.info("=" * 50)
-        logger.info("开始对比 Path1 预期路径和直线飞行实际路径")
-        logger.info("=" * 50)
+        logger.info("=" * 60)
+        logger.info("路径对比分析")
+        logger.info("=" * 60)
         
         comparison_result = comparator.compare_paths()
         if comparison_result:
-            logger.info("路径比较完成")
-            logger.info(f"预期路径 (Path1完整路径) 统计: {comparison_result['expected_stats']}")
-            logger.info(f"实际路径 (起点到终点直线) 统计: {comparison_result['actual_stats']}")
-            logger.info(f"位置误差统计: 平均={comparison_result['position_errors'].get('avg_error', 0):.4f}m, "
-                       f"最大={comparison_result['position_errors'].get('max_error', 0):.4f}m")
-            logger.info(f"差异分析: {comparison_result['differences']}")
+            logger.info(f"✓ 平均误差: {comparison_result['position_errors'].get('avg_error', 0):.3f}m, "
+                       f"最大误差: {comparison_result['position_errors'].get('max_error', 0):.3f}m")
         
         # 打印比较结果
         comparator.print_path_comparison()
@@ -859,11 +848,9 @@ def main():
         output_file = os.path.join(script_dir, "path_comparison_data.json")
         comparator.save_path_data(output_file)
         
-        logger.info("=" * 50)
-        logger.info("程序执行完成")
-        logger.info(f"对比数据已保存到: {output_file}")
-        logger.info(f"说明: 对比了Path1预期路径与从起点到终点的直线飞行实际路径")
-        logger.info("=" * 50)
+        logger.info("=" * 60)
+        logger.info(f"✓ 程序完成，数据已保存: {output_file}")
+        logger.info("=" * 60)
         
     except KeyboardInterrupt:
         logger.info("用户中断程序")
