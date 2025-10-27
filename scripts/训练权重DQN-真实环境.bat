@@ -102,7 +102,7 @@ echo ============================================================
 echo.
 
 cd /d "%~dp0..\multirotor\DQN_Weight"
-python train_with_airsim.py
+python train_with_airsim_improved.py
 
 REM 检查训练结果
 if %ERRORLEVEL% EQU 0 (

@@ -54,21 +54,36 @@ class SimpleWeightEnv(gym.Env):
         # 记录上一步的状态
         self.prev_scanned_cells = 0
         self.step_count = 0
+        self.episode_count = 0  # 记录Episode编号
         
     def reset(self):
         """重置环境"""
         import time
+        import sys
+        
+        # Episode计数
+        self.episode_count += 1
+        
+        print(f"\n{'='*60}")
+        print(f"🔄 重置环境 - Episode #{self.episode_count}")
+        print(f"{'='*60}")
         
         # 如果有server
         if self.server:
             # 模式A：标准episode训练（重置Unity环境）
             if self.reset_unity:
-                print(f"\n[Episode] 重置Unity环境...")
+                print(f"🎮 正在重置Unity环境...")
                 self.server.reset_environment()
-                time.sleep(3)  # 等待Unity重置
-                print(f"[Episode] 重置完成，等待数据...")
+                
+                # 等待重置完成
+                for i in range(3):
+                    sys.stdout.write(f"\r  ⏳ 等待重置... {'.' * (i+1)}   ")
+                    sys.stdout.flush()
+                    time.sleep(1)
+                print(f"\r  ✅ Unity重置完成!     ")
             
             # 等待数据就绪
+            print(f"\n📡 等待数据同步...")
             max_wait = 10
             wait_time = 0
             while wait_time < max_wait:
@@ -76,14 +91,20 @@ class SimpleWeightEnv(gym.Env):
                 has_runtime = bool(self.server.unity_runtime_data.get(self.drone_name))
                 
                 if has_grid and has_runtime:
-                    print(f"[Episode] 数据就绪 (网格:{len(self.server.grid_data.cells)}个单元)")
+                    grid_count = len(self.server.grid_data.cells)
+                    print(f"✅ 数据就绪！")
+                    print(f"  🗺️  网格单元: {grid_count} 个")
+                    print(f"  🚁 无人机: {self.drone_name}")
                     break
                 
+                dots = '.' * (int(wait_time * 2) % 4)
+                sys.stdout.write(f"\r  等待数据{dots}    ")
+                sys.stdout.flush()
                 time.sleep(0.5)
                 wait_time += 0.5
             
             if wait_time >= max_wait:
-                print("[警告] 等待数据超时")
+                print(f"\r  ⚠️  等待数据超时     ")
         
         # 重置内部状态
         if self.reset_unity:
@@ -98,7 +119,17 @@ class SimpleWeightEnv(gym.Env):
         self.step_count = 0
         
         state = self._get_state()
-        print(f"[Episode] 开始新episode (max_steps={self.reward_config.max_steps})\n")
+        
+        print(f"\n{'='*60}")
+        print(f"🎯 开始 Episode #{self.episode_count}")
+        print(f"{'='*60}")
+        print(f"📊 配置:")
+        print(f"  • Episode编号: #{self.episode_count}")
+        print(f"  • 最大步数: {self.reward_config.max_steps}")
+        print(f"  • 每步时长: {self.step_duration}秒")
+        print(f"  • 预计时长: {self.reward_config.max_steps * self.step_duration / 60:.1f}分钟")
+        print(f"{'='*60}\n")
+        
         return state
     
     def step(self, action):
@@ -108,6 +139,9 @@ class SimpleWeightEnv(gym.Env):
         :param action: [α1, α2, α3, α4, α5] - 5个权重系数
         :return: observation, reward, done, info
         """
+        import time
+        import sys
+        
         # 确保action在有效范围内
         action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
         
@@ -120,13 +154,41 @@ class SimpleWeightEnv(gym.Env):
             'directionRetentionCoefficient': float(action[4])
         }
         
+        # 打印当前步骤信息
+        self.step_count += 1
+        progress_percent = (self.step_count / self.reward_config.max_steps) * 100
+        
+        print(f"\n{'─'*60}")
+        print(f"🔄 步骤 {self.step_count}/{self.reward_config.max_steps} ({progress_percent:.1f}%)")
+        print(f"{'─'*60}")
+        print(f"📊 设置权重:")
+        print(f"  • 斥力系数: {weights['repulsionCoefficient']:.3f}")
+        print(f"  • 熵系数:   {weights['entropyCoefficient']:.3f}")
+        print(f"  • 距离系数: {weights['distanceCoefficient']:.3f}")
+        print(f"  • Leader:   {weights['leaderRangeCoefficient']:.3f}")
+        print(f"  • 方向保持: {weights['directionRetentionCoefficient']:.3f}")
+        
         if self.server:
             # 设置权重（算法线程会使用新权重飞行）
             self.server.algorithms[self.drone_name].set_coefficients(weights)
             
-            # 等待无人机用新权重飞行一段时间
-            import time
-            time.sleep(self.step_duration)
+            # 倒计时等待无人机飞行
+            print(f"\n⏱️  等待无人机飞行 {self.step_duration:.0f} 秒...")
+            
+            # 使用倒计时显示
+            for remaining in range(int(self.step_duration), 0, -1):
+                elapsed = self.step_duration - remaining
+                bar_length = 40
+                filled = int((elapsed / self.step_duration) * bar_length)
+                bar = '█' * filled + '░' * (bar_length - filled)
+                
+                sys.stdout.write(f"\r  [{bar}] {remaining:2d}秒剩余  ")
+                sys.stdout.flush()
+                time.sleep(1)
+            
+            print(f"\r  [{'█'*40}] ✅ 完成!     ")
+        else:
+            time.sleep(0.1)  # 测试模式快速跳过
         
         # 获取新状态
         next_state = self._get_state()
@@ -135,12 +197,26 @@ class SimpleWeightEnv(gym.Env):
         reward = self._calculate_reward()
         
         # 判断是否结束
-        self.step_count += 1
         done = self.step_count >= self.reward_config.max_steps
         
-        # 每10步打印一次进度
-        if self.step_count % 10 == 0:
-            print(f"[Episode] 步数: {self.step_count}/{self.reward_config.max_steps}, 奖励: {reward:.2f}")
+        # 显示奖励信息
+        print(f"\n📈 本步奖励: {reward:+.2f}")
+        
+        if self.server:
+            with self.server.data_lock:
+                grid_data = self.server.grid_data
+                if grid_data and grid_data.cells:
+                    total_cells = len(grid_data.cells)
+                    scanned_cells = sum(1 for cell in grid_data.cells if cell.entropy < 30)
+                    scan_progress = (scanned_cells / total_cells) * 100
+                    print(f"🗺️  扫描进度: {scanned_cells}/{total_cells} ({scan_progress:.1f}%)")
+        
+        if done:
+            print(f"\n{'='*60}")
+            print(f"✅ Episode #{self.episode_count} 完成！共 {self.step_count} 步")
+            print(f"{'='*60}")
+            print(f"🔄 即将自动重置环境，开始下一个Episode...")
+            print(f"{'='*60}\n")
         
         # 额外信息
         info = {

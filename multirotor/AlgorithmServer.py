@@ -42,12 +42,13 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, enable_visualization: bool = True):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
         :param use_learned_weights: 是否使用学习的权重（DQN模型预测）
+        :param enable_visualization: 是否启用可视化（默认True）
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -88,6 +89,7 @@ class MultiDroneAlgorithmServer:
         
         # 可视化组件
         self.visualizer = None
+        self.enable_visualization = enable_visualization
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -98,8 +100,11 @@ class MultiDroneAlgorithmServer:
         if self.use_learned_weights:
             self._init_weight_predictor()
         
-        # 初始化可视化组件
-        self._init_visualization()
+        # 初始化可视化组件（如果启用）
+        if self.enable_visualization:
+            self._init_visualization()
+        else:
+            logger.info("可视化已禁用")
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
         """解析配置文件路径，默认使用项目根目录下的scanner_config.json"""
@@ -541,14 +546,14 @@ class MultiDroneAlgorithmServer:
             self.config_data.updateInterval, drone_name
         )
 
-        if not success:
-            logger.error(f"无人机{drone_name}移动指令发送失败")
-        else:
-            logger.debug(
-                f"无人机{drone_name}移动: Unity方向{direction} -> "
-                f"水平{horizontal_direction} + 垂直{vertical_direction} -> "
-                f"AirSim速度{velocity_airsim} (水平:{horizontal_speed_airsim:.2f}, 垂直:{abs(velocity_airsim.z):.2f})"
-            )
+        # if not success:
+        #     logger.error(f"无人机{drone_name}移动指令发送失败")
+        # else:
+        #     logger.debug(
+        #         f"无人机{drone_name}移动: Unity方向{direction} -> "
+        #         f"水平{horizontal_direction} + 垂直{vertical_direction} -> "
+        #         f"AirSim速度{velocity_airsim} (水平:{horizontal_speed_airsim:.2f}, 垂直:{abs(velocity_airsim.z):.2f})"
+        #     )
 
     def _check_drone_stuck(self, drone_name: str, current_pos: Vector3) -> None:
         """检查无人机是否卡住（位置长时间不变）"""
@@ -812,6 +817,8 @@ if __name__ == "__main__":
                         help='使用DQN学习的权重（需要先训练模型）')
     parser.add_argument('--drones', type=int, default=1,
                         help='无人机数量（默认1）')
+    parser.add_argument('--no-visualization', action='store_true',
+                        help='禁用可视化（默认启用）')
     args = parser.parse_args()
     
     try:
@@ -825,12 +832,14 @@ if __name__ == "__main__":
             logger.info("模式: DQN权重预测")
         else:
             logger.info("模式: 固定权重")
+        logger.info(f"可视化: {'禁用' if args.no_visualization else '启用'}")
         logger.info("=" * 60)
         
         # 创建服务器实例
         server = MultiDroneAlgorithmServer(
             drone_names=drone_names,
-            use_learned_weights=args.use_learned_weights
+            use_learned_weights=args.use_learned_weights,
+            enable_visualization=not args.no_visualization
         )
         
         if server.start():

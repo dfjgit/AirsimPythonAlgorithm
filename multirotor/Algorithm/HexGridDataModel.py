@@ -138,8 +138,8 @@ class HexGridDataModel:
                                     self.cells.append(new_cell)
                                     new_count += 1
                     
-                    if updated_count > 0 or new_count > 0:
-                        print(f"[Delta更新] 更新了 {updated_count} 个cells，新增了 {new_count} 个cells，总计 {len(self.cells)} 个")
+                    # if updated_count > 0 or new_count > 0:
+                    #     print(f"[Delta更新] 更新了 {updated_count} 个cells，新增了 {new_count} 个cells，总计 {len(self.cells)} 个")
             else:
                 logging.warning(f"HexGridDataModel.update_from_dict: cells字段不是列表类型，而是: {type(cells_data).__name__}")
         except Exception as e:

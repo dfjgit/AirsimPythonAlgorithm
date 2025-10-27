@@ -191,7 +191,7 @@ class DroneController:
                     x, y, z, duration, vehicle_name=vehicle_name
                 )
 
-            logger.debug(f"无人机{vehicle_name}移动向量({x:.3f},{y:.3f},{z:.3f})，持续时间{duration}秒")
+            # logger.debug(f"无人机{vehicle_name}移动向量({x:.3f},{y:.3f},{z:.3f})，持续时间{duration}秒")
             return True
         except Exception as e:
             logger.error(f"无人机{vehicle_name}移动操作失败: {str(e)}")
