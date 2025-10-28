@@ -7,18 +7,18 @@ echo    AirSim 无人机仿真系统 - 主菜单
 echo ============================================================
 echo.
 echo === 系统运行 ===
-echo   [1] 运行系统 (固定权重)
-echo   [2] 运行系统 (DQN权重预测)
+echo   [1] 运行系统 (固定权重)[⭐可以使用！]
+echo   [2] 运行系统 (DQN权重预测) [⭐可以使用！]
 echo.
 echo === DQN权重APF训练 ===
-echo   [3] 训练权重DQN (模拟数据)
-echo   [4] 训练权重DQN (真实AirSim环境)
-echo   [5] 测试权重DQN模型
+echo   [3] 训练权重DQN (模拟数据) [暂时别用这个，用4]
+echo   [4] 训练权重DQN (真实AirSim环境) [⭐可以使用！]
+echo   [5] 测试权重DQN模型 [别用这个，还没测试]
 echo.
 echo === DQN移动控制训练 ===
-echo   [6] 训练移动DQN (模拟数据)
-echo   [7] 训练移动DQN (真实AirSim环境)
-echo   [8] 测试移动DQN模型
+echo   [6] 训练移动DQN (模拟数据) [还有些问题]
+echo   [7] 训练移动DQN (真实AirSim环境)[还有些问题]
+echo   [8] 测试移动DQN模型[还有些问题]
 echo.
 echo === 系统信息 ===
 echo   [9] 查看系统信息

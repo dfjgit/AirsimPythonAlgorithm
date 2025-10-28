@@ -1,7 +1,4 @@
 @echo off
-REM ============================================================
-REM DQN训练 - 使用真实AirSim环境
-REM ============================================================
 chcp 65001 >nul 2>&1
 cls
 
@@ -13,136 +10,20 @@ echo 本脚本将使用真实的Unity AirSim仿真环境训练DQN模型
 echo.
 echo 重要提示:
 echo   1. 请先启动Unity AirSim仿真场景
-echo   2. 确保Unity场景中有无人机和环境
-echo   3. 训练过程会实时使用仿真数据
-echo   4. 训练时间较长，请保持Unity运行
+echo   2. 确保Unity场景中有4台无人机 (UAV1-UAV4) 和环境
+echo   3. 训练时间约33分钟，请保持Unity运行
 echo.
 echo ============================================================
-echo.
-
-REM 检查Unity是否运行的提示
-echo [检查] 请确认Unity AirSim仿真是否已运行
-echo.
-echo 如果Unity未运行:
-echo   1. 打开Unity Hub
-echo   2. 打开AirSim项目 (Airsim2022)
-echo   3. 点击Play按钮启动场景
-echo   4. 等待场景完全加载
-echo.
-set /p confirm=Unity已运行？(Y/N): 
-if /i not "%confirm%"=="Y" (
-    echo.
-    echo 请先启动Unity，然后重新运行本脚本
-    pause
-    exit /b 1
-)
-
-echo.
-echo [OK] 继续训练准备...
 echo.
 
 REM 激活虚拟环境（如果存在）
 if exist "%~dp0..\.venv\Scripts\activate.bat" (
-    echo [1/4] 激活Python虚拟环境...
     call "%~dp0..\.venv\Scripts\activate.bat"
-    if %ERRORLEVEL% NEQ 0 (
-        echo 警告: 虚拟环境激活失败，将使用系统Python
-        echo.
-    ) else (
-        echo [OK] 虚拟环境已激活
-        echo.
-    )
-) else (
-    echo [1/4] 使用系统Python环境
-    echo.
 )
 
-REM 检查依赖
-echo [2/4] 检查训练依赖...
-python -c "import torch; import stable_baselines3; import gym; import numpy; import shimmy; print('[OK] 依赖检查通过')" 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo 警告: 缺少必要的依赖库
-    echo.
-    echo 需要安装以下依赖:
-    echo   - torch
-    echo   - stable-baselines3
-    echo   - gym
-    echo   - numpy
-    echo   - shimmy
-    echo.
-    set /p install=是否现在安装？(Y/N): 
-    if /i "%install%"=="Y" (
-        echo 正在安装依赖...
-        pip install torch stable-baselines3 gym numpy shimmy
-    ) else (
-        echo 已取消，请手动安装依赖后重试
-        pause
-        exit /b 1
-    )
-)
-echo.
-
-REM 开始训练
-echo [3/4] 开始DQN训练 (使用真实AirSim环境)
-echo ============================================================
-echo.
-echo 训练配置:
-echo   - 环境: 真实Unity AirSim仿真
-echo   - 无人机: 1台 (UAV1)
-echo   - 训练步数: 100000 步
-echo   - 可视化: 启用
-echo   - 模型保存: 自动保存最佳模型和检查点
-echo.
-echo 训练控制:
-echo   - 按 Ctrl+C 可以随时停止训练
-echo   - 训练会自动保存进度
-echo   - 可以从检查点继续训练
-echo.
-echo ============================================================
-echo.
-
+REM 切换到训练脚本目录并运行
 cd /d "%~dp0..\multirotor\DQN_Weight"
 python train_with_airsim_improved.py
-
-REM 检查训练结果
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo ============================================================
-    echo [SUCCESS] 训练成功完成！
-    echo ============================================================
-    echo.
-    echo 模型文件:
-    echo   - 最终模型: models\weight_predictor_airsim.zip
-    echo   - 最佳模型: models\weight_predictor_airsim_best.zip
-    echo   - 检查点: models\checkpoint_*.zip
-    echo.
-    echo 下一步操作:
-    echo   1. 测试模型:
-    echo      python test_trained_model.py
-    echo.
-    echo   2. 复制模型为默认模型:
-    echo      copy models\weight_predictor_airsim_best.zip models\weight_predictor_simple.zip
-    echo.
-    echo   3. 使用训练好的模型:
-    echo      cd ..\..
-    echo      call scripts\运行系统-DQN权重.bat
-    echo.
-) else (
-    echo.
-    echo ============================================================
-    echo [ERROR] 训练失败或被中断
-    echo ============================================================
-    echo.
-    echo 可能的原因:
-    echo   - Unity AirSim未运行或崩溃
-    echo   - 用户手动中断 (Ctrl+C)
-    echo   - 网络连接问题
-    echo   - 内存不足
-    echo.
-    echo 如果是手动中断，模型已保存到检查点
-    echo 可以查看 models\ 目录中的检查点文件
-    echo.
-)
 
 echo.
 echo 按任意键退出...
