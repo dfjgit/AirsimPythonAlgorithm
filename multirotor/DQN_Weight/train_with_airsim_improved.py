@@ -49,6 +49,7 @@ except ImportError as e:
 
 # 导入项目模块
 from simple_weight_env import SimpleWeightEnv
+from training_visualizer import TrainingVisualizer
 
 # 导入AlgorithmServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -56,13 +57,15 @@ from AlgorithmServer import MultiDroneAlgorithmServer
 
 
 class ImprovedTrainingCallback(BaseCallback):
-    """改进的训练回调，突出显示模型和奖励"""
+    """改进的训练回调，突出显示模型和奖励，并更新可视化"""
     
-    def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', verbose=1):
+    def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', 
+                 training_visualizer=None, verbose=1):
         super(ImprovedTrainingCallback, self).__init__(verbose)
         self.total_timesteps = total_timesteps
         self.check_freq = check_freq
         self.save_path = save_path
+        self.training_visualizer = training_visualizer  # 训练可视化器
         self.best_mean_reward = -np.inf
         self.last_print_step = 0
         self.print_interval = max(total_timesteps // 10, 100)  # 只显示10次
@@ -84,6 +87,14 @@ class ImprovedTrainingCallback(BaseCallback):
             ep_length = self.model.ep_info_buffer[-1]['l']
             self.episode_rewards.append(ep_reward)
             self.episode_count = len(self.model.ep_info_buffer)
+            
+            # 更新训练可视化
+            if self.training_visualizer:
+                self.training_visualizer.update_training_stats(
+                    episode_reward=ep_reward,
+                    episode_length=ep_length,
+                    is_episode_done=True
+                )
             
             print(f"\n{'╔'+'═'*58+'╗'}")
             print(f"║  🎉 Episode #{self.episode_count} 完成！{' '*(45-len(str(self.episode_count)))}║")
@@ -151,25 +162,31 @@ def main():
     """主训练流程"""
     
     # ==================== 训练参数配置 ====================
-    DRONE_NAMES = ["UAV1"]
-    TOTAL_TIMESTEPS = 5000           # 总训练步数（快速训练）
+    DRONE_NAMES = ["UAV1", "UAV2", "UAV3", "UAV4"]  # 🚁 使用4台无人机协同训练
+    TOTAL_TIMESTEPS = 300           # 总训练步数（快速训练）
     STEP_DURATION = 10.0             # 每步飞行时长（秒）
     CHECKPOINT_FREQ = 1000           # 检查点保存频率
-    ENABLE_VISUALIZATION = True      # 是否启用可视化
+    ENABLE_VISUALIZATION = True      # 是否启用可视化（训练专用可视化）
     # =====================================================
     
     # 全局变量，用于清理
     server = None
+    training_visualizer = None
     
     print("\n" + "=" * 60)
-    print("🚀 DQN权重训练 - 快速模式")
+    print("🚀 DQN权重训练 - 多无人机协同模式")
     print("=" * 60)
+    print(f"🚁 无人机数量: {len(DRONE_NAMES)} 台 ({', '.join(DRONE_NAMES)})")
     print(f"📊 训练步数: {TOTAL_TIMESTEPS} 步")
     print(f"⏱️  每步时长: {STEP_DURATION} 秒")
     print(f"💾 检查点: 每 {CHECKPOINT_FREQ} 步保存一次")
     print(f"👁️  可视化: {'启用' if ENABLE_VISUALIZATION else '禁用'}")
     print(f"📈 预计episode数: ~{TOTAL_TIMESTEPS // 50}")
     print("=" * 60)
+    print(f"\n💡 说明: 使用{len(DRONE_NAMES)}台无人机协同训练")
+    print(f"   - 主训练无人机: {DRONE_NAMES[0]} (用于DQN学习)")
+    print(f"   - 协同无人机: {', '.join(DRONE_NAMES[1:])} (提供环境交互)")
+    print(f"   - 学到的权重策略将适用于所有无人机")
     print("\n[重要] 请确保Unity AirSim仿真已经运行！")
     
     confirm = input("Unity已运行？(Y/N): ").strip().upper()
@@ -180,12 +197,17 @@ def main():
     try:
         print("\n[1/5] 启动AlgorithmServer...")
         
-        # 创建服务器
+        # 创建服务器（训练模式不使用学习的权重，禁用AlgorithmServer自带的可视化）
         server = MultiDroneAlgorithmServer(
             drone_names=DRONE_NAMES,
             use_learned_weights=False,
-            enable_visualization=ENABLE_VISUALIZATION
+            model_path=None,  # 训练模式不需要加载模型
+            enable_visualization=False  # 禁用AlgorithmServer的可视化，使用训练专用可视化
         )
+        
+        print(f"✅ 服务器创建成功")
+        print(f"  无人机配置: {', '.join(DRONE_NAMES)}")
+        print(f"  使用训练专用可视化: {'是' if ENABLE_VISUALIZATION else '否'}")
     
         # 启动服务器
         if not server.start():
@@ -215,15 +237,33 @@ def main():
         
         env = SimpleWeightEnv(
             server=server,
-            drone_name=DRONE_NAMES[0],
+            drone_name=DRONE_NAMES[0],  # 使用第一台无人机进行DQN训练
             reset_unity=True,          # 标准episode训练
             step_duration=STEP_DURATION  # 使用配置的飞行时长
         )
         print(f"✅ 环境创建成功")
-        print(f"  📋 模式: 标准episode训练")
+        print(f"  📋 模式: 多无人机协同训练")
+        print(f"  🎓 训练无人机: {DRONE_NAMES[0]}")
+        print(f"  🤝 协同无人机: {', '.join(DRONE_NAMES[1:]) if len(DRONE_NAMES) > 1 else '无'}")
         print(f"  ⏱️  每步时长: {STEP_DURATION}秒")
         print(f"  🎯 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * STEP_DURATION / 60:.1f}分钟")
         print(f"  💡 预计总训练时长: {TOTAL_TIMESTEPS * STEP_DURATION / 60:.1f}分钟")
+        
+        # 创建并启动训练专用可视化
+        if ENABLE_VISUALIZATION:
+            print("\n[4.5/5] 启动训练专用可视化...")
+            try:
+                training_visualizer = TrainingVisualizer(server=server, env=env)
+                if training_visualizer.start_visualization():
+                    print("✅ 训练可视化已启动")
+                    print("💡 可视化窗口应该会弹出，显示训练统计和环境状态")
+                    print("💡 按ESC键可关闭可视化窗口（不影响训练）")
+                else:
+                    print("⚠️  训练可视化启动失败，但训练将继续")
+            except Exception as e:
+                print(f"⚠️  训练可视化初始化失败: {str(e)}")
+                print("💡 训练将继续，但不显示可视化")
+                training_visualizer = None
         
         # 创建DDPG模型
         print("\n[5/5] 创建DDPG模型...")
@@ -267,6 +307,7 @@ def main():
             total_timesteps=TOTAL_TIMESTEPS,
             check_freq=CHECKPOINT_FREQ,
             save_path=model_dir,
+            training_visualizer=training_visualizer,  # 传入可视化器
             verbose=1
         )
         
@@ -322,6 +363,16 @@ def main():
     
     finally:
         # 确保清理资源
+        
+        # 停止可视化
+        if training_visualizer:
+            print("\n停止训练可视化...")
+            try:
+                training_visualizer.stop_visualization()
+                print("[OK] 训练可视化已停止")
+            except Exception as e:
+                print(f"[警告] 停止可视化时出错: {e}")
+        
         if server:
             print("\n停止AlgorithmServer...")
             try:

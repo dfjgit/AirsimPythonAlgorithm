@@ -42,12 +42,13 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, enable_visualization: bool = True):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
         :param use_learned_weights: 是否使用学习的权重（DQN模型预测）
+        :param model_path: DQN模型路径（不含.zip后缀），如果为None则使用默认模型
         :param enable_visualization: 是否启用可视化（默认True）
         """
         # 配置文件路径处理
@@ -96,6 +97,7 @@ class MultiDroneAlgorithmServer:
         
         # DQN权重预测（可选）
         self.use_learned_weights = use_learned_weights
+        self.model_path = model_path  # 保存模型路径参数
         self.weight_model = None
         if self.use_learned_weights:
             self._init_weight_predictor()
@@ -130,36 +132,101 @@ class MultiDroneAlgorithmServer:
     def _init_weight_predictor(self):
         """初始化权重预测器（DDPG模型）"""
         try:
-            logger.info("初始化权重预测器...")
+            logger.info("=" * 60)
+            logger.info("🔧 初始化DQN权重预测器...")
             from stable_baselines3 import DDPG
             
-            model_path = os.path.join(os.path.dirname(__file__), 'DQN_Weight', 'models', 'weight_predictor_simple')
+            # 确定模型路径
+            if self.model_path:
+                # 使用用户指定的模型路径
+                if os.path.isabs(self.model_path):
+                    model_path = self.model_path
+                else:
+                    # 相对路径，相对于当前文件所在目录
+                    model_path = os.path.join(os.path.dirname(__file__), self.model_path)
+                logger.info(f"📂 使用指定模型: {model_path}")
+            else:
+                # 使用默认模型路径（优先级：best_model > weight_predictor_airsim > weight_predictor_simple）
+                models_dir = os.path.join(os.path.dirname(__file__), 'DQN_Weight', 'models')
+                
+                # 尝试多个默认模型
+                default_models = [
+                    os.path.join(models_dir, 'best_model'),
+                    os.path.join(models_dir, 'weight_predictor_airsim'),
+                    os.path.join(models_dir, 'weight_predictor_simple')
+                ]
+                
+                model_path = None
+                for candidate in default_models:
+                    if os.path.exists(candidate + '.zip'):
+                        model_path = candidate
+                        logger.info(f"📂 使用默认模型: {os.path.basename(model_path)}")
+                        break
+                
+                if not model_path:
+                    logger.warning("❌ 未找到任何可用的模型文件")
+                    logger.info("💡 可用模型列表：")
+                    if os.path.exists(models_dir):
+                        for f in os.listdir(models_dir):
+                            if f.endswith('.zip'):
+                                logger.info(f"   - {f}")
+                    logger.warning("将使用配置文件中的固定权重")
+                    self.use_learned_weights = False
+                    logger.info("=" * 60)
+                    return
             
+            # 加载模型
             if os.path.exists(model_path + '.zip'):
                 self.weight_model = DDPG.load(model_path)
-                logger.info(f"✓ 权重预测模型加载成功: {model_path}")
+                logger.info("=" * 60)
+                logger.info("✅ DQN权重预测模型加载成功！")
+                logger.info(f"📦 模型文件: {model_path}.zip")
+                logger.info("=" * 60)
             else:
-                logger.warning(f"权重预测模型不存在: {model_path}.zip")
+                logger.warning(f"❌ 模型文件不存在: {model_path}.zip")
                 logger.warning("将使用配置文件中的固定权重")
                 self.use_learned_weights = False
+                logger.info("=" * 60)
                 
         except ImportError:
-            logger.error("stable-baselines3未安装，无法使用权重预测")
-            logger.info("安装方法: pip install stable-baselines3")
+            logger.error("=" * 60)
+            logger.error("❌ stable-baselines3未安装，无法使用权重预测")
+            logger.info("💡 安装方法: pip install stable-baselines3")
             self.use_learned_weights = False
+            logger.info("=" * 60)
         except Exception as e:
-            logger.error(f"权重预测器初始化失败: {str(e)}")
+            logger.error("=" * 60)
+            logger.error(f"❌ 权重预测器初始化失败: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.use_learned_weights = False
+            logger.info("=" * 60)
     
     def _init_visualization(self):
         """初始化可视化组件"""
-        if HAS_VISUALIZATION:
-            try:
-                self.visualizer = SimpleVisualizer(self)
-                logger.info("可视化组件初始化成功")
-            except Exception as e:
-                logger.warning(f"可视化组件初始化失败: {str(e)}")
-                self.visualizer = None
+        logger.info("=" * 60)
+        logger.info("🎨 初始化可视化组件...")
+        
+        if not HAS_VISUALIZATION:
+            logger.warning("❌ 可视化模块未导入（SimpleVisualizer导入失败）")
+            logger.info("💡 请检查是否安装了pygame: pip install pygame")
+            logger.info("=" * 60)
+            self.visualizer = None
+            return
+        
+        try:
+            self.visualizer = SimpleVisualizer(self)
+            logger.info("✅ 可视化组件初始化成功")
+            logger.info("💡 可视化将在start()后启动")
+            logger.info("=" * 60)
+        except Exception as e:
+            logger.warning("=" * 60)
+            logger.warning(f"❌ 可视化组件初始化失败: {str(e)}")
+            import traceback
+            logger.warning(traceback.format_exc())
+            logger.info("💡 系统将继续运行，但不显示可视化界面")
+            logger.info("=" * 60)
+            self.visualizer = None
 
     def start(self) -> bool:
         """启动服务主流程：连接Unity与AirSim，初始化无人机"""
@@ -181,8 +248,14 @@ class MultiDroneAlgorithmServer:
 
             # 4. 启动可视化（如果已初始化）
             if self.visualizer:
-                self.visualizer.start_visualization()
-                logger.info("可视化功能已启动")
+                logger.info("=" * 60)
+                logger.info("🎨 启动可视化线程...")
+                if self.visualizer.start_visualization():
+                    logger.info("✅ 可视化线程已启动")
+                    logger.info("💡 可视化窗口应该会弹出")
+                else:
+                    logger.warning("❌ 可视化线程启动失败")
+                logger.info("=" * 60)
 
             logger.info("服务初始化成功")
             return True
@@ -812,9 +885,32 @@ if __name__ == "__main__":
     import argparse
     
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description='多无人机算法服务器')
+    parser = argparse.ArgumentParser(
+        description='多无人机算法服务器',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例用法:
+  1. 使用固定权重（默认）:
+     python AlgorithmServer.py
+     
+  2. 使用DQN权重预测（自动选择最佳模型）:
+     python AlgorithmServer.py --use-learned-weights
+     
+  3. 使用指定的DQN模型:
+     python AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/best_model
+     python AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/checkpoint_5000
+     
+  4. 多无人机 + DQN:
+     python AlgorithmServer.py --use-learned-weights --drones 3
+     
+  5. 禁用可视化:
+     python AlgorithmServer.py --no-visualization
+        """
+    )
     parser.add_argument('--use-learned-weights', action='store_true', 
                         help='使用DQN学习的权重（需要先训练模型）')
+    parser.add_argument('--model-path', type=str, default=None,
+                        help='DQN模型路径（相对或绝对路径，不含.zip后缀）。如果不指定，将自动选择：best_model > weight_predictor_airsim > weight_predictor_simple')
     parser.add_argument('--drones', type=int, default=1,
                         help='无人机数量（默认1）')
     parser.add_argument('--no-visualization', action='store_true',
@@ -830,6 +926,10 @@ if __name__ == "__main__":
         logger.info(f"无人机列表: {drone_names}")
         if args.use_learned_weights:
             logger.info("模式: DQN权重预测")
+            if args.model_path:
+                logger.info(f"模型: {args.model_path}")
+            else:
+                logger.info("模型: 自动选择（best_model > weight_predictor_airsim > weight_predictor_simple）")
         else:
             logger.info("模式: 固定权重")
         logger.info(f"可视化: {'禁用' if args.no_visualization else '启用'}")
@@ -839,6 +939,7 @@ if __name__ == "__main__":
         server = MultiDroneAlgorithmServer(
             drone_names=drone_names,
             use_learned_weights=args.use_learned_weights,
+            model_path=args.model_path,
             enable_visualization=not args.no_visualization
         )
         

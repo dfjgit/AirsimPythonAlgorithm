@@ -132,7 +132,7 @@ class ScannerAlgorithm:
                 entropy_score = (cell.entropy - min_entropy) / entropy_range
             
             # 综合分数：熵值为主（70%），距离为辅（30%）
-            total_score = entropy_score * 0.7 + normalized_distance * 0.3
+            total_score = entropy_score * 0.4 + normalized_distance * 0.6
             scored_cells.append((cell, total_score))
         
         # 选择最高分的蜂窝作为目标
