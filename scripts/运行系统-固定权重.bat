@@ -1,8 +1,38 @@
 @echo off
 chcp 65001 >nul
-echo 正在激活Python虚拟环境...
-call %~dp0..\.venv\Scripts\activate.bat
+cls
 
-echo 启动算法服务器...
-python %~dp0..\multirotor\AlgorithmServer.py  --drones 4
+echo ============================================================
+echo 启动系统 - 固定权重模式
+echo ============================================================
+echo.
+
+REM 激活虚拟环境
+echo [1/2] 激活Python虚拟环境...
+if exist "%~dp0..\.venv\Scripts\activate.bat" (
+    call "%~dp0..\.venv\Scripts\activate.bat"
+    echo [OK] 虚拟环境已激活
+) else (
+    echo [!] 虚拟环境不存在，使用系统Python
+)
+echo.
+
+REM 显示配置信息
+echo ============================================================
+echo 运行配置
+echo ============================================================
+echo 模式: 固定权重
+echo 无人机数量: 4
+echo ============================================================
+echo.
+
+REM 启动算法服务器
+echo [2/2] 启动算法服务器...
+python %~dp0..\multirotor\AlgorithmServer.py --drones 4
+
+echo.
+echo ============================================================
+echo 程序已退出
+echo ============================================================
+echo.
 pause
