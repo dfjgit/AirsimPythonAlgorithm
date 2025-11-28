@@ -136,3 +136,7 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Data logs
+data_logs/
+multirotor/data_logs/
