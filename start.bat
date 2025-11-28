@@ -51,10 +51,10 @@ goto menu
 :run_dqn
 cls
 echo ============================================================
-echo 启动系统 - DDPG/DQN权重预测模式
+echo 启动系统 - DDPG权重预测模式
 echo ============================================================
 echo.
-call scripts\运行系统-DQN权重.bat
+call scripts\运行系统-DDPG权重.bat
 goto menu
 
 :run_dqn_movement
@@ -71,10 +71,10 @@ goto menu
 :train_weight_airsim
 cls
 echo ============================================================
-echo DDPG/DQN权重APF训练 (真实AirSim环境)
+echo DDPG权重APF训练 (真实AirSim环境)
 echo ============================================================
 echo.
-call scripts\训练权重DQN-真实环境.bat
+call scripts\训练权重DDPG-真实环境.bat
 goto menu
 
 :train_movement_airsim
@@ -95,20 +95,20 @@ echo.
 echo 项目结构:
 echo   - multirotor\AlgorithmServer.py    : 算法服务器
 echo   - multirotor\Algorithm\            : APF算法实现
-echo   - multirotor\DQN_Weight\           : DDPG/DQN权重APF训练
+echo   - multirotor\DDPG_Weight\         : DDPG权重APF训练
 echo   - multirotor\DQN_Movement\         : DQN移动控制训练
 echo   - .venv\                           : Python虚拟环境
 echo.
 echo 配置文件:
 echo   - multirotor\scanner_config.json                : APF算法配置
-echo   - multirotor\DQN_Weight\dqn_reward_config.json  : 权重DDPG/DQN配置
+echo   - multirotor\DDPG_Weight\dqn_reward_config.json  : 权重DDPG配置
 echo   - multirotor\DQN_Movement\movement_dqn_config.json : 移动DQN配置
 echo.
 echo 批处理文件:
 echo   - start.bat                         : 主菜单(当前)
 echo   - scripts\运行系统-固定权重.bat      : 运行系统(固定权重)
-echo   - scripts\运行系统-DQN权重.bat       : 运行系统(DDPG/DQN权重)
-echo   - scripts\训练权重DQN-真实环境.bat   : 训练权重DDPG/DQN(真实环境)
+echo   - scripts\运行系统-DDPG权重.bat       : 运行系统(DDPG权重)
+echo   - scripts\训练权重DDPG-真实环境.bat   : 训练权重DDPG(真实环境)
 echo   - scripts\训练移动DQN-真实环境.bat   : 训练移动DQN(真实环境)
 echo.
 echo Python环境:
@@ -120,8 +120,8 @@ if %ERRORLEVEL% EQU 0 (
     echo [!] 虚拟环境未创建，请先运行 run_two_drones.bat
 )
 echo.
-echo DDPG/DQN模型:
-if exist "multirotor\DQN_Weight\models\best_model.zip" (
+echo DDPG模型:
+if exist "multirotor\DDPG_Weight\models\best_model.zip" (
     echo [OK] 权重APF模型已训练 (best_model.zip)
 ) else (
     echo [!] 权重APF模型未训练，请运行选项 [4] 训练

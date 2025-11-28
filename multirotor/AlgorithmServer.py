@@ -143,7 +143,7 @@ class MultiDroneAlgorithmServer:
         """初始化权重预测器（DDPG模型）"""
         try:
             logger.info("=" * 60)
-            logger.info("🔧 初始化DQN权重预测器...")
+            logger.info("🔧 初始化DDPG权重预测器...")
             from stable_baselines3 import DDPG
             
             # 确定模型路径
@@ -157,7 +157,7 @@ class MultiDroneAlgorithmServer:
                 logger.info(f"📂 使用指定模型: {model_path}")
             else:
                 # 使用默认模型路径（优先级：best_model > weight_predictor_airsim > weight_predictor_simple）
-                models_dir = os.path.join(os.path.dirname(__file__), 'DQN_Weight', 'models')
+                models_dir = os.path.join(os.path.dirname(__file__), 'DDPG_Weight', 'models')
                 
                 # 尝试多个默认模型
                 default_models = [
@@ -189,7 +189,7 @@ class MultiDroneAlgorithmServer:
             if os.path.exists(model_path + '.zip'):
                 self.weight_model = DDPG.load(model_path)
                 logger.info("=" * 60)
-                logger.info("✅ DQN权重预测模型加载成功！")
+                logger.info("✅ DDPG权重预测模型加载成功！")
                 logger.info(f"📦 模型文件: {model_path}.zip")
                 logger.info("=" * 60)
             else:
@@ -200,7 +200,7 @@ class MultiDroneAlgorithmServer:
                 
         except ImportError:
             logger.error("=" * 60)
-            logger.error("❌ stable-baselines3未安装，无法使用权重预测")
+            logger.error("❌ stable-baselines3未安装，无法使用DDPG权重预测")
             logger.info("💡 安装方法: pip install stable-baselines3")
             self.use_learned_weights = False
             logger.info("=" * 60)
@@ -954,11 +954,11 @@ if __name__ == "__main__":
   2. 使用DQN权重预测（自动选择最佳模型）:
      python AlgorithmServer.py --use-learned-weights
      
-  3. 使用指定的DQN模型:
-     python AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/best_model
-     python AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/checkpoint_5000
+  3. 使用指定的DDPG模型:
+     python AlgorithmServer.py --use-learned-weights --model-path DDPG_Weight/models/best_model
+     python AlgorithmServer.py --use-learned-weights --model-path DDPG_Weight/models/checkpoint_5000
      
-  4. 多无人机 + DQN:
+  4. 多无人机 + DDPG:
      python AlgorithmServer.py --use-learned-weights --drones 3
      
   5. 禁用可视化:
@@ -966,9 +966,9 @@ if __name__ == "__main__":
         """
     )
     parser.add_argument('--use-learned-weights', action='store_true', 
-                        help='使用DQN学习的权重（需要先训练模型）')
+                        help='使用DDPG学习的权重（需要先训练模型）')
     parser.add_argument('--model-path', type=str, default=None,
-                        help='DQN模型路径（相对或绝对路径，不含.zip后缀）。如果不指定，将自动选择：best_model > weight_predictor_airsim > weight_predictor_simple')
+                        help='DDPG模型路径（相对或绝对路径，不含.zip后缀）。如果不指定，将自动选择：best_model > weight_predictor_airsim > weight_predictor_simple')
     parser.add_argument('--drones', type=int, default=1,
                         help='无人机数量（默认1）')
     parser.add_argument('--no-visualization', action='store_true',
@@ -983,7 +983,7 @@ if __name__ == "__main__":
         logger.info(f"启动多无人机系统 - {args.drones}台无人机")
         logger.info(f"无人机列表: {drone_names}")
         if args.use_learned_weights:
-            logger.info("模式: DQN权重预测")
+            logger.info("模式: DDPG权重预测")
             if args.model_path:
                 logger.info(f"模型: {args.model_path}")
             else:

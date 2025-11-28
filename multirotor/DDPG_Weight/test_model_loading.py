@@ -31,27 +31,27 @@ def test_model_loading():
         {
             "name": "使用best_model",
             "use_learned_weights": True,
-            "model_path": "DQN_Weight/models/best_model"
+            "model_path": "DDPG_Weight/models/best_model"
         },
         {
             "name": "使用weight_predictor_airsim",
             "use_learned_weights": True,
-            "model_path": "DQN_Weight/models/weight_predictor_airsim"
+            "model_path": "DDPG_Weight/models/weight_predictor_airsim"
         },
         {
             "name": "使用weight_predictor_simple",
             "use_learned_weights": True,
-            "model_path": "DQN_Weight/models/weight_predictor_simple"
+            "model_path": "DDPG_Weight/models/weight_predictor_simple"
         },
         {
             "name": "使用checkpoint_5000",
             "use_learned_weights": True,
-            "model_path": "DQN_Weight/models/checkpoint_5000"
+            "model_path": "DDPG_Weight/models/checkpoint_5000"
         },
         {
             "name": "不存在的模型（应该失败）",
             "use_learned_weights": True,
-            "model_path": "DQN_Weight/models/non_existent_model"
+            "model_path": "DDPG_Weight/models/non_existent_model"
         }
     ]
     
