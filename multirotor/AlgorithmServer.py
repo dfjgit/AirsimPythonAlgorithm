@@ -87,6 +87,12 @@ class MultiDroneAlgorithmServer:
         }
         self.data_lock = threading.Lock()  # 运行时数据锁
         self.grid_lock = threading.Lock()  # 网格数据锁
+
+        # 熵值记录
+        self.entropy_history: List[Tuple[float, float]] = []
+        self.entropy_history_lock = threading.Lock()
+        self._start_time = time.time()
+        self._last_entropy_record_time = 0.0
         
         # 可视化组件
         self.visualizer = None
@@ -425,6 +431,8 @@ class MultiDroneAlgorithmServer:
 
         except Exception as e:
             logger.error(f"处理Unity数据时发生错误: {str(e)}，堆栈信息: {traceback.format_exc()}")
+        finally:
+            self._record_entropy_snapshot()
 
 
     def _get_state_for_prediction(self, drone_name: str) -> np.ndarray:
@@ -475,6 +483,37 @@ class MultiDroneAlgorithmServer:
         except Exception as e:
             logger.debug(f"状态提取失败: {str(e)}")
             return np.zeros(18, dtype=np.float32)
+
+    def get_entropy_history(self, limit: int = 600) -> List[Tuple[float, float]]:
+        """获取最近的熵值历史记录"""
+        with self.entropy_history_lock:
+            return list(self.entropy_history[-limit:])
+
+    def _record_entropy_snapshot(self) -> None:
+        """定期记录网格平均熵值，用于可视化"""
+        current_time = time.time()
+        if current_time - self._last_entropy_record_time < 1.0:
+            return
+
+        with self.grid_lock:
+            if not self.grid_data or not hasattr(self.grid_data, 'cells'):
+                return
+
+            total = len(self.grid_data.cells)
+            if total == 0:
+                return
+
+            total_entropy = sum(cell.entropy for cell in self.grid_data.cells)
+
+        avg_entropy = total_entropy / total
+        elapsed = current_time - self._start_time
+
+        with self.entropy_history_lock:
+            self.entropy_history.append((elapsed, avg_entropy))
+            if len(self.entropy_history) > 1800:
+                self.entropy_history = self.entropy_history[-1800:]
+
+        self._last_entropy_record_time = current_time
     
     def _predict_weights(self, drone_name: str) -> Dict[str, float]:
         """使用模型预测权重并进行平衡处理"""

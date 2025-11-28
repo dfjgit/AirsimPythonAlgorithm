@@ -22,6 +22,7 @@ class SimpleVisualizer:
         # 窗口设置
         self.SCREEN_WIDTH = 1200
         self.SCREEN_HEIGHT = 800
+        self.right_panel_width = 320
         
         # 标记是否已经初始化pygame
         self.pygame_initialized = False
@@ -302,26 +303,31 @@ class SimpleVisualizer:
         else:
             panel_height = 120
         
+        panel_width = self.right_panel_width
+        panel_x = self.SCREEN_WIDTH - panel_width - 10
+        panel_y = self._right_panel_next_y
+
         # 绘制状态面板背景（半透明）
-        panel_rect = pygame.Rect(10, 10, 320, panel_height)
-        s = pygame.Surface((320, panel_height))
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        s = pygame.Surface((panel_width, panel_height))
         s.set_alpha(200)
         s.fill((0, 0, 0))
-        self.screen.blit(s, (10, 10))
+        self.screen.blit(s, (panel_x, panel_y))
         pygame.draw.rect(self.screen, self.WHITE, panel_rect, 2)
         
-        y_offset = 15
+        text_x = panel_x + 10
+        y_offset = panel_y + 15
         
         # 绘制标题
         title = self._status_font.render("系统状态", True, self.YELLOW)
-        self.screen.blit(title, (20, y_offset))
+        self.screen.blit(title, (text_x, y_offset))
         y_offset += 25
         
         # 绘制无人机数量
         if self.server and hasattr(self.server, 'drone_names'):
             drone_count = len(self.server.drone_names)
             text = self._status_font.render(f"无人机数量: {drone_count}", True, self.WHITE)
-            self.screen.blit(text, (20, y_offset))
+            self.screen.blit(text, (text_x, y_offset))
             y_offset += 20
         
         # 绘制DQN模式
@@ -333,22 +339,22 @@ class SimpleVisualizer:
                 mode_text = "固定权重"
                 mode_color = self.CYAN
             text = self._status_font.render(f"模式: {mode_text}", True, mode_color)
-            self.screen.blit(text, (20, y_offset))
+            self.screen.blit(text, (text_x, y_offset))
             y_offset += 20
         
         # 绘制网格统计信息
         grid_stats = self._calculate_grid_stats()
         if grid_stats:
             text1 = self._status_font.render(f"网格数量: {grid_stats['total']}", True, self.WHITE)
-            self.screen.blit(text1, (20, y_offset))
+            self.screen.blit(text1, (text_x, y_offset))
             y_offset += 18
             
             text2 = self._status_font.render(f"平均熵值: {grid_stats['avg']:.1f}", True, self.WHITE)
-            self.screen.blit(text2, (20, y_offset))
+            self.screen.blit(text2, (text_x, y_offset))
             y_offset += 18
             
             text3 = self._status_font.render(f"已扫描: {grid_stats['scanned']} ({grid_stats['scan_ratio']:.1f}%)", True, self.GREEN)
-            self.screen.blit(text3, (20, y_offset))
+            self.screen.blit(text3, (text_x, y_offset))
             y_offset += 25
         
         # 显示当前权重（所有无人机共享同一套权重）
@@ -358,7 +364,7 @@ class SimpleVisualizer:
                 title = self._status_font.render("DQN预测权重:", True, self.YELLOW)
             else:
                 title = self._status_font.render("共享APF权重:", True, self.YELLOW)
-            self.screen.blit(title, (20, y_offset))
+            self.screen.blit(title, (text_x, y_offset))
             y_offset += 20
             
             # 只显示第一个无人机的权重（所有无人机共享）
@@ -381,11 +387,11 @@ class SimpleVisualizer:
                     line2 = f"  {weight_texts[3]} {weight_texts[4]}"
                     
                     text1 = self._status_font.render(line1, True, self.LIGHT_BLUE)
-                    self.screen.blit(text1, (20, y_offset))
+                    self.screen.blit(text1, (text_x, y_offset))
                     y_offset += 16
                     
                     text2 = self._status_font.render(line2, True, self.LIGHT_BLUE)
-                    self.screen.blit(text2, (20, y_offset))
+                    self.screen.blit(text2, (text_x, y_offset))
                     y_offset += 18
                     
                 except Exception as e:
@@ -393,7 +399,9 @@ class SimpleVisualizer:
             
             # 显示权重说明
             hint = self._status_font.render("(排斥/熵/距离/Leader/方向)", True, self.GRAY)
-            self.screen.blit(hint, (20, y_offset))
+            self.screen.blit(hint, (text_x, y_offset))
+
+        self._right_panel_next_y = panel_rect.bottom + 10
     
     def _calculate_grid_stats(self):
         """计算网格统计信息"""
@@ -436,12 +444,10 @@ class SimpleVisualizer:
             except:
                 self._weight_font = self.font
         
-        # 面板位置（左下角）
-        panel_x = 10
-        # 固定高度：只显示一套共享权重
+        panel_width = self.right_panel_width
         panel_height = 180  # 标题 + 5个权重项
-        panel_y = self.SCREEN_HEIGHT - panel_height - 10
-        panel_width = 380
+        panel_x = self.SCREEN_WIDTH - panel_width - 10
+        panel_y = self._right_panel_next_y
         
         # 绘制半透明背景
         panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
@@ -462,11 +468,12 @@ class SimpleVisualizer:
         
         pygame.draw.rect(self.screen, border_color, panel_rect, 2)
         
+        text_x = panel_x + 10
         y = panel_y + 10
         
         # 标题
         title = self._weight_font.render(title_text, True, title_color)
-        self.screen.blit(title, (panel_x + 10, y))
+        self.screen.blit(title, (text_x, y))
         y += 25
         
         # 显示共享的权重（只显示一次）
@@ -489,10 +496,10 @@ class SimpleVisualizer:
                     for name, value, desc in weight_info:
                         # 权重名称和值
                         text = self._weight_font.render(f"{name}: {value:.2f}", True, self.LIGHT_BLUE)
-                        self.screen.blit(text, (panel_x + 15, y))
+                        self.screen.blit(text, (text_x + 5, y))
                         
                         # 权重条（可视化）
-                        bar_x = panel_x + 130
+                        bar_x = panel_x + 150
                         bar_y = y + 3
                         bar_width = 120
                         bar_height = 10
@@ -523,9 +530,86 @@ class SimpleVisualizer:
                     
                 except Exception as e:
                     error_text = self._weight_font.render(f"权重获取失败", True, self.RED)
-                    self.screen.blit(error_text, (panel_x + 15, y))
+                    self.screen.blit(error_text, (text_x + 5, y))
                     y += 20
+
+        self._right_panel_next_y = panel_rect.bottom + 10
     
+    def draw_entropy_chart(self, entropy_history):
+        if not hasattr(self, '_chart_font'):
+            try:
+                self._chart_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 14)
+            except:
+                self._chart_font = self.font
+
+        panel_width = self.right_panel_width
+        panel_height = 200
+        panel_x = self.SCREEN_WIDTH - panel_width - 10
+        panel_y = self._right_panel_next_y
+
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        s = pygame.Surface((panel_width, panel_height))
+        s.set_alpha(200)
+        s.fill((0, 0, 0))
+        self.screen.blit(s, (panel_x, panel_y))
+        pygame.draw.rect(self.screen, self.WHITE, panel_rect, 2)
+
+        title = self._chart_font.render("时间-熵值变化", True, self.YELLOW)
+        self.screen.blit(title, (panel_x + 10, panel_y + 8))
+
+        chart_margin_x = 45
+        chart_margin_y = 40
+        chart_width = panel_width - chart_margin_x - 20
+        chart_height = panel_height - chart_margin_y - 30
+        chart_origin_x = panel_x + chart_margin_x
+        chart_origin_y = panel_y + panel_height - chart_margin_y
+
+        pygame.draw.line(self.screen, self.LIGHT_GRAY, (chart_origin_x, chart_origin_y), (chart_origin_x + chart_width, chart_origin_y), 1)
+        pygame.draw.line(self.screen, self.LIGHT_GRAY, (chart_origin_x, chart_origin_y), (chart_origin_x, chart_origin_y - chart_height), 1)
+
+        label_time = self._chart_font.render("时间(s)", True, self.LIGHT_GRAY)
+        self.screen.blit(label_time, (chart_origin_x + chart_width - 40, chart_origin_y + 5))
+        label_entropy = self._chart_font.render("平均熵", True, self.LIGHT_GRAY)
+        self.screen.blit(label_entropy, (panel_x + 10, panel_y + 30))
+
+        if not entropy_history:
+            empty_text = self._chart_font.render("暂无熵值数据", True, self.LIGHT_GRAY)
+            self.screen.blit(empty_text, (panel_x + 60, panel_y + panel_height // 2 - 10))
+            self._right_panel_next_y = panel_rect.bottom + 10
+            return
+
+        history = entropy_history[-240:]
+        times = [point[0] for point in history]
+        values = [max(0.0, min(100.0, point[1])) for point in history]
+
+        min_time = times[0]
+        max_time = times[-1]
+        time_range = max(max_time - min_time, 1.0)
+
+        points = []
+        for t, value in zip(times, values):
+            normalized_x = (t - min_time) / time_range
+            normalized_y = value / 100.0
+            x = chart_origin_x + normalized_x * chart_width
+            y = chart_origin_y - normalized_y * chart_height
+            points.append((x, y))
+
+        if len(points) > 1:
+            pygame.draw.lines(self.screen, self.CYAN, False, points, 2)
+
+        latest_value = values[-1]
+        latest_time = times[-1] - min_time
+        info_text = self._chart_font.render(f"最新: {latest_value:.1f} (Δt={latest_time:.0f}s)", True, self.CYAN)
+        self.screen.blit(info_text, (panel_x + 10, panel_y + panel_height - 22))
+
+        for i in range(0, 101, 20):
+            y = chart_origin_y - (i / 100.0) * chart_height
+            pygame.draw.line(self.screen, self.GRAY, (chart_origin_x - 5, y), (chart_origin_x, y), 1)
+            label = self._chart_font.render(str(i), True, self.GRAY)
+            self.screen.blit(label, (panel_x + 10, y - 7))
+
+        self._right_panel_next_y = panel_rect.bottom + 10
+
     def draw_instructions(self):
         """绘制操作说明"""
         # 创建小字体用于操作说明
@@ -540,12 +624,24 @@ class SimpleVisualizer:
             "- 点击右上角'重置仿真'按钮重置环境",
             "- ESC键退出可视化"
         ]
-        
-        instruction_y = self.SCREEN_HEIGHT - 60
+        panel_width = self.right_panel_width
+        panel_x = self.SCREEN_WIDTH - panel_width - 10
+        panel_height = 30 + len(instructions) * 20
+        panel_y = self._right_panel_next_y
+
+        s = pygame.Surface((panel_width, panel_height))
+        s.set_alpha(180)
+        s.fill((0, 0, 0))
+        self.screen.blit(s, (panel_x, panel_y))
+        pygame.draw.rect(self.screen, self.WHITE, pygame.Rect(panel_x, panel_y, panel_width, panel_height), 1)
+
+        y = panel_y + 10
         for instruction in instructions:
             text = self._instruction_font.render(instruction, True, self.LIGHT_GRAY)
-            self.screen.blit(text, (20, instruction_y))
-            instruction_y += 25
+            self.screen.blit(text, (panel_x + 10, y))
+            y += 20
+
+        self._right_panel_next_y = panel_y + panel_height + 10
     
     def draw_reset_button(self):
         """绘制重置仿真按钮"""
@@ -645,12 +741,16 @@ class SimpleVisualizer:
         """更新可视化数据，优化性能避免卡顿"""
         try:
             if not self.server:
-                return None, {}
+                return None, {}, []
             
             # 使用缓存机制，减少数据访问频率
             current_time = time.time()
             if hasattr(self, '_last_data_update') and current_time - self._last_data_update < 0.05:  # 20fps数据更新
-                return getattr(self, '_cached_grid_data', None), getattr(self, '_cached_runtime_data', {})
+                return (
+                    getattr(self, '_cached_grid_data', None),
+                    getattr(self, '_cached_runtime_data', {}),
+                    getattr(self, '_cached_entropy_history', [])
+                )
             
             # 获取网格数据（快速访问）
             grid_data = None
@@ -678,16 +778,28 @@ class SimpleVisualizer:
                             runtime_data_dict[drone_name] = drone_info
             except Exception:
                 pass
+
+            entropy_history = []
+            try:
+                if hasattr(self.server, 'get_entropy_history'):
+                    entropy_history = self.server.get_entropy_history()
+            except Exception:
+                pass
             
             # 缓存数据
             self._cached_grid_data = grid_data
             self._cached_runtime_data = runtime_data_dict
+            self._cached_entropy_history = entropy_history
             self._last_data_update = current_time
             
-            return grid_data, runtime_data_dict
+            return grid_data, runtime_data_dict, entropy_history
         except Exception as e:
             print(f"更新可视化数据时出错: {str(e)}")
-            return getattr(self, '_cached_grid_data', None), getattr(self, '_cached_runtime_data', {})
+            return (
+                getattr(self, '_cached_grid_data', None),
+                getattr(self, '_cached_runtime_data', {}),
+                getattr(self, '_cached_entropy_history', [])
+            )
     
     def run(self):
         """主循环"""
@@ -732,7 +844,10 @@ class SimpleVisualizer:
                 self.screen.fill(self.BLACK)
                 
                 # 更新数据（优化后的方法）
-                grid_data, runtime_data_dict = self.update_data()
+                grid_data, runtime_data_dict, entropy_history = self.update_data()
+
+                # 重置右侧面板布局基准
+                self._right_panel_next_y = 10
                 
                 # 绘制元素（优化绘制顺序）
                 try:
@@ -762,14 +877,11 @@ class SimpleVisualizer:
                 
                 try:
                     self.draw_status_info()
+                    self.draw_weights_detail_panel()
+                    self.draw_entropy_chart(entropy_history)
                     self.draw_instructions()
                 except Exception as e:
                     print(f"绘制UI时出错: {str(e)}")
-                
-                try:
-                    self.draw_weights_detail_panel()
-                except Exception as e:
-                    print(f"绘制权重详细面板时出错: {str(e)}")
                 
                 # 更新屏幕
                 pygame.display.flip()

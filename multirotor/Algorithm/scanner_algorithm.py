@@ -355,6 +355,27 @@ class ScannerAlgorithm:
                         weights
                     )
                     
+                    try:
+                        if runtime_data.position is not None and isinstance(runtime_data.position, Vector3):
+                            target_height = 0.5
+                            height_deadband = 0.05
+                            max_correction = 0.5
+                            height_error = target_height - runtime_data.position.y
+                            
+                            if abs(height_error) > height_deadband:
+                                correction = max(-max_correction, min(max_correction, height_error))
+                                final_move_dir = Vector3(final_move_dir.x,
+                                                         final_move_dir.y + correction,
+                                                         final_move_dir.z)
+                            
+                            if runtime_data.position.y < 0.3 and final_move_dir.y < 0:
+                                final_move_dir = Vector3(final_move_dir.x, 0, final_move_dir.z)
+                            
+                            if final_move_dir.magnitude() > 0.1:
+                                final_move_dir = final_move_dir.normalized()
+                    except Exception as e:
+                        logging.warning(f"ScannerAlgorithm.update_runtime_data: 高度保护处理失败: {str(e)}")
+                    
                     # 清理过期访问记录
                     self.cleanup_visited_records()
 

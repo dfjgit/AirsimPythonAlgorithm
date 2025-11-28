@@ -37,13 +37,13 @@ echo ============================================================
 echo 模式: DDPG/DQN权重预测
 echo 模型: multirotor\DQN_Weight\models\best_model.zip
 echo 奖励配置: multirotor\DQN_Weight\dqn_reward_config.json
-echo 无人机数量: 4
+echo 无人机数量: 3
 echo ============================================================
 echo.
 
 REM 运行算法服务器（使用DDPG/DQN权重）
 echo [3/3] 启动算法服务器...
-python %~dp0..\multirotor\AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/best_model --drones 4
+python %~dp0..\multirotor\AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/best_model --drones 3
 
 echo.
 echo ============================================================

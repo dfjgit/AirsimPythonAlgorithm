@@ -162,7 +162,7 @@ def main():
     """主训练流程"""
     
     # ==================== 训练参数配置 ====================
-    DRONE_NAMES = ["UAV1", "UAV2", "UAV3", "UAV4"]  # 使用4台无人机协同训练
+    DRONE_NAMES = ["UAV1", "UAV2", "UAV3"]  # 使用4台无人机协同训练
     TOTAL_TIMESTEPS = 100            # 总训练步数（快速训练）
     STEP_DURATION = 20.0             # 每步飞行时长（秒） 提高飞行时长
     CHECKPOINT_FREQ = 1000           # 检查点保存频率
