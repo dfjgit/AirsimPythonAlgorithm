@@ -9,8 +9,6 @@ from typing import Dict, Any, Optional, List, Tuple
 import traceback
 from pathlib import Path
 import numpy as np
-import csv
-from datetime import datetime
 
 # 配置日志系统
 logging.basicConfig(
@@ -28,6 +26,7 @@ from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.HexGridDataModel import HexGridDataModel
 from Algorithm.Vector3 import Vector3
+from Algorithm.data_collector import DataCollector
 from AirsimServer.data_pack import PackType
 
 # 尝试导入可视化模块
@@ -101,12 +100,7 @@ class MultiDroneAlgorithmServer:
         self.enable_visualization = enable_visualization
 
         # 数据采集系统
-        self.data_collection_thread: Optional[threading.Thread] = None
-        self.data_collection_running = False
-        self.csv_file = None
-        self.csv_writer = None
-        self.data_collection_interval = 1.0  # 采集间隔（秒）
-        self._init_data_collection()
+        self.data_collector = DataCollector(collection_interval=1.0)
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -123,32 +117,6 @@ class MultiDroneAlgorithmServer:
             self._init_visualization()
         else:
             logger.info("可视化已禁用")
-
-    def _init_data_collection(self):
-        """初始化数据采集系统"""
-        try:
-            # 创建数据采集目录
-            data_dir = Path(__file__).parent / "data_logs"
-            data_dir.mkdir(exist_ok=True)
-            
-            # 生成CSV文件名（带时间戳）
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = data_dir / f"scan_data_{timestamp}.csv"
-            
-            # 打开CSV文件并写入表头
-            self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
-            self.csv_writer = csv.writer(self.csv_file)
-            self.csv_writer.writerow([
-                'timestamp', 'elapsed_time', 'scanned_count', 'unscanned_count', 
-                'total_count', 'scan_ratio'
-            ])
-            self.csv_file.flush()
-            
-            logger.info(f"数据采集系统初始化完成，输出文件: {csv_filename}")
-        except Exception as e:
-            logger.error(f"数据采集系统初始化失败: {str(e)}")
-            self.csv_file = None
-            self.csv_writer = None
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
         """解析配置文件路径，默认使用项目根目录下的scanner_config.json"""
@@ -382,13 +350,14 @@ class MultiDroneAlgorithmServer:
 
             # 3. 启动数据采集线程
             logger.info("启动数据采集线程...")
-            self.data_collection_running = True
-            self.data_collection_thread = threading.Thread(
-                target=self._data_collection_thread,
-                daemon=True
+            self.data_collector.start(
+                get_grid_data_func=lambda: self.grid_data,
+                get_runtime_data_func=lambda: self.unity_runtime_data,
+                get_algorithms_func=lambda: self.algorithms,
+                get_drone_names_func=lambda: self.drone_names,
+                data_lock=self.data_lock,
+                grid_lock=self.grid_lock
             )
-            self.data_collection_thread.start()
-            logger.info("数据采集线程已启动")
 
             logger.info("所有无人机任务启动完成")
             return True
@@ -561,85 +530,6 @@ class MultiDroneAlgorithmServer:
 
         self._last_entropy_record_time = current_time
 
-    def _data_collection_thread(self) -> None:
-        """数据采集线程：定期统计AOI区域内栅格的侦察状态"""
-        logger.info("数据采集线程启动")
-        
-        while self.data_collection_running and self.running:
-            try:
-                # 等待采集间隔
-                time.sleep(self.data_collection_interval)
-                
-                # 检查数据是否就绪
-                with self.data_lock:
-                    # 获取第一个无人机的运行时数据（所有无人机应该有相同的leader信息）
-                    if not self.unity_runtime_data or not self.drone_names:
-                        continue
-                    
-                    first_drone_name = self.drone_names[0]
-                    runtime_data = self.unity_runtime_data.get(first_drone_name)
-                    
-                    if not runtime_data or not runtime_data.leader_position:
-                        continue
-                    
-                    leader_pos = runtime_data.leader_position
-                    leader_radius = runtime_data.leader_scan_radius
-                
-                # 统计AOI区域内的栅格状态
-                with self.grid_lock:
-                    if not self.grid_data or not hasattr(self.grid_data, 'cells'):
-                        continue
-                    
-                    scanned_count = 0
-                    unscanned_count = 0
-                    total_count = 0
-                    
-                    for cell in self.grid_data.cells:
-                        # 计算栅格中心到Leader的距离
-                        cell_center = cell.center
-                        distance = (cell_center - leader_pos).magnitude()
-                        
-                        # 判断是否在AOI区域内（Leader扫描半径内）
-                        if distance <= leader_radius:
-                            total_count += 1
-                            # 判断是否已侦察：entropy < 30 表示已侦察（计为0），否则未侦察（计为1）
-                            if cell.entropy < 30:
-                                scanned_count += 1
-                            else:
-                                unscanned_count += 1
-                    
-                    # 计算扫描比例
-                    scan_ratio = (scanned_count / total_count * 100) if total_count > 0 else 0.0
-                
-                # 记录到CSV文件
-                if self.csv_writer:
-                    current_time = time.time()
-                    elapsed_time = current_time - self._start_time  # 使用系统启动时间
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    self.csv_writer.writerow([
-                        timestamp,
-                        f"{elapsed_time:.2f}",
-                        scanned_count,
-                        unscanned_count,
-                        total_count,
-                        f"{scan_ratio:.2f}%"
-                    ])
-                    self.csv_file.flush()  # 立即刷新到文件
-                    
-                    logger.debug(
-                        f"数据采集: 时间={elapsed_time:.1f}s, "
-                        f"已侦察={scanned_count}, 未侦察={unscanned_count}, "
-                        f"总数={total_count}, 扫描比例={scan_ratio:.2f}%"
-                    )
-                
-            except Exception as e:
-                logger.error(f"数据采集线程出错: {str(e)}")
-                logger.debug(traceback.format_exc())
-                time.sleep(1)  # 出错后等待1秒再继续
-        
-        logger.info("数据采集线程已停止")
-    
     def _predict_weights(self, drone_name: str) -> Dict[str, float]:
         """使用模型预测权重并进行平衡处理"""
         if not self.weight_model:
@@ -892,20 +782,8 @@ class MultiDroneAlgorithmServer:
         logger.info("开始停止服务...")
 
         # 停止数据采集线程
-        if self.data_collection_running:
-            logger.info("停止数据采集线程...")
-            self.data_collection_running = False
-            if self.data_collection_thread and self.data_collection_thread.is_alive():
-                self.data_collection_thread.join(timeout=2.0)
-                logger.info("数据采集线程已停止")
-            
-            # 关闭CSV文件
-            if self.csv_file:
-                try:
-                    self.csv_file.close()
-                    logger.info("数据采集文件已关闭")
-                except Exception as e:
-                    logger.error(f"关闭数据采集文件失败: {str(e)}")
+        if self.data_collector:
+            self.data_collector.stop()
 
         # 停止可视化
         if self.visualizer:
