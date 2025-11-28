@@ -1,5 +1,10 @@
 @echo off
 chcp 65001 >nul
+setlocal enabledelayedexpansion
+
+REM ============================================================
+REM 主菜单
+REM ============================================================
 :menu
 cls
 echo ============================================================
@@ -19,12 +24,13 @@ echo   [5] 训练移动DQN (真实AirSim环境)[还有些问题]
 echo.
 echo === 系统信息 ===
 echo   [6] 查看系统信息
+echo   [7] 系统依赖检查
 echo   [0] 退出
 echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-6): 
+set /p choice=请输入选项 (0-7): 
 
 if "%choice%"=="1" goto run_normal
 if "%choice%"=="2" goto run_dqn
@@ -32,6 +38,7 @@ if "%choice%"=="3" goto run_dqn_movement
 if "%choice%"=="4" goto train_weight_airsim
 if "%choice%"=="5" goto train_movement_airsim
 if "%choice%"=="6" goto info
+if "%choice%"=="7" goto check_deps
 if "%choice%"=="0" goto end
 
 echo.
@@ -84,6 +91,14 @@ echo DQN移动控制训练 (真实AirSim环境)
 echo ============================================================
 echo.
 call scripts\训练移动DQN-真实环境.bat
+goto menu
+
+:check_deps
+cls
+echo ============================================================
+echo 环境检查与依赖安装
+echo ============================================================
+call scripts\check_dependencies.bat
 goto menu
 
 :info

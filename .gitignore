@@ -136,3 +136,48 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# ============================================================
+# Web / Node.js
+# ============================================================
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Package lock files (可选：如果团队需要版本锁定，可以注释掉)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Node.js runtime
+.npm
+.node_repl_history
+
+# Web build outputs
+web_dashboard/dist/
+web_dashboard/build/
+web_dashboard/.next/
+web_dashboard/out/
+
+# Web cache
+web_dashboard/.cache/
+web_dashboard/.parcel-cache/
+web_dashboard/.nuxt/
+web_dashboard/.vuepress/dist/
+
+# Environment variables
+web_dashboard/.env
+web_dashboard/.env.local
+web_dashboard/.env.*.local
+
+# Logs
+web_dashboard/logs/
+web_dashboard/*.log
+
+# OS files
+.DS_Store
+Thumbs.db

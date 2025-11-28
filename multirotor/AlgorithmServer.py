@@ -36,12 +36,13 @@ except ImportError as e:
     logging.warning(f"无法导入可视化模块: {str(e)}")
     HAS_VISUALIZATION = False
 
-# 新增：数据管理器（Tkinter独立窗口 + 采集逻辑）
+# 新增：Web 桥接器（替代 Tkinter，使用 Web 控制台）
 try:
-    from Algorithm.data_manager import DataCollector, DataManagerWindow
-    HAS_DATA_MANAGER = True
-except Exception:
-    HAS_DATA_MANAGER = False
+    from Algorithm.web_bridge import WebBridge
+    HAS_WEB_BRIDGE = True
+except Exception as e:
+    logging.warning(f"无法导入 WebBridge 模块: {str(e)}")
+    HAS_WEB_BRIDGE = False
 
 class MultiDroneAlgorithmServer:
     """
@@ -105,9 +106,16 @@ class MultiDroneAlgorithmServer:
         self.visualizer = None
         self.enable_visualization = enable_visualization
 
-        # 数据管理器：采集与窗口（不依赖可视化）
-        self.data_collector = DataCollector(output_dir="data_logs") if HAS_DATA_MANAGER else None
-        self.data_manager_window = DataManagerWindow(self.data_collector) if HAS_DATA_MANAGER else None
+        # Web 桥接器：连接 Node.js Web 服务器（替代 Tkinter GUI）
+        self.web_bridge = None
+        if HAS_WEB_BRIDGE:
+            try:
+                self.web_bridge = WebBridge(output_dir="data_logs")
+                logger.info("Web 桥接器已初始化，将连接到 http://localhost:3000")
+            except Exception as e:
+                logger.warning(f"Web 桥接器初始化失败: {e}")
+                logger.info("系统将继续运行，但 Web 控制台功能不可用")
+                self.web_bridge = None
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -248,14 +256,8 @@ class MultiDroneAlgorithmServer:
     def start(self) -> bool:
         """启动服务主流程：连接Unity与AirSim，初始化无人机"""
         try:
-            # 新增：启动数据采集管理窗口（独立线程，不阻塞）
-            if self.data_manager_window:
-                logger.info("启动数据采集管理窗口...")
-                try:
-                    self.data_manager_window.start()
-                except Exception as e:
-                    logger.warning(f"数据管理窗口启动失败: {e}")
-
+            # Web 桥接器会在后台自动连接，无需手动启动
+            
             # 1. 启动Unity Socket服务并等待连接
             if not self._start_unity_socket():
                 return False
@@ -517,12 +519,12 @@ class MultiDroneAlgorithmServer:
         with self.grid_lock:
             if not self.grid_data or not hasattr(self.grid_data, 'cells'):
                 return
-            # 推送当前网格状态到数据采集器（供UI实时显示或记录）
-            if self.data_collector:
+            # 推送当前网格状态到 Web 桥接器（供 Web 控制台实时显示或记录）
+            if self.web_bridge:
                 try:
-                    self.data_collector.process_step(self.grid_data)
+                    self.web_bridge.process_step(self.grid_data)
                 except Exception:
-                    # 保护性捕获任何UI/采集异常，避免影响主逻辑
+                    # 保护性捕获任何 Web 通信异常，避免影响主逻辑
                     pass
             total = len(self.grid_data.cells)
             if total == 0:
@@ -796,18 +798,13 @@ class MultiDroneAlgorithmServer:
             self.visualizer.stop_visualization()
             logger.info("可视化功能已停止")
 
-        # 关闭数据管理窗口
-        if self.data_manager_window:
-            try:
-                self.data_manager_window.stop()
-            except Exception:
-                pass
         # 如果正在录制，尝试停止并保存
-        if self.data_collector and getattr(self.data_collector, 'is_recording', False):
+        if self.web_bridge and getattr(self.web_bridge, 'is_recording', False):
             try:
-                self.data_collector.stop_recording()
+                self.web_bridge.stop_recording()
             except Exception:
                 pass
+        # Web 桥接器会在主线程结束时自动断开，无需显式停止
 
         # 等待无人机线程结束
         # for drone_name, thread in self.drone_threads.items():

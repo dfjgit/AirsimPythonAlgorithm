@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>无人机数据采集控制台</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { background-color: #f8f9fa; }
+        .card-stat { transition: all 0.3s; }
+        .val-box { font-size: 2.5rem; font-weight: bold; }
+        .status-dot { height: 15px; width: 15px; background-color: #bbb; border-radius: 50%; display: inline-block; }
+        .online { background-color: #28a745; box-shadow: 0 0 10px #28a745; }
+        .recording { animation: blink 1s infinite; background-color: #dc3545; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+        .card { border: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body class="p-4">
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2>🛸 无人机集群数据采集系统</h2>
+            <div>
+                <span id="connStatus" class="badge bg-secondary me-2">Python离线</span>
+                <span class="status-dot" id="recDot"></span>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card shadow-sm p-3 text-center">
+                    <div class="text-muted">剩余未侦察 (Value Sum)</div>
+                    <div class="val-box text-danger" id="valSum">0</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm p-3 text-center">
+                    <div class="text-muted">覆盖率 (Coverage)</div>
+                    <div class="val-box text-success"><span id="valCov">0.0</span>%</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm p-3 text-center">
+                    <div class="text-muted">已侦察栅格</div>
+                    <div class="val-box text-primary" id="valScanned">0</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm p-3 text-center">
+                    <div class="text-muted">任务时长</div>
+                    <div class="val-box" id="valTime">0.0s</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="card shadow-sm p-3">
+                    <h5>实时覆盖率趋势</h5>
+                    <canvas id="chartCov" height="100"></canvas>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm p-3 h-100">
+                    <h5>采集控制</h5>
+                    <div class="d-grid gap-2 mt-3">
+                        <button class="btn btn-success btn-lg" id="btnStart" onclick="startRec()">开始采集</button>
+                        <button class="btn btn-danger btn-lg" id="btnStop" onclick="stopRec()" disabled>停止并保存</button>
+                    </div>
+                    <hr>
+                    <h5>最近生成的文件</h5>
+                    <div class="list-group list-group-flush small" id="fileList" style="max-height: 200px; overflow-y: auto;">
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary mt-2" onclick="refreshFiles()">刷新列表</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const ctx = document.getElementById('chartCov').getContext('2d');
+        
+        // 初始化图表
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: { 
+                labels: [], 
+                datasets: [{ 
+                    label: '覆盖率 %', 
+                    data: [], 
+                    borderColor: '#198754', 
+                    tension: 0.1, 
+                    fill: true, 
+                    backgroundColor: 'rgba(25, 135, 84, 0.1)' 
+                }] 
+            },
+            options: { 
+                animation: false, 
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: { 
+                    y: { 
+                        min: 0, 
+                        max: 100 
+                    },
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: '时间 (秒)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true
+                    }
+                }
+            } 
+        });
+
+        // 状态更新
+        socket.on('web_telemetry', (data) => {
+            document.getElementById('connStatus').className = 'badge bg-success me-2';
+            document.getElementById('connStatus').innerText = 'Python在线';
+            
+            document.getElementById('valSum').innerText = data.unscanned || 0;
+            document.getElementById('valCov').innerText = (data.coverage || 0).toFixed(1);
+            document.getElementById('valScanned').innerText = data.scanned || 0;
+            document.getElementById('valTime').innerText = (data.time || 0).toFixed(1) + 's';
+
+            // 更新图表 (限制数据点数量)
+            if (data.recording) {
+                const timeLabel = (data.time || 0).toFixed(1);
+                chart.data.labels.push(timeLabel);
+                chart.data.datasets[0].data.push(data.coverage || 0);
+                if(chart.data.labels.length > 50) {
+                    chart.data.labels.shift();
+                    chart.data.datasets[0].data.shift();
+                }
+                chart.update('none'); // 禁用动画以提高性能
+            }
+            updateRecState(data.recording);
+        });
+
+        socket.on('web_file_saved', (filename) => {
+            alert(`数据已保存: ${filename}`);
+            refreshFiles();
+        });
+
+        socket.on('file_list', (files) => {
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            if (files.length === 0) {
+                list.innerHTML = '<div class="list-group-item text-muted">暂无文件</div>';
+                return;
+            }
+            files.forEach(f => {
+                const item = document.createElement('a');
+                item.href = `/logs/${f.name}`;
+                item.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
+                item.innerHTML = `<span>📄 ${f.name}</span> <span class="badge bg-light text-dark">⬇️</span>`;
+                item.target = '_blank';
+                list.appendChild(item);
+            });
+        });
+
+        socket.on('status_update', (status) => {
+            if (status.connected) {
+                document.getElementById('connStatus').className = 'badge bg-success me-2';
+                document.getElementById('connStatus').innerText = 'Python在线';
+                updateRecState(status.recording);
+            }
+        });
+
+        function startRec() { 
+            socket.emit('cmd_start_record'); 
+        }
+        
+        function stopRec() { 
+            socket.emit('cmd_stop_record'); 
+        }
+        
+        function refreshFiles() { 
+            socket.emit('get_file_list'); 
+        }
+
+        function updateRecState(isRec) {
+            const dot = document.getElementById('recDot');
+            const btnStart = document.getElementById('btnStart');
+            const btnStop = document.getElementById('btnStop');
+            
+            if (isRec) {
+                dot.classList.add('recording', 'online');
+                dot.classList.remove('online');
+                dot.classList.add('recording');
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+            } else {
+                dot.classList.remove('recording');
+                if (!dot.classList.contains('online')) {
+                    dot.classList.add('online');
+                }
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+            }
+        }
+
+        // 初始加载
+        refreshFiles();
+        
+        // 定期刷新文件列表
+        setInterval(refreshFiles, 5000);
+    </script>
+</body>
+</html>
+
