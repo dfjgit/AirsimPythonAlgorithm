@@ -1,6 +1,6 @@
 # AirsimAlgorithmPython - 无人机算法服务器
 
-基于 Python 的多无人机协同控制算法服务器，支持人工势场算法（APF）、强化学习（DQN/DDPG）和实时数据采集。
+基于 Python 的多无人机协同控制算法服务器，支持人工势场算法（APF）、DDPG 强化学习权重预测和实时数据采集。
 
 ---
 
@@ -11,7 +11,7 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 ### 核心特性
 
 - ✅ **人工势场算法（APF）**：多因素权重合成，智能路径规划
-- ✅ **强化学习支持**：DQN/DDPG 权重预测和移动控制
+- ✅ **强化学习支持**：DDPG 权重预测（DQN 移动控制开发中）
 - ✅ **多无人机协同**：支持 1-10 台无人机同时控制
 - ✅ **实时通信**：与 Unity 双向数据交互（TCP Socket）
 - ✅ **数据采集系统**：自动采集扫描数据和权重值
@@ -24,8 +24,8 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 
 ### 硬件要求
 - **操作系统**：Windows 10/11、Linux、macOS
-- **内存**：8GB RAM（推荐 16GB，用于 DQN 训练）
-- **显卡**：可选，用于加速 DQN 训练（CUDA 支持）
+- **内存**：8GB RAM（推荐 16GB，用于 DDPG 训练）
+- **显卡**：可选，用于加速 DDPG 训练（CUDA 支持）
 
 ### 软件要求
 - **Python**：3.7 或更高版本（推荐 3.8+）
@@ -88,14 +88,14 @@ cd multirotor
 # 使用固定权重（默认）
 python AlgorithmServer.py
 
-# 使用 DQN 权重预测
+# 使用 DDPG 权重预测
 python AlgorithmServer.py --use-learned-weights
 
 # 多无人机（3台）
 python AlgorithmServer.py --drones 3
 
 # 指定模型路径
-python AlgorithmServer.py --use-learned-weights --model-path DQN_Weight/models/best_model
+python AlgorithmServer.py --use-learned-weights --model-path DDPG_Weight/models/best_model
 
 # 禁用可视化
 python AlgorithmServer.py --no-visualization
@@ -138,7 +138,7 @@ AirsimAlgorithmPython/
 │   │   ├── unity_socket_server.py   # Unity 通信服务
 │   │   └── data_pack.py             # 数据包定义
 │   │
-│   ├── DQN_Weight/                   # DQN 权重预测模块
+│   ├── DDPG_Weight/                 # DDPG 权重预测模块
 │   │   ├── simple_weight_env.py     # 权重环境定义
 │   │   ├── train_with_airsim_improved.py  # 训练脚本
 │   │   ├── test_trained_model.py    # 模型测试
@@ -156,14 +156,9 @@ AirsimAlgorithmPython/
 │
 ├── scripts/                          # 批处理脚本
 │   ├── 运行系统-固定权重.bat
-│   ├── 运行系统-DQN权重.bat
-│   ├── 训练权重DQN-真实环境.bat
+│   ├── 运行系统-DDPG权重.bat
+│   ├── 训练权重DDPG-真实环境.bat
 │   └── 训练移动DQN-真实环境.bat
-│
-├── docs/                             # 文档目录
-│   ├── README.md                     # 文档索引
-│   ├── 配置和故障排除.md             # 配置指南
-│   └── DQN/                          # DQN 相关文档
 │
 ├── requirements.txt                  # Python 依赖
 ├── setup.py                          # 安装脚本
@@ -186,8 +181,8 @@ AirsimAlgorithmPython/
 
 **命令行参数**：
 ```bash
---use-learned-weights    # 使用 DQN 权重预测
---model-path PATH        # 指定模型路径
+--use-learned-weights    # 使用 DDPG 权重预测
+--model-path PATH        # 指定 DDPG 模型路径
 --drones N               # 无人机数量（默认1）
 --no-visualization       # 禁用可视化
 ```
@@ -278,7 +273,7 @@ AirsimAlgorithmPython/
 }
 ```
 
-### DQN 奖励配置（DQN_Weight/dqn_reward_config.json）
+### DDPG 奖励配置（DDPG_Weight/dqn_reward_config.json）
 
 ```json
 {
@@ -314,11 +309,11 @@ AirsimAlgorithmPython/
 # 运行 3 台无人机
 python multirotor/AlgorithmServer.py --drones 3
 
-# 运行 5 台无人机 + DQN 权重
+# 运行 5 台无人机 + DDPG 权重
 python multirotor/AlgorithmServer.py --drones 5 --use-learned-weights
 ```
 
-### 使用 DQN 权重预测
+### 使用 DDPG 权重预测
 
 ```bash
 # 使用默认模型（自动选择最佳）
@@ -326,7 +321,7 @@ python multirotor/AlgorithmServer.py --use-learned-weights
 
 # 使用指定模型
 python multirotor/AlgorithmServer.py --use-learned-weights \
-    --model-path DQN_Weight/models/best_model
+    --model-path DDPG_Weight/models/best_model
 ```
 
 ### 数据采集
@@ -343,29 +338,31 @@ timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repu
 
 ---
 
-## 🧠 DQN 强化学习
+## 🧠 DDPG 强化学习
 
-### DQN 权重预测
+### DDPG 权重预测
 
-**功能**：使用强化学习动态调整 APF 算法权重
+**功能**：使用 DDPG 强化学习动态调整 APF 算法权重
 
 **训练模型**：
 ```bash
-# 进入 DQN_Weight 目录
-cd multirotor/DQN_Weight
+# 进入 DDPG_Weight 目录
+cd multirotor/DDPG_Weight
 
 # 训练模型（真实 AirSim 环境）
 python train_with_airsim_improved.py
 
 # 或使用批处理脚本
-..\..\scripts\训练权重DQN-真实环境.bat
+..\..\scripts\训练权重DDPG-真实环境.bat
 ```
+
+**注意**：虽然批处理文件名仍包含"DQN"，但实际使用的是 DDPG 算法。
 
 **使用模型**：
 ```bash
 # 使用训练好的模型
 python AlgorithmServer.py --use-learned-weights \
-    --model-path DQN_Weight/models/best_model
+    --model-path DDPG_Weight/models/best_model
 ```
 
 ### DQN 移动控制
@@ -448,14 +445,14 @@ self.data_collector = DataCollector(collection_interval=1.0)  # 1秒采集一次
 - 查看控制台错误信息
 - 尝试禁用可视化：`--no-visualization`
 
-#### 4. DQN 模型加载失败
+#### 4. DDPG 模型加载失败
 
 **症状**：模型加载错误
 
 **解决方案**：
 - 确认模型文件存在（`.zip` 文件）
 - 检查 stable-baselines3 版本
-- 查看模型路径是否正确
+- 查看模型路径是否正确（应为 `DDPG_Weight/models/`）
 - 确认模型与代码版本兼容
 
 #### 5. 无人机不移动
@@ -535,7 +532,7 @@ python -c "from Algorithm.data_collector import DataCollector; print('OK')"
 
 ### 模块文档
 - **路径规划**：[multirotor/path/README.md](multirotor/path/README.md)
-- **DQN 权重使用**：[multirotor/DQN_Weight/模型使用指南.md](multirotor/DQN_Weight/模型使用指南.md)
+- **DDPG 权重使用**：[multirotor/DDPG_Weight/模型使用指南.md](multirotor/DDPG_Weight/模型使用指南.md)
 
 ---
 
@@ -576,9 +573,10 @@ backports.ssl_match_hostname  # SSL 支持
 
 - **v1.0.0**（2025-11-28）
   - 添加数据采集系统
-  - 支持 DQN 权重预测
+  - 支持 DDPG 权重预测
   - 多无人机协同控制
   - 实时可视化
+  - 修正命名：DQN_Weight → DDPG_Weight
 
 ---
 
@@ -613,7 +611,8 @@ backports.ssl_match_hostname  # SSL 支持
 2. **AirSim 连接**：确保 AirSim 在 Python 服务器启动前运行
 3. **Unity 连接**：Unity 项目必须在 Python 服务器启动后运行
 4. **端口占用**：确保端口 41451 未被占用
-5. **模型文件**：DQN 模型文件较大，需要足够的存储空间
+5. **模型文件**：DDPG 模型文件较大，需要足够的存储空间
+6. **目录命名**：确保使用 `DDPG_Weight` 而非 `DQN_Weight`（已重命名）
 
 ---
 

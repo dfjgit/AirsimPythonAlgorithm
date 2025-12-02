@@ -29,6 +29,8 @@ class DataCollector:
         self.csv_file = None
         self.csv_writer = None
         self.start_time = time.time()
+        self.header_written = False  # 表头是否已写入
+        self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -48,23 +50,10 @@ class DataCollector:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_filename = data_path / f"scan_data_{timestamp}.csv"
             
-            # 打开CSV文件并写入表头
+            # 打开CSV文件（表头将在第一次采集数据时写入）
             self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
             self.csv_writer = csv.writer(self.csv_file)
-            self.csv_writer.writerow([
-                'timestamp', 
-                'elapsed_time', 
-                'scanned_count', 
-                'unscanned_count', 
-                'total_count', 
-                'scan_ratio',
-                'repulsion_coefficient',
-                'entropy_coefficient',
-                'distance_coefficient',
-                'leader_range_coefficient',
-                'direction_retention_coefficient'
-            ])
-            self.csv_file.flush()
+            self.csv_filename = csv_filename
             
             logger.info(f"数据采集系统初始化完成，输出文件: {csv_filename}")
         except Exception as e:
@@ -160,6 +149,10 @@ class DataCollector:
                     if not runtime_data_dict or not drone_names:
                         continue
                     
+                    # 更新无人机列表（如果发生变化）
+                    if not self.drone_names_list or set(self.drone_names_list) != set(drone_names):
+                        self.drone_names_list = sorted(drone_names)  # 按名称排序以保持一致性
+                    
                     # 获取第一个无人机的运行时数据（所有无人机应该有相同的leader信息）
                     first_drone_name = drone_names[0]
                     runtime_data = runtime_data_dict.get(first_drone_name)
@@ -169,6 +162,20 @@ class DataCollector:
                     
                     leader_pos = runtime_data.leader_position
                     leader_radius = runtime_data.leader_scan_radius
+                
+                # 获取所有无人机的坐标
+                drone_positions = {}
+                with data_lock:
+                    for drone_name in self.drone_names_list:
+                        runtime_data = runtime_data_dict.get(drone_name)
+                        if runtime_data and runtime_data.position:
+                            drone_positions[drone_name] = {
+                                'x': runtime_data.position.x,
+                                'y': runtime_data.position.y,
+                                'z': runtime_data.position.z
+                            }
+                        else:
+                            drone_positions[drone_name] = {'x': 0.0, 'y': 0.0, 'z': 0.0}
                 
                 # 获取权重值（从第一个无人机的算法实例）
                 weights = {}
@@ -187,7 +194,7 @@ class DataCollector:
                             'directionRetentionCoefficient': config.directionRetentionCoefficient
                         }
                 
-                # 统计AOI区域内的栅格状态
+                # 统计AOI区域内的栅格状态和全局统计
                 with grid_lock:
                     if not grid_data or not hasattr(grid_data, 'cells'):
                         continue
@@ -196,7 +203,20 @@ class DataCollector:
                     unscanned_count = 0
                     total_count = 0
                     
+                    # 全局统计变量
+                    global_scanned_count = 0
+                    global_total_count = 0
+                    total_entropy = 0.0
+                    
                     for cell in grid_data.cells:
+                        # 全局统计：所有栅格
+                        global_total_count += 1
+                        total_entropy += cell.entropy
+                        
+                        # 判断是否已侦察：entropy < 30 表示已侦察
+                        if cell.entropy < 30:
+                            global_scanned_count += 1
+                        
                         # 计算栅格中心到Leader的距离
                         cell_center = cell.center
                         distance = (cell_center - leader_pos).magnitude()
@@ -210,8 +230,42 @@ class DataCollector:
                             else:
                                 unscanned_count += 1
                     
-                    # 计算扫描比例
+                    # 计算AOI区域扫描比例
                     scan_ratio = (scanned_count / total_count * 100) if total_count > 0 else 0.0
+                    
+                    # 计算全局平均熵值
+                    global_avg_entropy = (total_entropy / global_total_count) if global_total_count > 0 else 0.0
+                    
+                    # 计算全局采集百分比
+                    global_scan_ratio = (global_scanned_count / global_total_count * 100) if global_total_count > 0 else 0.0
+                
+                # 如果表头未写入，先写入表头
+                if self.csv_writer and not self.header_written:
+                    header = [
+                        'timestamp', 
+                        'elapsed_time', 
+                        'scanned_count', 
+                        'unscanned_count', 
+                        'total_count', 
+                        'scan_ratio',
+                        'global_avg_entropy',
+                        'global_scan_ratio',
+                        'repulsion_coefficient',
+                        'entropy_coefficient',
+                        'distance_coefficient',
+                        'leader_range_coefficient',
+                        'direction_retention_coefficient'
+                    ]
+                    # 为每个无人机添加坐标列
+                    for drone_name in self.drone_names_list:
+                        header.append(f'{drone_name}_x')
+                        header.append(f'{drone_name}_y')
+                        header.append(f'{drone_name}_z')
+                    
+                    self.csv_writer.writerow(header)
+                    self.csv_file.flush()
+                    self.header_written = True
+                    logger.info(f"CSV表头已写入，包含 {len(self.drone_names_list)} 个无人机的坐标列")
                 
                 # 记录到CSV文件
                 if self.csv_writer:
@@ -219,26 +273,38 @@ class DataCollector:
                     elapsed_time = current_time - self.start_time
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
-                    self.csv_writer.writerow([
+                    row = [
                         timestamp,
                         f"{elapsed_time:.2f}",
                         scanned_count,
                         unscanned_count,
                         total_count,
                         f"{scan_ratio:.2f}%",
+                        f"{global_avg_entropy:.2f}",
+                        f"{global_scan_ratio:.2f}%",
                         weights.get('repulsionCoefficient', 0.0),
                         weights.get('entropyCoefficient', 0.0),
                         weights.get('distanceCoefficient', 0.0),
                         weights.get('leaderRangeCoefficient', 0.0),
                         weights.get('directionRetentionCoefficient', 0.0)
-                    ])
+                    ]
+                    
+                    # 添加所有无人机的坐标
+                    for drone_name in self.drone_names_list:
+                        pos = drone_positions.get(drone_name, {'x': 0.0, 'y': 0.0, 'z': 0.0})
+                        row.append(f"{pos['x']:.3f}")
+                        row.append(f"{pos['y']:.3f}")
+                        row.append(f"{pos['z']:.3f}")
+                    
+                    self.csv_writer.writerow(row)
                     self.csv_file.flush()  # 立即刷新到文件
                     
                     logger.debug(
                         f"数据采集: 时间={elapsed_time:.1f}s, "
                         f"已侦察={scanned_count}, 未侦察={unscanned_count}, "
                         f"总数={total_count}, 扫描比例={scan_ratio:.2f}%, "
-                        f"权重={weights}"
+                        f"全局平均熵值={global_avg_entropy:.2f}, 全局采集比例={global_scan_ratio:.2f}%, "
+                        f"权重={weights}, 无人机数={len(self.drone_names_list)}"
                     )
                 
             except Exception as e:
