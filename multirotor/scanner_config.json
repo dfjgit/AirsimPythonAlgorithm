@@ -4,6 +4,7 @@
     "distanceCoefficient": 2.0,
     "leaderRangeCoefficient": 2.0,
     "directionRetentionCoefficient": 2.0,
+    "groundRepulsionCoefficient": 2.0,
     "updateInterval": 0.5,
     "moveSpeed": 1.0,
     "rotationSpeed": 120.0,

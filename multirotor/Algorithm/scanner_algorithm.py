@@ -34,7 +34,8 @@ class ScannerAlgorithm:
                  self.config.entropyCoefficient + 
                  self.config.distanceCoefficient + 
                  self.config.leaderRangeCoefficient + 
-                 self.config.directionRetentionCoefficient)
+                 self.config.directionRetentionCoefficient + 
+                 self.config.groundRepulsionCoefficient)
         
         # 处理所有系数都为0的特殊情况
         if total < 0.001:
@@ -45,7 +46,8 @@ class ScannerAlgorithm:
             self.config.entropyCoefficient / total,
             self.config.distanceCoefficient / total,
             self.config.leaderRangeCoefficient / total,
-            self.config.directionRetentionCoefficient / total
+            self.config.directionRetentionCoefficient / total,
+            self.config.groundRepulsionCoefficient  / total
         )
 
     def get_valid_candidate_cells(self, grid_data: HexGridDataModel, runtime_data: ScannerRuntimeData) -> List[HexCell]:
@@ -220,6 +222,25 @@ class ScannerAlgorithm:
             leader_range_dir = direction * 0.3
         
         return leader_range_dir
+    
+    def calculate_ground_repulsion_direction(self, runtime_data: ScannerRuntimeData) -> Vector3:
+        """计算地面斥力（避免坠地）"""
+        current_pos = ensure_unity_coordinates(runtime_data.position)
+        repulsion_dir = Vector3()  # 明确变量为方向向量
+        min_safe_height = 0.2  # 最低安全高度
+        max_repulsion_height = 0.5  # 超过此高度无地面斥力
+        
+        # 高度低于安全值时，产生向上的斥力
+        if current_pos.y < max_repulsion_height:
+            # 距离地面越近，斥力越大（非线性增长）
+            height_ratio = current_pos.y / max_repulsion_height
+            repulsion_strength = 1.0 - height_ratio  # 0~1之间
+            # 低于最低安全高度时，斥力翻倍
+            if current_pos.y < min_safe_height:
+                repulsion_strength *= 2.0
+            repulsion_dir = Vector3(0, repulsion_strength, 0)
+        
+        return repulsion_dir
 
     def calculate_direction_retention_direction(self) -> Vector3:
         """计算方向保持向量（与C# CalculateDirectionRetentionDirection逻辑一致）"""
@@ -234,9 +255,10 @@ class ScannerAlgorithm:
                         collide_dir: Vector3, 
                         leader_range_dir: Vector3, 
                         direction_retention_dir: Vector3,
-                        weights: Tuple[float, float, float, float, float]) -> Vector3:
+                        ground_repulsion_dir: Vector3,
+                        weights: Tuple[float, float, float, float, float, float]) -> Vector3:
         """合并所有方向向量（与C# MergeDirections逻辑一致）"""
-        repulsion_weight, entropy_weight, distance_weight, leader_range_weight, direction_retention_weight = weights
+        repulsion_weight, entropy_weight, distance_weight, leader_range_weight, direction_retention_weight, ground_repulsion_weight = weights
         
         # 确保所有输入向量都使用Unity坐标系
         score_dir = ensure_unity_coordinates(score_dir)
@@ -244,6 +266,8 @@ class ScannerAlgorithm:
         collide_dir = ensure_unity_coordinates(collide_dir)
         leader_range_dir = ensure_unity_coordinates(leader_range_dir)
         direction_retention_dir = ensure_unity_coordinates(direction_retention_dir)
+        ground_repulsion_dir = ensure_unity_coordinates(ground_repulsion_dir)
+
         
         # 应用权重合并向量
         final_move_dir = (
@@ -251,7 +275,8 @@ class ScannerAlgorithm:
             path_dir * distance_weight +
             collide_dir * repulsion_weight +
             leader_range_dir * leader_range_weight +
-            direction_retention_dir * direction_retention_weight
+            direction_retention_dir * direction_retention_weight +
+            ground_repulsion_dir * ground_repulsion_weight
         )
         
         # 归一化最终方向
@@ -301,6 +326,8 @@ class ScannerAlgorithm:
             self.config.leaderRangeCoefficient = coefficients['leaderRangeCoefficient']
         if 'directionRetentionCoefficient' in coefficients:
             self.config.directionRetentionCoefficient = coefficients['directionRetentionCoefficient']
+        if 'groundRepulsionCoefficient' in coefficients:
+            self.config.groundRepulsionCoefficient = coefficients['groundRepulsionCoefficient']
     
     def get_current_coefficients(self):
         """获取当前权重系数"""
@@ -309,7 +336,8 @@ class ScannerAlgorithm:
             'entropyCoefficient': self.config.entropyCoefficient,
             'distanceCoefficient': self.config.distanceCoefficient,
             'leaderRangeCoefficient': self.config.leaderRangeCoefficient,
-            'directionRetentionCoefficient': self.config.directionRetentionCoefficient
+            'directionRetentionCoefficient': self.config.directionRetentionCoefficient,
+            'groundRepulsionCoefficient' : self.config.groundRepulsionCoefficient
         }
     
     def update_runtime_data(self, grid_data: HexGridDataModel, 
@@ -347,11 +375,12 @@ class ScannerAlgorithm:
                     collide_dir = self.calculate_collide_direction(runtime_data)
                     leader_range_dir = self.calculate_leader_range_direction(runtime_data)
                     direction_retention_dir = self.calculate_direction_retention_direction()
+                    ground_repulsion_dir = self.calculate_ground_repulsion_direction(runtime_data)
                     
                     # 合并所有向量
                     final_move_dir = self.merge_directions(
                         score_dir, path_dir, collide_dir, 
-                        leader_range_dir, direction_retention_dir,
+                        leader_range_dir, direction_retention_dir, ground_repulsion_dir,
                         weights
                     )
                     

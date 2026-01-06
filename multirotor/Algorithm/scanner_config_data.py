@@ -11,6 +11,7 @@ class ScannerConfigData:
     distanceCoefficient: float
     leaderRangeCoefficient: float
     directionRetentionCoefficient: float
+    groundRepulsionCoefficient: float
     updateInterval: float
 
     # 基础参数（Python配置）
@@ -44,6 +45,7 @@ class ScannerConfigData:
         self.leaderRangeCoefficient = 3.0
         self.directionRetentionCoefficient = 2.0
         self.updateInterval = 0.2
+        self.groundRepulsionCoefficient = 0.2
 
         # 运动参数默认值
         self.moveSpeed = 2.0
@@ -68,6 +70,8 @@ class ScannerConfigData:
         self.distanceCoefficient = self._get_float(json_data, 'distanceCoefficient', 2.0)
         self.leaderRangeCoefficient = self._get_float(json_data, 'leaderRangeCoefficient', 3.0)
         self.directionRetentionCoefficient = self._get_float(json_data, 'directionRetentionCoefficient', 2.0)
+        self.groundRepulsionCoefficient = self._get_float(json_data, 'groundRepulsionCoefficient', 2.0)
+
         self.updateInterval = self._get_float(json_data, 'updateInterval', 0.2)
 
         self.moveSpeed = self._get_float(json_data, 'moveSpeed', 2.0)
@@ -110,6 +114,7 @@ class ScannerConfigData:
             'distanceCoefficient': self.distanceCoefficient,
             'leaderRangeCoefficient': self.leaderRangeCoefficient,
             'directionRetentionCoefficient': self.directionRetentionCoefficient,
+            'groundRepulsionCoefficient': self.groundRepulsionCoefficient,
             'updateInterval': self.updateInterval,
 
             # 运动参数
@@ -150,7 +155,8 @@ class ScannerConfigData:
             self.entropyCoefficient,
             self.distanceCoefficient,
             self.leaderRangeCoefficient,
-            self.directionRetentionCoefficient
+            self.directionRetentionCoefficient,
+            self.groundRepulsionCoefficient
         ]:
             if coeff < 0:
                 return False
