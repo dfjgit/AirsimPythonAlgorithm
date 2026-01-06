@@ -25,6 +25,9 @@ from Algorithm.scanner_algorithm import ScannerAlgorithm
 from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.HexGridDataModel import HexGridDataModel
+from Crazyswarm.crazyswarm import CrazyswarmManager
+from Crazyswarm.crazyflie_operate import CrazyflieOperate
+from Crazyswarm.crazyflie_logging_data import CrazyflieLoggingData
 from Algorithm.Vector3 import Vector3
 from Algorithm.data_collector import DataCollector
 from AirsimServer.data_pack import PackType
@@ -61,6 +64,7 @@ class MultiDroneAlgorithmServer:
         # 核心组件初始化
         self.drone_controller = DroneController()  # 无人机控制器
         self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
+        self.crazyswarm = CrazyswarmManager(self.unity_socket)
         self.config_data = self._load_config()  # 算法配置数据
         logger.info(f"配置文件加载完成 {self.drone_names}")
         
@@ -332,6 +336,8 @@ class MultiDroneAlgorithmServer:
             if not self._takeoff_all():
                 return False
             
+            self._crazyflie_takeoff_all()
+            
             # 起飞后等待更长时间，确保无人机稳定
             logger.info("无人机起飞完成，等待稳定...")
             time.sleep(3)
@@ -377,6 +383,11 @@ class MultiDroneAlgorithmServer:
                 logger.info(f"无人机{drone_name}起飞成功")
             time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
         return all_success
+    
+    def _crazyflie_takeoff_all(self):
+        for drone_name in self.drone_names:
+            self.crazyswarm.take_off(drone_name, 0.5, 2)
+
 
     # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
@@ -439,7 +450,14 @@ class MultiDroneAlgorithmServer:
                         logger.info("配置数据更新成功")
                     except Exception as e:
                         logger.error(f"更新配置数据失败: {str(e)}")
-
+                elif 'crazyflie_logging' in received_data:
+                    try:
+                        crazyflie_logging_json = CrazyflieLoggingData.from_json_to_dicts(received_data['crazyflie_logging'])
+                        crazyflie_logging_list = CrazyflieLoggingData.from_dict_list(crazyflie_logging_json)
+                        # logger.info("收到Crazyflies实体无人机日志数据更新")
+                        self.crazyswarm.update_crazyflies(crazyflie_logging_list)
+                    except Exception as e:
+                        logger.error(f"更新Crazyflies实体无人机日志数据失败: {str(e)}")
                 # 未知数据类型处理
                 else:
                     logger.warning(f"收到未知格式数据: {received_data}")
@@ -599,7 +617,10 @@ class MultiDroneAlgorithmServer:
                 )
                 
                 # 控制无人机移动
-                self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                velocity = self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+
+                # 获取实体无人机前往指令
+                self.crazyswarm.go_to(drone_name, velocity, self.config_data.updateInterval)
                 
                 # 发送处理后的数据到Unity
                 self._send_processed_data(drone_name, final_dir)
@@ -673,6 +694,9 @@ class MultiDroneAlgorithmServer:
             self.config_data.updateInterval, drone_name
         )
 
+        return Vector3(velocity_airsim.x, velocity_airsim.y, velocity_airsim.z)
+
+
         # if not success:
         #     logger.error(f"无人机{drone_name}移动指令发送失败")
         # else:
@@ -681,6 +705,7 @@ class MultiDroneAlgorithmServer:
         #         f"水平{horizontal_direction} + 垂直{vertical_direction} -> "
         #         f"AirSim速度{velocity_airsim} (水平:{horizontal_speed_airsim:.2f}, 垂直:{abs(velocity_airsim.z):.2f})"
         #     )
+
 
     def _check_drone_stuck(self, drone_name: str, current_pos: Vector3) -> None:
         """检查无人机是否卡住（位置长时间不变）"""

@@ -6,6 +6,7 @@ import time
 from typing import Dict, Any, Optional, Callable, Iterable
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.scanner_config_data import ScannerConfigData
+from Crazyswarm.crazyflie_operate import CrazyflieOperate
 from AirsimServer.data_pack import DataPacks, PackType
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,11 +34,13 @@ class UnitySocketServer:
         # 接收数据存储与回调
         self.received_grid = None
         self.received_runtimes = []  # 存储多个运行时数据
+        self.received_crazyflie_logging = [] #存储所有Crazyflie无人机的当前日志
         self.data_callback = None  # 数据接收回调函数
         
         # 性能统计
         self.stats_grid_updates = 0
         self.stats_runtime_updates = 0
+        self.stats_crazyflie_logging_updates = 0
 
     def start(self) -> bool:
         """启动Socket服务器并监听连接"""
@@ -100,11 +103,23 @@ class UnitySocketServer:
             pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             # 每个runtime数据已包含uavname，无需顶层字段
             pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
-
             self.pending_packs.append(pack)
             # logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
+
+    def send_crazyflie_operate(self, operate : CrazyflieOperate):
+        """发送实体无人机操作指令数据到Unity"""
+        try:
+            pack = DataPacks()
+            pack.type = PackType.crazyflie_operate_data
+            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.pack_data_list = operate.to_dict()
+            self.pending_packs.append(pack)
+            logger.log(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
+        except Exception as e:
+            logger.error(f"实体无人机Crazyflie指令数据准备失败: {str(e)}")
+
     
     def send_reset_command(self) -> None:
         """发送环境重置命令到Unity"""
@@ -222,8 +237,6 @@ class UnitySocketServer:
         # 对于没有换行符的情况，我们不做处理，等待更多数据到达
 
 
-
-
     def _handle_parsed(self, data: Dict[str, Any]) -> None: ##这里data应该时DataPack格式
         """处理解析后的DataPacks数据并触发回调"""
         if not data or 'type' not in data:
@@ -246,7 +259,10 @@ class UnitySocketServer:
             self.received_runtimes = pack_data_list if isinstance(pack_data_list, list) else []
             callback_data['runtime_data'] = self.received_runtimes
             self.stats_runtime_updates += 1
-
+        elif data_type == PackType.crazyflie_logging_data.value:
+            self.received_crazyflie_logging = pack_data_list
+            callback_data['crazyflie_logging'] = self.received_crazyflie_logging
+            self.stats_crazyflie_logging_updates += 1
         if 'time_span' in data:
             callback_data['time_span'] = data['time_span']
 

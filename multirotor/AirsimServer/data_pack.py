@@ -7,6 +7,8 @@ class PackType(Enum):
     grid_data = "grid_data"  # HexGridDataModel，地图数据
     config_data = "config_data"  # ScannerConfigData
     runtime_data = "runtime_data"  # ScannerRuntimeData
+    crazyflie_logging_data = "crazyflie_logging"
+    crazyflie_operate_data = "crazyflie_operate"
     reset_env = "reset_env"  # 重置环境命令
 
 
