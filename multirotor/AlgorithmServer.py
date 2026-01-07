@@ -2,6 +2,7 @@ import sys
 import time
 import logging
 import json
+import math
 import threading
 import os
 import sys
@@ -318,12 +319,14 @@ class MultiDroneAlgorithmServer:
         """初始化无人机：启用API控制并解锁"""
         all_success = True
         for drone_name in self.drone_names:
-            if not self.drone_controller.enable_api_control(True, drone_name):
-                logger.error(f"无人机{drone_name}启用API控制失败")
-                all_success = False
-            if not self.drone_controller.arm_disarm(True, drone_name):
-                logger.error(f"无人机{drone_name}解锁失败")
-                all_success = False
+            # 添加是否为实体无人机镜像判断
+            if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                if not self.drone_controller.enable_api_control(True, drone_name):
+                    logger.error(f"无人机{drone_name}启用API控制失败")
+                    all_success = False
+                if not self.drone_controller.arm_disarm(True, drone_name):
+                    logger.error(f"无人机{drone_name}解锁失败")
+                    all_success = False
         return all_success
 
     def start_mission(self) -> bool:
@@ -335,8 +338,6 @@ class MultiDroneAlgorithmServer:
             # 1. 所有无人机起飞
             if not self._takeoff_all():
                 return False
-            
-            self._crazyflie_takeoff_all()
             
             # 起飞后等待更长时间，确保无人机稳定
             logger.info("无人机起飞完成，等待稳定...")
@@ -375,18 +376,18 @@ class MultiDroneAlgorithmServer:
         logger.info("开始所有无人机起飞流程")
         all_success = True
         for drone_name in self.drone_names:
-            logger.info(f"无人机{drone_name}准备起飞...")
-            if not self.drone_controller.takeoff(drone_name):
-                logger.error(f"无人机{drone_name}起飞失败")
-                all_success = False
+            # 添加是否为实体无人机镜像判断
+            if self.config_data.get_uav_crazyflie_mirror(drone_name):
+                self.crazyswarm.take_off(drone_name, 0.5, 2)
             else:
-                logger.info(f"无人机{drone_name}起飞成功")
-            time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
+                logger.info(f"无人机{drone_name}准备起飞...")
+                if not self.drone_controller.takeoff(drone_name):
+                    logger.error(f"无人机{drone_name}起飞失败")
+                    all_success = False
+                else:
+                    logger.info(f"无人机{drone_name}起飞成功")
+                time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
         return all_success
-    
-    def _crazyflie_takeoff_all(self):
-        for drone_name in self.drone_names:
-            self.crazyswarm.take_off(drone_name, 0.5, 2)
 
 
     # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
@@ -467,6 +468,78 @@ class MultiDroneAlgorithmServer:
         finally:
             self._record_entropy_snapshot()
 
+
+    def _crazyflie_get_state_for_prediction(self, drone_name: str) -> np.ndarray:
+        """提取Crazyflie实体无人机状态用于权重预测（18维）"""
+        try:
+            with self.data_lock:
+                runtime_data = self.unity_runtime_data[drone_name]
+
+                # 获取实体无人机当前日志数据
+                logging_data = self.crazyswarm.get_loggingData_by_droneName(drone_name)
+                grid_data = self.grid_data 
+                
+                # 位置 (3)
+                pos = [logging_data.X, logging_data.Y, logging_data.Z]
+                position = [pos.x, pos.y, pos.z]
+                
+                # 速度 (3)
+                velocity = [logging_data.XSpeed, logging_data.YSpeed, logging_data.ZSpeed]
+                
+                # 方向 (3) 通过速度计算当前移动方向
+                direction = calculate_move_direction(logging_data.XSpeed, logging_data.YSpeed, logging_data.ZSpeed)
+                
+                # 附近熵值 (3)
+                nearby_cells = [c for c in grid_data.cells[:50] if (c.center - pos).magnitude() < 10.0]
+                if nearby_cells:
+                    entropies = [c.entropy for c in nearby_cells]
+                    entropy_info = [float(np.mean(entropies)), float(np.max(entropies)), float(np.std(entropies))]
+                else:
+                    entropy_info = [50.0, 50.0, 0.0]
+                
+                # Leader相对位置 (3)
+                if runtime_data.leader_position:
+                    leader_rel = [
+                        runtime_data.leader_position.x - pos.x,
+                        runtime_data.leader_position.y - pos.y,
+                        runtime_data.leader_position.z - pos.z
+                    ]
+                else:
+                    leader_rel = [0.0, 0.0, 0.0]
+                
+                # 扫描进度 (3)
+                total = len(grid_data.cells)
+                scanned = sum(1 for c in grid_data.cells if c.entropy < 30)
+                scan_info = [scanned / max(total, 1), float(scanned), float(total - scanned)]
+                
+                state = position + velocity + direction + entropy_info + leader_rel + scan_info
+                return np.array(state, dtype = np.float32)
+                
+        except Exception as e:
+            logger.debug(f"状态提取失败: {str(e)}")
+            return np.zeros(18, dtype = np.float32)
+        
+        def calculate_move_direction(vx: float, vy: float, vz: float) -> tuple[float, float, float]:
+            """
+            通过三维速度计算移动方向（返回单位方向向量）
+            :param vx: 速度x分量
+            :param vy: 速度y分量
+            :param vz: 速度z分量
+            :return: 归一化后的方向向量 (dx, dy, dz)，模长=1；速度为0时返回(0,0,0)
+            """
+            # 1. 计算速度向量的模长（速率）
+            speed = math.sqrt(vx**2 + vy**2 + vz**2)
+            
+            # 2. 避免除以0（速度为0时，无移动方向）
+            if speed < 1e-6:  # 浮点精度容错，避免极小值
+                return (0.0, 0.0, 0.0)
+            
+            # 3. 归一化得到方向向量
+            dx = vx / speed
+            dy = vy / speed
+            dz = vz / speed
+            
+            return (dx, dy, dz)
 
     def _get_state_for_prediction(self, drone_name: str) -> np.ndarray:
         """提取状态用于权重预测（18维）"""
@@ -554,7 +627,10 @@ class MultiDroneAlgorithmServer:
             return None
         
         try:
-            state = self._get_state_for_prediction(drone_name)
+            # 是否为实体无人机镜像
+            isCrazyflieMirror = self.config_data.get_uav_crazyflie_mirror(drone_name)
+            state = self._get_state_for_prediction(drone_name) if isCrazyflieMirror else self._crazyflie_get_state_for_prediction(drone_name)
+
             action, _ = self.weight_model.predict(state, deterministic=True)
             
             # 权重范围限制 [0.5, 5.0]
@@ -616,11 +692,12 @@ class MultiDroneAlgorithmServer:
                     self.grid_data, self.unity_runtime_data[drone_name]
                 )
                 
-                # 控制无人机移动
-                velocity = self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-
-                # 获取实体无人机前往指令
-                self.crazyswarm.go_to(drone_name, velocity, self.config_data.updateInterval)
+                if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                    # 控制无人机移动
+                     self._control_drone_movement(drone_name, final_dir.finalMoveDir)
+                else:
+                    # 获取实体无人机前往指令
+                    self.crazyswarm.go_to(drone_name, self.config_data.updateInterval)
                 
                 # 发送处理后的数据到Unity
                 self._send_processed_data(drone_name, final_dir)
@@ -815,6 +892,8 @@ class MultiDroneAlgorithmServer:
             self.visualizer.stop_visualization()
             logger.info("可视化功能已停止")
 
+        self._crazyflie_all_land()
+
         # 等待无人机线程结束
         # for drone_name, thread in self.drone_threads.items():
         #     if thread and thread.is_alive():
@@ -841,6 +920,14 @@ class MultiDroneAlgorithmServer:
             else:
                 logger.error(f"无人机{drone_name}降落失败")
             time.sleep(1)
+
+    def _crazyflie_all_land(self):
+        """控制所有实体无人机降落"""
+        logger.info("开始所有实体无人机降落流程")
+        for drone_name in self.drone_names:
+            if self.config_data.get_uav_crazyflie_mirror(drone_name):
+                self.crazyswarm.land(drone_name, 2)
+                time.sleep(2)
 
 
     def _disconnect_airsim(self) -> None:

@@ -1,5 +1,6 @@
 import re
 import logging
+import traceback
 import numpy as np
 from typing import Dict, List
 from multirotor.Algorithm.Vector3 import Vector3
@@ -16,13 +17,13 @@ class CrazyswarmManager:
     
     def __init__(self, unity_socket : UnitySocketServer):
         self.unity_socket = unity_socket  # Unity通信Socket服务
-        self.crazyfliePositionById : Dict[int, CrazyflieLoggingData] = {}
+        self.crazyflieLoggingDataById : Dict[int, CrazyflieLoggingData] = {}
 
     def update_crazyflies(self, crazyflie_running_datas : List[CrazyflieLoggingData]):
         # 遍历每个无人机的运行数据对象
         for data in crazyflie_running_datas:
         # 以id为键，loggingData为值，更新/写入字典
-            self.crazyfliePositionById[data.Id] = data
+            self.crazyflieLoggingDataById[data.Id] = data
 
     def take_off(self, drone_name, height : float, duration : float):
         operateData = {
@@ -31,12 +32,14 @@ class CrazyswarmManager:
         }
         self.operate(drone_name, EnumCrazyflieOperate.TakeOff, operateData)
 
-    def go_to(self, drone_name : str, velocity : Vector3, duration : float):
+    def go_to(self, drone_name : str, duration : float):
+
         id = self.get_id_by_name(drone_name)
 
-        if id not in self.crazyfliePositionById:
+        if id not in self.crazyflieLoggingDataById:
             return
 
+        velocity = Vector3(self.crazyflieLoggingDataById[id].XSpeed, self.crazyflieLoggingDataById[id].YSpeed, self.crazyflieLoggingDataById[id].ZSpeed)
         position = self.get_position_by_velocity(id, velocity, duration)
         wayPoint = WayPoint.CreateFromPosition(position, duration)
         wayPath = WayPath.CreateFromPoint(wayPoint)
@@ -53,8 +56,8 @@ class CrazyswarmManager:
     def operate(self, drone_name : str, operateType : EnumCrazyflieOperate, operateData):
         id = self.get_id_by_name(drone_name)
 
-        if id not in self.crazyfliePositionById:
-            logger.warning(f"Crazyflie实体无人机: {id}号不存在，当前Crazyflie实体无人机集群为：{self.crazyfliePositionById.keys()}")
+        if id not in self.crazyflieLoggingDataById:
+            logger.warning(f"Crazyflie实体无人机: {id}号不存在，当前Crazyflie实体无人机集群为：{self.crazyflieLoggingDataById.keys()}")
             return
 
         operate = CrazyflieOperate(id, operateType, operateData)
@@ -68,13 +71,22 @@ class CrazyswarmManager:
         :param duration: 速度持续的时间（秒）
         :return: 经过duration时间后的物体新位置（Vector3类型）
         """
-        if id not in self.crazyfliePositionById:
+        if id not in self.crazyflieLoggingDataById:
             return
         
         displacement = velocity * duration  # 计算这段时间内的位移
-        currentPosition = Vector3(self.crazyfliePositionById[id].X, self.crazyfliePositionById[id].Y, self.crazyfliePositionById[id].Z)
+        currentPosition = Vector3(self.crazyflieLoggingDataById[id].X, self.crazyflieLoggingDataById[id].Y, self.crazyflieLoggingDataById[id].Z)
         new_position = Vector3(currentPosition.x + displacement.x, currentPosition.y + displacement.y, currentPosition.z + displacement.z)  # 当前位置叠加位移得到新位置
         return new_position
+    
+    def get_loggingData_by_droneName(self, drone_name: str) -> CrazyflieLoggingData:
+        id = self.get_id_by_name(drone_name)
+        if id not in self.crazyflieLoggingDataById:
+            # 返回空的CrazyflieLoggingData实例（需确保该类支持无参初始化）
+            return CrazyflieLoggingData()
+        # 返回对应数据
+        return self.crazyflieLoggingDataById[id]
+
     
     def send_crazyflie_operate_data(self, crazyflieOperateData : CrazyflieOperate):
         try:

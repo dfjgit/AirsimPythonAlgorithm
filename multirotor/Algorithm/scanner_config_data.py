@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from .Vector3 import Vector3
 
 
@@ -28,6 +28,12 @@ class ScannerConfigData:
     avoidRevisits: bool
     targetSearchRange: float
     revisitCooldown: float
+
+    # 新增字段：无人机配置（原isCrazyflieMirror升级为按无人机区分）
+    droneSettings: Dict[str, Dict[str, bool]]
+    # 新增字段：配置名称和隐藏标志
+    name: str
+    hideFlags: int
 
     def __init__(self, config_file: str = None):
         # 设置默认值
@@ -62,6 +68,14 @@ class ScannerConfigData:
         self.targetSearchRange = 20.0
         self.revisitCooldown = 60.0
 
+        # 新增字段默认值
+        self.droneSettings = {
+            "UAV1": {"isCrazyflieMirror": False},
+            "UAV2": {"isCrazyflieMirror": False}
+        }
+        self.name = "ScannerConfigData"
+        self.hideFlags = 0
+
     def parse_json_data(self, json_data: Dict[str, Any]) -> None:
         """从JSON字典解析数据到对象属性"""
         # 解析基础参数
@@ -86,6 +100,16 @@ class ScannerConfigData:
         self.targetSearchRange = self._get_float(json_data, 'targetSearchRange', 20.0)
         self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 60.0)
 
+        # 解析新增字段
+        # 解析无人机配置（兼容空值/非字典情况）
+        self.droneSettings = json_data.get('droneSettings', {})
+        # 确保droneSettings中每个无人机配置都有isCrazyflieMirror字段
+        for uav_key in self.droneSettings:
+            if 'isCrazyflieMirror' not in self.droneSettings[uav_key]:
+                self.droneSettings[uav_key]['isCrazyflieMirror'] = False
+        
+        self.name = json_data.get('name', "ScannerConfigData")
+        self.hideFlags = self._get_int(json_data, 'hideFlags', 0)
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:
@@ -130,7 +154,12 @@ class ScannerConfigData:
             # 目标选择策略
             'avoidRevisits': self.avoidRevisits,
             'targetSearchRange': self.targetSearchRange,
-            'revisitCooldown': self.revisitCooldown
+            'revisitCooldown': self.revisitCooldown,
+
+            # 新增字段
+            'droneSettings': self.droneSettings,
+            'name': self.name,
+            'hideFlags': self.hideFlags
         }
 
     def to_json(self) -> str:
@@ -139,6 +168,7 @@ class ScannerConfigData:
 
     def validate(self) -> bool:
         """验证数据有效性"""
+        # 基础参数验证
         if self.moveSpeed <= 0:
             return False
         if self.scanRadius <= 0:
@@ -149,7 +179,8 @@ class ScannerConfigData:
             return False
         if self.updateInterval <= 0:
             return False
-        # 验证系数非负
+        
+        # 系数非负验证
         for coeff in [
             self.repulsionCoefficient,
             self.entropyCoefficient,
@@ -160,12 +191,31 @@ class ScannerConfigData:
         ]:
             if coeff < 0:
                 return False
+        
+        # 新增字段验证
+        # 确保droneSettings是字典且非空（可选，根据业务需求调整）
+        if not isinstance(self.droneSettings, dict):
+            return False
+        # 验证每个无人机配置的isCrazyflieMirror是布尔值
+        for uav_key, uav_config in self.droneSettings.items():
+            if not isinstance(uav_config.get('isCrazyflieMirror', False), bool):
+                return False
+        
+        # 验证hideFlags是非负整数
+        if self.hideFlags < 0:
+            return False
+        
         return True
 
     def copy(self):
         """创建对象的深拷贝"""
         new_data = ScannerConfigData()
-        new_data.__dict__.update(self.__dict__)
+        # 深拷贝droneSettings（避免浅拷贝导致的引用问题）
+        new_data.droneSettings = {k: v.copy() for k, v in self.droneSettings.items()}
+        # 拷贝其他属性
+        new_data.__dict__.update({
+            k: v for k, v in self.__dict__.items() if k != 'droneSettings'
+        })
         return new_data
     
     @classmethod
@@ -193,4 +243,24 @@ class ScannerConfigData:
             self._set_default_values()
 
     def __repr__(self) -> str:
-        return f"ScannerConfigData:ScanRadius:{self.scanRadius}"
+        return f"ScannerConfigData(name={self.name}, ScanRadius={self.scanRadius}, UAVs={list(self.droneSettings.keys())})"
+
+    # 新增便捷方法：获取指定无人机的isCrazyflieMirror配置
+    def get_uav_crazyflie_mirror(self, uav_id: str) -> bool:
+        """
+        获取指定无人机的isCrazyflieMirror配置
+        :param uav_id: 无人机ID（如UAV1、UAV2）
+        :return: 是否为Crazyflie镜像
+        """
+        return self.droneSettings.get(uav_id, {}).get('isCrazyflieMirror', False)
+
+    # 新增便捷方法：设置指定无人机的isCrazyflieMirror配置
+    def set_uav_crazyflie_mirror(self, uav_id: str, is_mirror: bool) -> None:
+        """
+        设置指定无人机的isCrazyflieMirror配置
+        :param uav_id: 无人机ID（如UAV1、UAV2）
+        :param is_mirror: 是否为Crazyflie镜像
+        """
+        if uav_id not in self.droneSettings:
+            self.droneSettings[uav_id] = {}
+        self.droneSettings[uav_id]['isCrazyflieMirror'] = is_mirror

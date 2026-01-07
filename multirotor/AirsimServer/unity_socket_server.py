@@ -116,7 +116,7 @@ class UnitySocketServer:
             pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             pack.pack_data_list = operate.to_dict()
             self.pending_packs.append(pack)
-            logger.log(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
+            logger.info(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
         except Exception as e:
             logger.error(f"实体无人机Crazyflie指令数据准备失败: {str(e)}")
 

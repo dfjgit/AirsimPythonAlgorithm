@@ -15,6 +15,17 @@
     "targetSearchRange": 20.0,
     "revisitCooldown": 10.0,
     "altitude": 2.0,
+    "droneSettings": {
+        "UAV1": {
+            "isCrazyflieMirror": true
+        },
+        "UAV2": {
+            "isCrazyflieMirror": false
+        },
+        "UAV3": {
+            "isCrazyflieMirror": false
+        }
+    },
     "name": "ScannerConfigData",
     "hideFlags": 0
 }
