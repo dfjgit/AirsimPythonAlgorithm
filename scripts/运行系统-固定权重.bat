@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul
+chcp 65001 >nul 2>&1
 cls
 
 echo ============================================================
@@ -9,8 +9,8 @@ echo.
 
 REM 激活虚拟环境
 echo [1/2] 激活Python虚拟环境...
-if exist "%~dp0..\.venv\Scripts\activate.bat" (
-    call "%~dp0..\.venv\Scripts\activate.bat"
+if exist "%~dp0..\myvenv\Scripts\activate.bat" (
+    call "%~dp0..\myvenv\Scripts\activate.bat"
     echo [OK] 虚拟环境已激活
 ) else (
     echo [!] 虚拟环境不存在，使用系统Python
@@ -26,9 +26,12 @@ echo 无人机数量: 3
 echo ============================================================
 echo.
 
-REM 启动算法服务器
-echo [2/2] 启动算法服务器...
-python %~dp0..\multirotor\AlgorithmServer.py --drones 3
+REM 关键修改：先切换到AlgorithmServer.py所在的目录
+echo [2/2] 切换到脚本目录并启动算法服务器....
+cd /d "%~dp0..\multirotor"  :: 切换到multirotor目录（AlgorithmServer.py在这里）
+
+REM 直接用脚本名运行（此时是当前目录的短路径，无空格问题）
+python AlgorithmServer.py --drones 3
 
 echo.
 echo ============================================================

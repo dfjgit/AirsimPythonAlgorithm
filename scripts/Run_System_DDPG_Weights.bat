@@ -3,53 +3,51 @@ chcp 65001 >nul
 cls
 
 echo ============================================================
-echo 启动系统 - DDPG权重预测模式
+echo Start System - DDPG Weight Prediction Mode
 echo ============================================================
 echo.
 
-REM 激活虚拟环境
-echo [1/3] 激活Python虚拟环境...
+REM Activate virtual environment
+echo [1/3] Activating Python virtual environment...
 if exist "%~dp0..\myvenv\Scripts\activate.bat" (
     call "%~dp0..\myvenv\Scripts\activate.bat"
-    echo [OK] 虚拟环境已激活
+    echo [OK] Virtual environment activated successfully
 ) else (
-    echo [!] 虚拟环境不存在，使用系统Python
+    echo [!] Virtual environment does not exist, using system Python
 )
 echo.
 
-REM 检查模型文件
-echo [2/3] 检查模型文件...
+REM Check model file
+echo [2/3] Checking model file...
 if exist "%~dp0..\multirotor\DDPG_Weight\models\best_model.zip" (
-    echo [OK] 模型文件已找到
+    echo [OK] Model file found
 ) else (
-    echo [!] 警告: 模型文件不存在
-    echo [!] 请先运行选项 [4] 训练权重DDPG
+    echo [!] Warning: Model file does not exist
+    echo [!] Please run option [4] Train DDPG Weights first
     echo.
     pause
     exit /b 1
 )
 echo.
 
-REM 显示配置信息
+REM Display configuration information
 echo ============================================================
-echo 运行配置
+echo Running Configuration
 echo ============================================================
-echo 模式: DDPG权重预测
-echo 模型: multirotor\DDPG_Weight\models\best_model.zip
-echo 奖励配置: multirotor\DDPG_Weight\dqn_reward_config.json
-echo 无人机数量: 3
+echo Mode: DDPG Weight Prediction
+echo Model: multirotor\DDPG_Weight\models\best_model.zip
+echo Reward Config: multirotor\DDPG_Weight\dqn_reward_config.json
+echo Number of Drones: 3
 echo ============================================================
 echo.
 
-REM 运行算法服务器（使用DDPG权重）
-echo [3/3] 启动算法服务器...
+REM Run algorithm server (using DDPG weights)
+echo [3/3] Starting algorithm server...
 python %~dp0..\multirotor\AlgorithmServer.py --use-learned-weights --model-path DDPG_Weight/models/best_model --drones 3
 
 echo.
 echo ============================================================
-echo 程序已退出
+echo Program exited
 echo ============================================================
 echo.
 pause
-
-

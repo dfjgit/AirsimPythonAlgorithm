@@ -629,7 +629,7 @@ class MultiDroneAlgorithmServer:
         try:
             # 是否为实体无人机镜像
             isCrazyflieMirror = self.config_data.get_uav_crazyflie_mirror(drone_name)
-            state = self._get_state_for_prediction(drone_name) if isCrazyflieMirror else self._crazyflie_get_state_for_prediction(drone_name)
+            state = self._get_state_for_prediction(drone_name) if not isCrazyflieMirror else self._crazyflie_get_state_for_prediction(drone_name)
 
             action, _ = self.weight_model.predict(state, deterministic=True)
             
@@ -771,7 +771,6 @@ class MultiDroneAlgorithmServer:
             self.config_data.updateInterval, drone_name
         )
 
-        return Vector3(velocity_airsim.x, velocity_airsim.y, velocity_airsim.z)
 
 
         # if not success:

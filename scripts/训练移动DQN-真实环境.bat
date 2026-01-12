@@ -22,8 +22,8 @@ echo.
 
 REM 激活虚拟环境
 echo [1/3] 激活虚拟环境...
-if exist "%~dp0..\.venv\Scripts\activate.bat" (
-    call "%~dp0..\.venv\Scripts\activate.bat"
+if exist "%~dp0..\myvenv\Scripts\activate.bat" (
+    call "%~dp0..\myvenv\Scripts\activate.bat"
     if %ERRORLEVEL% NEQ 0 (
         echo [!] 虚拟环境激活失败，使用系统Python
     ) else (

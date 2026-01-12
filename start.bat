@@ -97,7 +97,7 @@ echo   - multirotor\AlgorithmServer.py    : 算法服务器
 echo   - multirotor\Algorithm\            : APF算法实现
 echo   - multirotor\DDPG_Weight\         : DDPG权重APF训练
 echo   - multirotor\DQN_Movement\         : DQN移动控制训练
-echo   - .venv\                           : Python虚拟环境
+echo   - myvenv\                           : Python虚拟环境
 echo.
 echo 配置文件:
 echo   - multirotor\scanner_config.json                : APF算法配置
