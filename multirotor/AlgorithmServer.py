@@ -65,8 +65,8 @@ class MultiDroneAlgorithmServer:
         # 核心组件初始化
         self.drone_controller = DroneController()  # 无人机控制器
         self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
-        self.crazyswarm = CrazyswarmManager(self.unity_socket)
         self.config_data = self._load_config()  # 算法配置数据
+        self.crazyswarm = CrazyswarmManager(self.unity_socket, self.config_data)
         logger.info(f"配置文件加载完成 {self.drone_names}")
         
         # 数据存储结构（按无人机名称区分）
@@ -386,7 +386,7 @@ class MultiDroneAlgorithmServer:
                     all_success = False
                 else:
                     logger.info(f"无人机{drone_name}起飞成功")
-                time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
+            time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
         return all_success
 
 
@@ -697,7 +697,7 @@ class MultiDroneAlgorithmServer:
                      self._control_drone_movement(drone_name, final_dir.finalMoveDir)
                 else:
                     # 获取实体无人机前往指令
-                    self.crazyswarm.go_to(drone_name, self.config_data.updateInterval)
+                    self.crazyswarm.go_to(drone_name, final_dir.finalMoveDir, self.config_data.updateInterval)
                 
                 # 发送处理后的数据到Unity
                 self._send_processed_data(drone_name, final_dir)
@@ -892,6 +892,7 @@ class MultiDroneAlgorithmServer:
             logger.info("可视化功能已停止")
 
         self._crazyflie_all_land()
+        self.crazyswarm.clear()
 
         # 等待无人机线程结束
         # for drone_name, thread in self.drone_threads.items():

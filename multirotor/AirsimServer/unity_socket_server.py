@@ -108,13 +108,13 @@ class UnitySocketServer:
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
 
-    def send_crazyflie_operate(self, operate : CrazyflieOperate):
+    def send_crazyflie_operate(self, operateDatas: list[CrazyflieOperate]):
         """发送实体无人机操作指令数据到Unity"""
         try:
             pack = DataPacks()
             pack.type = PackType.crazyflie_operate_data
             pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            pack.pack_data_list = operate.to_dict()
+            pack.pack_data_list = [operateData.to_dict() for operateData in operateDatas]
             self.pending_packs.append(pack)
             logger.info(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
         except Exception as e:
