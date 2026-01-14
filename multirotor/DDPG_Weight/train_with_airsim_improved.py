@@ -158,16 +158,16 @@ class ImprovedTrainingCallback(BaseCallback):
         return True  # 继续训练
 
 
+# ==================== 训练参数配置 ====================
+DRONE_NAMES = ["UAV1", "UAV2", "UAV3"]  # 使用4台无人机协同训练
+TOTAL_TIMESTEPS = 100            # 总训练步数（快速训练）
+STEP_DURATION = 20.0             # 每步飞行时长（秒） 提高飞行时长
+CHECKPOINT_FREQ = 1000           # 检查点保存频率
+ENABLE_VISUALIZATION = True      # 是否启用可视化（训练专用可视化）
+# =====================================================
+
 def main():
     """主训练流程"""
-    
-    # ==================== 训练参数配置 ====================
-    DRONE_NAMES = ["UAV1", "UAV2", "UAV3"]  # 使用4台无人机协同训练
-    TOTAL_TIMESTEPS = 100            # 总训练步数（快速训练）
-    STEP_DURATION = 20.0             # 每步飞行时长（秒） 提高飞行时长
-    CHECKPOINT_FREQ = 1000           # 检查点保存频率
-    ENABLE_VISUALIZATION = True      # 是否启用可视化（训练专用可视化）
-    # =====================================================
     
     # 全局变量，用于清理
     server = None
@@ -200,7 +200,7 @@ def main():
         # 创建服务器（训练模式不使用学习的权重，禁用AlgorithmServer自带的可视化）
         server = MultiDroneAlgorithmServer(
             drone_names=DRONE_NAMES,
-            use_learned_weights=False,
+            use_learned_weights=False,  # 训练模式不使用学习的权重
             model_path=None,  # 训练模式不需要加载模型
             enable_visualization=False  # 禁用AlgorithmServer的可视化，使用训练专用可视化
         )
@@ -264,7 +264,7 @@ def main():
                 print(f"⚠️  训练可视化初始化失败: {str(e)}")
                 print("💡 训练将继续，但不显示可视化")
                 training_visualizer = None
-        
+
         # 创建DDPG模型
         print("\n[5/5] 创建DDPG模型...")
         
@@ -400,4 +400,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

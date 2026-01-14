@@ -83,6 +83,17 @@ class MultiDroneAlgorithmServer:
             name: {} for name in self.drone_names
         }
 
+        # 电量字典（按无人机名称存储电量信息）
+        self.battery_data: Dict[str, Dict[str, float]] = {
+            name: {
+                'voltage': 4.2,  # 初始电压4.2V
+                'initial_voltage': 4.2,  # 初始电压记录
+                'consumption_rate': 0.01,  # 基础消耗率0.01V/步
+                'last_update_time': time.time()  # 最后更新时间
+            } for name in self.drone_names
+        }
+        self.battery_lock = threading.Lock()  # 电量数据锁
+
         # 共享网格数据
         self.grid_data = HexGridDataModel()
 
@@ -242,6 +253,91 @@ class MultiDroneAlgorithmServer:
             logger.info("💡 系统将继续运行，但不显示可视化界面")
             logger.info("=" * 60)
             self.visualizer = None
+
+    def get_battery_voltage(self, drone_name: str) -> float:
+        """获取指定无人机的当前电压"""
+        with self.battery_lock:
+            if drone_name in self.battery_data:
+                return self.battery_data[drone_name]['voltage']
+            else:
+                logger.warning(f"无人机 {drone_name} 的电量数据不存在")
+                return 4.2  # 返回默认电压
+
+    def update_battery_voltage(self, drone_name: str, action_intensity: float = 0.0) -> float:
+        """更新指定无人机的电量消耗
+        :param drone_name: 无人机名称
+        :param action_intensity: 动作强度（0-1），影响额外消耗
+        :return: 更新后的电压值
+        """
+        with self.battery_lock:
+            if drone_name not in self.battery_data:
+                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
+                self.battery_data[drone_name] = {
+                    'voltage': 4.2,
+                    'initial_voltage': 4.2,
+                    'consumption_rate': 0.01,
+                    'last_update_time': time.time()
+                }
+            
+            battery_info = self.battery_data[drone_name]
+            current_time = time.time()
+            time_elapsed = current_time - battery_info['last_update_time']
+            
+            # 基础消耗（每步0.01V）
+            base_consumption = battery_info['consumption_rate']
+            
+            # 动作强度影响（动作越强，消耗越多）
+            action_consumption = action_intensity * 0.005  # 最大额外消耗0.005V
+            
+            # 总消耗
+            total_consumption = base_consumption + action_consumption
+            
+            # 更新电压（不低于3.0V）
+            new_voltage = max(3.0, battery_info['voltage'] - total_consumption)
+            battery_info['voltage'] = new_voltage
+            battery_info['last_update_time'] = current_time
+            
+            logger.debug(f"无人机 {drone_name} 电量更新: {battery_info['voltage']:.2f}V (消耗: {total_consumption:.3f}V)")
+            return new_voltage
+
+    def reset_battery_voltage(self, drone_name: str) -> float:
+        """重置指定无人机的电量为初始值"""
+        with self.battery_lock:
+            if drone_name in self.battery_data:
+                initial_voltage = self.battery_data[drone_name]['initial_voltage']
+                self.battery_data[drone_name]['voltage'] = initial_voltage
+                self.battery_data[drone_name]['last_update_time'] = time.time()
+                logger.info(f"无人机 {drone_name} 电量已重置为: {initial_voltage:.2f}V")
+                return initial_voltage
+            else:
+                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
+                self.battery_data[drone_name] = {
+                    'voltage': 4.2,
+                    'initial_voltage': 4.2,
+                    'consumption_rate': 0.01,
+                    'last_update_time': time.time()
+                }
+                return 4.2
+
+    def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
+        """获取所有无人机的电量数据"""
+        with self.battery_lock:
+            return self.battery_data.copy()
+
+    def set_battery_consumption_rate(self, drone_name: str, rate: float) -> None:
+        """设置指定无人机的电量消耗率"""
+        with self.battery_lock:
+            if drone_name in self.battery_data:
+                self.battery_data[drone_name]['consumption_rate'] = rate
+                logger.info(f"无人机 {drone_name} 电量消耗率设置为: {rate:.3f}V/步")
+            else:
+                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
+                self.battery_data[drone_name] = {
+                    'voltage': 4.2,
+                    'initial_voltage': 4.2,
+                    'consumption_rate': rate,
+                    'last_update_time': time.time()
+                }
 
     def start(self) -> bool:
         """启动服务主流程：连接Unity与AirSim，初始化无人机"""

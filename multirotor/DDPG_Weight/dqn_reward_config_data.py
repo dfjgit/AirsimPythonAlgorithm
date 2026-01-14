@@ -38,10 +38,16 @@ class DQNRewardConfig:
             rewards = config.get('reward_coefficients', {})
             self.exploration_reward = rewards.get('exploration_reward', 5.0)
             self.out_of_range_penalty = rewards.get('out_of_range_penalty', 10.0)
+            self.battery_optimal_reward = rewards.get('battery_optimal_reward', 3.0)
+            self.battery_low_penalty = rewards.get('battery_low_penalty', -5.0)
+            self.action_smooth_reward = rewards.get('action_smooth_reward', 1.0)
             
             # 阈值参数
             thresholds = config.get('thresholds', {})
             self.scanned_entropy_threshold = thresholds.get('scanned_entropy_threshold', 30)
+            self.battery_optimal_min = thresholds.get('battery_optimal_min', 3.7)
+            self.battery_optimal_max = thresholds.get('battery_optimal_max', 4.0)
+            self.battery_low_threshold = thresholds.get('battery_low_threshold', 3.5)
             
             # Episode参数
             episode = config.get('episode', {})
@@ -63,9 +69,15 @@ class DQNRewardConfig:
         # 奖励参数
         self.exploration_reward = 5.0
         self.out_of_range_penalty = 10.0
+        self.battery_optimal_reward = 3.0
+        self.battery_low_penalty = -5.0
+        self.action_smooth_reward = 1.0
         
         # 阈值参数
         self.scanned_entropy_threshold = 30
+        self.battery_optimal_min = 3.7
+        self.battery_optimal_max = 4.0
+        self.battery_low_threshold = 3.5
         
         # Episode参数
         self.max_steps = 200
@@ -79,10 +91,16 @@ class DQNRewardConfig:
         return {
             'reward_coefficients': {
                 'exploration_reward': self.exploration_reward,
-                'out_of_range_penalty': self.out_of_range_penalty
+                'out_of_range_penalty': self.out_of_range_penalty,
+                'battery_optimal_reward': self.battery_optimal_reward,
+                'battery_low_penalty': self.battery_low_penalty,
+                'action_smooth_reward': self.action_smooth_reward
             },
             'thresholds': {
-                'scanned_entropy_threshold': self.scanned_entropy_threshold
+                'scanned_entropy_threshold': self.scanned_entropy_threshold,
+                'battery_optimal_min': self.battery_optimal_min,
+                'battery_optimal_max': self.battery_optimal_max,
+                'battery_low_threshold': self.battery_low_threshold
             },
             'episode': {
                 'max_steps': self.max_steps

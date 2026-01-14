@@ -207,6 +207,50 @@ class TrainingVisualizer:
                     dir_y = screen_y - drone_info['finalMoveDir'].z * 20
                     pygame.draw.line(self.screen, self.WHITE, (screen_x, screen_y), (dir_x, dir_y), 3)
                 
+                # 绘制电量信息
+                if 'battery_voltage' in drone_info:
+                    voltage = drone_info['battery_voltage']
+                    
+                    # 根据电量决定颜色
+                    if voltage >= 3.7:
+                        battery_color = self.GREEN
+                    elif voltage >= 3.5:
+                        battery_color = self.ORANGE
+                    else:
+                        battery_color = self.RED
+                    
+                    # 绘制电量文本
+                    voltage_text = f"{voltage:.2f}V"
+                    if not hasattr(self, '_battery_font'):
+                        try:
+                            self._battery_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 10)
+                        except:
+                            self._battery_font = None
+                    
+                    if self._battery_font:
+                        text_surface = self._battery_font.render(voltage_text, True, battery_color)
+                        self.screen.blit(text_surface, (screen_x - 15, screen_y - 25))
+                    
+                    # 绘制电量条
+                    battery_width = 20
+                    battery_height = 6
+                    battery_x = screen_x - battery_width // 2
+                    battery_y = screen_y - 35
+                    
+                    # 电量百分比 (4.2V为100%, 3.0V为0%)
+                    battery_percent = max(0, min(1, (voltage - 3.0) / (4.2 - 3.0)))
+                    
+                    # 背景条
+                    pygame.draw.rect(self.screen, self.DARK_GRAY, (battery_x, battery_y, battery_width, battery_height))
+                    
+                    # 电量填充
+                    fill_width = int(battery_width * battery_percent)
+                    if fill_width > 0:
+                        pygame.draw.rect(self.screen, battery_color, (battery_x, battery_y, fill_width, battery_height))
+                    
+                    # 边框
+                    pygame.draw.rect(self.screen, self.WHITE, (battery_x, battery_y, battery_width, battery_height), 1)
+                
                 # 绘制名称
                 if not hasattr(self, '_drone_name_cache'):
                     self._drone_name_cache = {}
@@ -284,7 +328,7 @@ class TrainingVisualizer:
         # 计算并显示训练进度（如果env有max_steps信息）
         if self.env and hasattr(self.env, 'reward_config'):
             max_steps = getattr(self.env.reward_config, 'max_steps', 50)
-            # 假设训练目标是完成一定数量的episodes
+# 假设训练目标是完成一定数量的episodes
             # 这里可以显示当前episode内的进度
             if max_steps > 0:
                 progress = min(self.current_episode_steps / max_steps * 100, 100)
@@ -330,7 +374,6 @@ class TrainingVisualizer:
         rate_text = self._info_font.render(f"速率: {steps_per_sec:.2f} steps/s", True, self.GREEN)
         self.screen.blit(rate_text, (panel_x + 15, y))
         y += 18
-        
         # 计算训练已用时间
         elapsed_time = time.time() - self.training_start_time
         hours = int(elapsed_time // 3600)
@@ -547,17 +590,17 @@ class TrainingVisualizer:
                 self.screen.blit(error_text, (panel_x + 15, y))
     
     def draw_env_info(self):
-        """绘制环境信息（右侧，奖励曲线下方）"""
+        """绘制环境信息面板（左上角）- 增强版"""
         if not hasattr(self, '_env_font'):
             try:
                 self._env_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 14)
             except:
                 self._env_font = self.font
         
-        panel_x = self.SCREEN_WIDTH - 380
-        panel_y = 570  # 在奖励曲线（360+200）下方，留10px间距
-        panel_width = 370
-        panel_height = 140
+        panel_x = 10
+        panel_y = 10
+        panel_width = 300
+        panel_height = 160  # 增加高度以容纳电量信息
         
         # 半透明背景
         panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
@@ -589,6 +632,28 @@ class TrainingVisualizer:
             self.screen.blit(text3, (panel_x + 15, y))
             y += 20
         
+        # 电量统计
+        battery_stats = self._calculate_battery_stats()
+        if battery_stats:
+            avg_voltage = battery_stats['avg_voltage']
+            min_voltage = battery_stats['min_voltage']
+            
+            # 根据平均电量决定颜色
+            if avg_voltage >= 3.7:
+                voltage_color = self.GREEN
+            elif avg_voltage >= 3.5:
+                voltage_color = self.ORANGE
+            else:
+                voltage_color = self.RED
+            
+            text4 = self._env_font.render(f"平均电量: {avg_voltage:.2f}V", True, voltage_color)
+            self.screen.blit(text4, (panel_x + 15, y))
+            y += 20
+            
+            text5 = self._env_font.render(f"最低电量: {min_voltage:.2f}V", True, voltage_color)
+            self.screen.blit(text5, (panel_x + 15, y))
+            y += 20
+        
         # 训练模式提示
         mode_text = self._env_font.render("模式: DQN权重训练", True, self.ORANGE)
         self.screen.blit(mode_text, (panel_x + 15, y))
@@ -616,6 +681,32 @@ class TrainingVisualizer:
                 'scanned': scanned,
                 'scan_ratio': scan_ratio
             }
+        except Exception:
+            return None
+    
+    def _calculate_battery_stats(self):
+        """计算电量统计信息"""
+        try:
+            if not self.server or not hasattr(self.server, 'get_all_battery_data'):
+                return None
+            
+            battery_data = self.server.get_all_battery_data()
+            if not battery_data:
+                return None
+            
+            voltages = []
+            for drone_name, battery_info in battery_data.items():
+                voltage = battery_info.get('voltage', 4.2)
+                voltages.append(voltage)
+            
+            if voltages:
+                return {
+                    'avg_voltage': sum(voltages) / len(voltages),
+                    'min_voltage': min(voltages),
+                    'max_voltage': max(voltages),
+                    'drone_count': len(voltages)
+                }
+            return None
         except Exception:
             return None
     
@@ -651,6 +742,16 @@ class TrainingVisualizer:
                                 'leaderScanRadius': runtime_data.leader_scan_radius
                             }
                             runtime_data_dict[drone_name] = drone_info
+            except Exception:
+                pass
+            
+            # 获取电量数据
+            try:
+                if hasattr(self.server, 'get_all_battery_data'):
+                    battery_data = self.server.get_all_battery_data()
+                    for drone_name, battery_info in battery_data.items():
+                        if drone_name in runtime_data_dict:
+                            runtime_data_dict[drone_name]['battery_voltage'] = battery_info.get('voltage', 4.2)
             except Exception:
                 pass
             
@@ -756,4 +857,3 @@ class TrainingVisualizer:
         self.running = False
         if self.visualization_thread and self.visualization_thread.is_alive():
             self.visualization_thread.join(timeout=2.0)
-

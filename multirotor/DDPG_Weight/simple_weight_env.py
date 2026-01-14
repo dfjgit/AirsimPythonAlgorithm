@@ -55,6 +55,7 @@ class SimpleWeightEnv(gym.Env):
         self.prev_scanned_cells = 0
         self.step_count = 0
         self.episode_count = 0  # 记录Episode编号
+        self.last_action = np.zeros(5)  # 记录上一步的动作，用于电量消耗计算
         
     def reset(self):
         """重置环境"""
@@ -70,6 +71,12 @@ class SimpleWeightEnv(gym.Env):
         
         # 如果有server
         if self.server:
+            # 重置电量数据
+            if self.reset_unity:
+                print(f"🔋 重置电量数据...")
+                self.server.reset_battery_voltage(self.drone_name)
+                print(f"  ✅ 电量已重置为4.2V")
+            
             # 模式A：标准episode训练（重置Unity环境）
             if self.reset_unity:
                 print(f"🎮 正在重置Unity环境...")
@@ -117,8 +124,14 @@ class SimpleWeightEnv(gym.Env):
                 self.prev_scanned_cells = 0
         
         self.step_count = 0
+        self.last_action = np.zeros(5)
         
         state = self._get_state()
+        
+        # 显示电量信息
+        if self.server:
+            current_voltage = self.server.get_battery_voltage(self.drone_name)
+            print(f"🔋 当前电量: {current_voltage:.2f}V")
         
         print(f"\n{'='*60}")
         print(f"🎯 开始 Episode #{self.episode_count}")
@@ -169,6 +182,15 @@ class SimpleWeightEnv(gym.Env):
         print(f"  • 方向保持: {weights['directionRetentionCoefficient']:.3f}")
         
         if self.server:
+            # 更新电量消耗（基于动作强度）
+            if self.step_count > 1:  # 从第二步开始计算电量消耗
+                action_intensity = np.linalg.norm(action - self.last_action)
+                self.server.update_battery_voltage(self.drone_name, action_intensity)
+            
+            # 显示当前电量
+            current_voltage = self.server.get_battery_voltage(self.drone_name)
+            print(f"🔋 当前电量: {current_voltage:.2f}V")
+            
             # 设置权重（算法线程会使用新权重飞行）
             self.server.algorithms[self.drone_name].set_coefficients(weights)
             
@@ -189,6 +211,9 @@ class SimpleWeightEnv(gym.Env):
             print(f"\r  [{'█'*40}] ✅ 完成!     ")
         else:
             time.sleep(0.1)  # 测试模式快速跳过
+        
+        # 记录当前动作
+        self.last_action = action.copy()
         
         # 获取新状态
         next_state = self._get_state()
@@ -279,7 +304,7 @@ class SimpleWeightEnv(gym.Env):
             return np.zeros(18, dtype=np.float32)
     
     def _calculate_reward(self):
-        """计算奖励（简化版：只考虑探索和越界）"""
+        """计算奖励（包含电量奖励机制）"""
         if not self.server:
             return 0.0
         
@@ -301,6 +326,26 @@ class SimpleWeightEnv(gym.Env):
                     dist_to_leader = (runtime_data.position - runtime_data.leader_position).magnitude()
                     if runtime_data.leader_scan_radius > 0 and dist_to_leader > runtime_data.leader_scan_radius:
                         reward -= self.reward_config.out_of_range_penalty
+                
+                # 3. 电量奖励机制
+                current_voltage = self.server.get_battery_voltage(self.drone_name)
+                
+                # 最优电量范围奖励 (3.7V - 4.0V)
+                if 3.7 <= current_voltage <= 4.0:
+                    reward += self.reward_config.battery_optimal_reward
+                    print(f"🔋 电量奖励: +{self.reward_config.battery_optimal_reward:.2f} (电量{current_voltage:.2f}V在最优范围)")
+                
+                # 低电量惩罚 (低于3.5V)
+                elif current_voltage < 3.5:
+                    reward -= self.reward_config.battery_low_penalty
+                    print(f"🔋 电量惩罚: -{self.reward_config.battery_low_penalty:.2f} (电量{current_voltage:.2f}V过低)")
+                
+                # 4. 动作平稳奖励（减少剧烈动作）
+                if self.step_count > 1:
+                    action_intensity = np.linalg.norm(self.last_action)
+                    if action_intensity < 0.5:  # 动作强度小于0.5时给予奖励
+                        reward += self.reward_config.action_smooth_reward
+                        print(f"🔄 平稳动作奖励: +{self.reward_config.action_smooth_reward:.2f}")
                 
         except Exception as e:
             print(f"[错误] 计算奖励失败: {str(e)}")
@@ -371,4 +416,3 @@ if __name__ == "__main__":
     print(f"  动作空间: {env_b.action_space.shape}")
     
     print("\n[OK] 两种模式都可用！")
-

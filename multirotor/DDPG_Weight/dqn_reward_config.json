@@ -1,10 +1,16 @@
 {
     "reward_coefficients": {
         "exploration_reward": 5.0,
-        "out_of_range_penalty": 10.0
+        "out_of_range_penalty": 10.0,
+        "battery_optimal_reward": 3.0,
+        "battery_low_penalty": -5.0,
+        "action_smooth_reward": 1.0
     },
     "thresholds": {
-        "scanned_entropy_threshold": 30
+        "scanned_entropy_threshold": 30,
+        "battery_optimal_min": 3.7,
+        "battery_optimal_max": 4.0,
+        "battery_low_threshold": 3.5
     },
     "episode": {
         "max_steps": 10
@@ -14,4 +20,3 @@
         "weight_max": 5.0
     }
 }
-
