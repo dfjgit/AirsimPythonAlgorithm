@@ -181,15 +181,17 @@ class SimpleWeightEnv(gym.Env):
         print(f"  • Leader:   {weights['leaderRangeCoefficient']:.3f}")
         print(f"  • 方向保持: {weights['directionRetentionCoefficient']:.3f}")
         
+        # 在 step() 方法中
         if self.server:
-            # 更新电量消耗（基于动作强度）
-            if self.step_count > 1:  # 从第二步开始计算电量消耗
+            # 更新电量消耗（使用新的电量模块）
+            if self.step_count > 1:
                 action_intensity = np.linalg.norm(action - self.last_action)
-                self.server.update_battery_voltage(self.drone_name, action_intensity)
+                self.server.battery_manager.update_voltage(self.drone_name, action_intensity)
             
             # 显示当前电量
-            current_voltage = self.server.get_battery_voltage(self.drone_name)
-            print(f"🔋 当前电量: {current_voltage:.2f}V")
+            battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+            current_voltage = battery_info.voltage
+            print(f"🔋 当前电量: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)")
             
             # 设置权重（算法线程会使用新权重飞行）
             self.server.algorithms[self.drone_name].set_coefficients(weights)

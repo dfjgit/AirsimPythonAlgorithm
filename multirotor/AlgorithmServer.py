@@ -26,6 +26,7 @@ from Algorithm.scanner_algorithm import ScannerAlgorithm
 from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.HexGridDataModel import HexGridDataModel
+from Algorithm.battery_data import BatteryManager, BatteryInfo, BatteryStatus  # 新增导入
 from Crazyswarm.crazyswarm import CrazyswarmManager
 from Crazyswarm.crazyflie_operate import CrazyflieOperate
 from Crazyswarm.crazyflie_logging_data import CrazyflieLoggingData
@@ -66,7 +67,6 @@ class MultiDroneAlgorithmServer:
         self.drone_controller = DroneController()  # 无人机控制器
         self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
         self.config_data = self._load_config()  # 算法配置数据
-        self.crazyswarm = CrazyswarmManager(self.unity_socket, self.config_data)
         logger.info(f"配置文件加载完成 {self.drone_names}")
         
         # 数据存储结构（按无人机名称区分）
@@ -83,16 +83,11 @@ class MultiDroneAlgorithmServer:
             name: {} for name in self.drone_names
         }
 
-        # 电量字典（按无人机名称存储电量信息）
-        self.battery_data: Dict[str, Dict[str, float]] = {
-            name: {
-                'voltage': 4.2,  # 初始电压4.2V
-                'initial_voltage': 4.2,  # 初始电压记录
-                'consumption_rate': 0.01,  # 基础消耗率0.01V/步
-                'last_update_time': time.time()  # 最后更新时间
-            } for name in self.drone_names
-        }
+        # 电量数据管理
+        self.battery_manager = BatteryManager(self.config_data)  
         self.battery_lock = threading.Lock()  # 电量数据锁
+
+        self.crazyswarm = CrazyswarmManager(self.unity_socket, self.battery_manager, self.config_data)
 
         # 共享网格数据
         self.grid_data = HexGridDataModel()
@@ -256,12 +251,7 @@ class MultiDroneAlgorithmServer:
 
     def get_battery_voltage(self, drone_name: str) -> float:
         """获取指定无人机的当前电压"""
-        with self.battery_lock:
-            if drone_name in self.battery_data:
-                return self.battery_data[drone_name]['voltage']
-            else:
-                logger.warning(f"无人机 {drone_name} 的电量数据不存在")
-                return 4.2  # 返回默认电压
+        return self.battery_manager.get_voltage(drone_name)
 
     def update_battery_voltage(self, drone_name: str, action_intensity: float = 0.0) -> float:
         """更新指定无人机的电量消耗
@@ -269,75 +259,45 @@ class MultiDroneAlgorithmServer:
         :param action_intensity: 动作强度（0-1），影响额外消耗
         :return: 更新后的电压值
         """
-        with self.battery_lock:
-            if drone_name not in self.battery_data:
-                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
-                self.battery_data[drone_name] = {
-                    'voltage': 4.2,
-                    'initial_voltage': 4.2,
-                    'consumption_rate': 0.01,
-                    'last_update_time': time.time()
-                }
-            
-            battery_info = self.battery_data[drone_name]
-            current_time = time.time()
-            time_elapsed = current_time - battery_info['last_update_time']
-            
-            # 基础消耗（每步0.01V）
-            base_consumption = battery_info['consumption_rate']
-            
-            # 动作强度影响（动作越强，消耗越多）
-            action_consumption = action_intensity * 0.005  # 最大额外消耗0.005V
-            
-            # 总消耗
-            total_consumption = base_consumption + action_consumption
-            
-            # 更新电压（不低于3.0V）
-            new_voltage = max(3.0, battery_info['voltage'] - total_consumption)
-            battery_info['voltage'] = new_voltage
-            battery_info['last_update_time'] = current_time
-            
-            logger.debug(f"无人机 {drone_name} 电量更新: {battery_info['voltage']:.2f}V (消耗: {total_consumption:.3f}V)")
-            return new_voltage
+        return self.battery_manager.update_voltage(drone_name, action_intensity)
 
     def reset_battery_voltage(self, drone_name: str) -> float:
         """重置指定无人机的电量为初始值"""
-        with self.battery_lock:
-            if drone_name in self.battery_data:
-                initial_voltage = self.battery_data[drone_name]['initial_voltage']
-                self.battery_data[drone_name]['voltage'] = initial_voltage
-                self.battery_data[drone_name]['last_update_time'] = time.time()
-                logger.info(f"无人机 {drone_name} 电量已重置为: {initial_voltage:.2f}V")
-                return initial_voltage
-            else:
-                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
-                self.battery_data[drone_name] = {
-                    'voltage': 4.2,
-                    'initial_voltage': 4.2,
-                    'consumption_rate': 0.01,
-                    'last_update_time': time.time()
-                }
-                return 4.2
+        return self.battery_manager.reset_voltage(drone_name)
 
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         """获取所有无人机的电量数据"""
-        with self.battery_lock:
-            return self.battery_data.copy()
+        return self.battery_manager.get_all_battery_data()
 
     def set_battery_consumption_rate(self, drone_name: str, rate: float) -> None:
         """设置指定无人机的电量消耗率"""
-        with self.battery_lock:
-            if drone_name in self.battery_data:
-                self.battery_data[drone_name]['consumption_rate'] = rate
-                logger.info(f"无人机 {drone_name} 电量消耗率设置为: {rate:.3f}V/步")
-            else:
-                logger.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
-                self.battery_data[drone_name] = {
-                    'voltage': 4.2,
-                    'initial_voltage': 4.2,
-                    'consumption_rate': rate,
-                    'last_update_time': time.time()
-                }
+        self.battery_manager.set_consumption_rate(drone_name, rate)
+
+    # 新增方法：获取完整的电池信息
+    def get_battery_info(self, drone_name: str) -> Optional[BatteryInfo]:
+        """获取指定无人机的完整电池信息"""
+        return self.battery_manager.get_battery_info(drone_name)
+
+    # 新增方法：保存电池数据到文件
+    def save_battery_data(self, file_path: str) -> None:
+        """保存电池数据到JSON文件"""
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(self.battery_manager.to_json())
+            logger.info(f"电池数据已保存到: {file_path}")
+        except Exception as e:
+            logger.error(f"保存电池数据失败: {str(e)}")
+
+    # 新增方法：从文件加载电池数据
+    def load_battery_data(self, file_path: str) -> None:
+        """从JSON文件加载电池数据"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                json_data = f.read()
+            self.battery_manager = BatteryManager.from_json(json_data)
+            logger.info(f"电池数据已从文件加载: {file_path}")
+        except Exception as e:
+            logger.error(f"加载电池数据失败: {str(e)}")
 
     def start(self) -> bool:
         """启动服务主流程：连接Unity与AirSim，初始化无人机"""
@@ -552,7 +512,7 @@ class MultiDroneAlgorithmServer:
                         crazyflie_logging_json = CrazyflieLoggingData.from_json_to_dicts(received_data['crazyflie_logging'])
                         crazyflie_logging_list = CrazyflieLoggingData.from_dict_list(crazyflie_logging_json)
                         # logger.info("收到Crazyflies实体无人机日志数据更新")
-                        self.crazyswarm.update_crazyflies(crazyflie_logging_list)
+                        self.crazyswarm.update_crazyflies_logging(crazyflie_logging_list)
                     except Exception as e:
                         logger.error(f"更新Crazyflies实体无人机日志数据失败: {str(e)}")
                 # 未知数据类型处理

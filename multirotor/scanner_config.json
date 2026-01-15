@@ -17,7 +17,7 @@
     "altitude": 2.0,
     "droneSettings": {
         "UAV1": {
-            "isCrazyflieMirror": false
+            "isCrazyflieMirror": true
         },
         "UAV2": {
             "isCrazyflieMirror": false

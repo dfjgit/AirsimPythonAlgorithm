@@ -5,6 +5,7 @@ import numpy as np
 import threading
 from typing import Dict, List
 from multirotor.Algorithm.Vector3 import Vector3
+from multirotor.Algorithm.battery_data import BatteryManager
 
 from AirsimServer.unity_socket_server import UnitySocketServer
 from Algorithm.scanner_config_data import ScannerConfigData
@@ -17,10 +18,11 @@ logger = logging.getLogger("CrazyswarmManager")
 
 class CrazyswarmManager:
     
-    def __init__(self, unity_socket: UnitySocketServer, configData: ScannerConfigData):
+    def __init__(self, unity_socket: UnitySocketServer, battery_manager: BatteryManager, configData: ScannerConfigData):
         self.unity_socket = unity_socket  # Unity通信Socket服务
         self.crazyflieLoggingDataById : Dict[int, CrazyflieLoggingData] = {}
         self.operateDatas: list[CrazyflieOperate] = []
+        self.battery_manager = battery_manager
 
         for drone_name in configData.droneSettings.keys():
             isCrazyflieMirror = configData.droneSettings[drone_name]["isCrazyflieMirror"]
@@ -42,11 +44,14 @@ class CrazyswarmManager:
             self.updateTimer = threading.Timer(0.02, self.update)
             self.updateTimer.start()
 
-    def update_crazyflies(self, crazyflie_running_datas: List[CrazyflieLoggingData]):
+    def update_crazyflies_logging(self, crazyflie_running_datas: List[CrazyflieLoggingData]):
         # 遍历每个无人机的运行数据对象
         for data in crazyflie_running_datas:
         # 以id为键，loggingData为值，更新/写入字典
             self.crazyflieLoggingDataById[data.Id] = data
+
+            # 更新对应无人机的电池数据
+            self.battery_manager.update_voltage(f"UAV{data.Id}", 0, data.Battery)
             # logger.debug(f"实体无人机Crazyflie：{data.Id}号机更新日志数据 日志数据为：{data}")
 
 
