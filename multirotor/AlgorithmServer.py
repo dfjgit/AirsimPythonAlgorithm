@@ -536,14 +536,18 @@ class MultiDroneAlgorithmServer:
                 grid_data = self.grid_data 
                 
                 # 位置 (3)
-                pos = [logging_data.X, logging_data.Y, logging_data.Z]
+                pos = Vector3(logging_data.X, logging_data.Y, logging_data.Z)
                 position = [pos.x, pos.y, pos.z]
                 
                 # 速度 (3)
                 velocity = [logging_data.XSpeed, logging_data.YSpeed, logging_data.ZSpeed]
-                
-                # 方向 (3) 通过速度计算当前移动方向
-                direction = calculate_move_direction(logging_data.XSpeed, logging_data.YSpeed, logging_data.ZSpeed)
+
+                direction = []
+                if logging_data.Speed < 0.05:
+                    direction = [1, 0, 0]
+                else:
+                    # 方向 (3) 通过速度计算当前移动方向
+                    direction = self._calculate_move_direction(logging_data.XSpeed, logging_data.YSpeed, logging_data.ZSpeed)
                 
                 # 附近熵值 (3)
                 nearby_cells = [c for c in grid_data.cells[:50] if (c.center - pos).magnitude() < 10.0]
@@ -575,27 +579,27 @@ class MultiDroneAlgorithmServer:
             logger.debug(f"状态提取失败: {str(e)}")
             return np.zeros(18, dtype = np.float32)
         
-        def calculate_move_direction(vx: float, vy: float, vz: float) -> tuple[float, float, float]:
-            """
-            通过三维速度计算移动方向（返回单位方向向量）
-            :param vx: 速度x分量
-            :param vy: 速度y分量
-            :param vz: 速度z分量
-            :return: 归一化后的方向向量 (dx, dy, dz)，模长=1；速度为0时返回(0,0,0)
-            """
-            # 1. 计算速度向量的模长（速率）
-            speed = math.sqrt(vx**2 + vy**2 + vz**2)
-            
-            # 2. 避免除以0（速度为0时，无移动方向）
-            if speed < 1e-6:  # 浮点精度容错，避免极小值
-                return (0.0, 0.0, 0.0)
-            
-            # 3. 归一化得到方向向量
-            dx = vx / speed
-            dy = vy / speed
-            dz = vz / speed
-            
-            return (dx, dy, dz)
+    def _calculate_move_direction(self, vx: float, vy: float, vz: float) -> tuple[float, float, float]:
+        """
+        通过三维速度计算移动方向（返回单位方向向量）
+        :param vx: 速度x分量
+        :param vy: 速度y分量
+        :param vz: 速度z分量
+        :return: 归一化后的方向向量 (dx, dy, dz)，模长=1；速度为0时返回(0,0,0)
+        """
+        # 1. 计算速度向量的模长（速率）
+        speed = math.sqrt(vx**2 + vy**2 + vz**2)
+        
+        # 2. 避免除以0（速度为0时，无移动方向）
+        if speed < 1e-6:  # 浮点精度容错，避免极小值
+            return (0.0, 0.0, 0.0)
+        
+        # 3. 归一化得到方向向量
+        dx = vx / speed
+        dy = vy / speed
+        dz = vz / speed
+        
+        return (dx, dy, dz)
 
     def _get_state_for_prediction(self, drone_name: str) -> np.ndarray:
         """提取状态用于权重预测（18维）"""
@@ -692,20 +696,20 @@ class MultiDroneAlgorithmServer:
             # 权重范围限制 [0.5, 5.0]
             action = np.clip(action, 0.5, 5.0)
             
-            # 权重平衡处理：避免某个权重过高
+            # 优化权重平衡处理：减少平滑程度，增加探索性
             action_mean = np.mean(action)
             action_std = np.std(action)
             
-            # 如果标准差过大，进行平滑
-            if action_std > 1.5:
-                action = action_mean + (action - action_mean) * 0.7
+            # 只有当标准差过大时才进行平滑（提高阈值）
+            if action_std > 2.0:  # 从1.5提高到2.0
+                action = action_mean + (action - action_mean) * 0.8  # 减少平滑程度
                 action = np.clip(action, 0.5, 5.0)
             
-            # 确保最大权重不超过最小权重的5倍
+            # 确保最大权重不超过最小权重的5倍（但允许更大的差异）
             min_weight = np.min(action)
             max_weight = np.max(action)
-            if max_weight > min_weight * 5:
-                scale = (min_weight * 5) / max_weight
+            if max_weight > min_weight * 8:  # 从5倍提高到8倍
+                scale = (min_weight * 8) / max_weight
                 action = action * scale
                 action = np.clip(action, 0.5, 5.0)
             
@@ -742,6 +746,10 @@ class MultiDroneAlgorithmServer:
                     predicted_weights = self._predict_weights(drone_name)
                     if predicted_weights:
                         self.algorithms[drone_name].set_coefficients(predicted_weights)
+                        # 添加调试日志
+                        logger.debug(f"无人机{drone_name}使用DDPG预测权重: {predicted_weights}")
+                    else:
+                        logger.warning(f"无人机{drone_name}权重预测失败，使用默认权重")
                 
                 # 执行算法计算最终方向
                 final_dir = self.algorithms[drone_name].update_runtime_data(
