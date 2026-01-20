@@ -105,6 +105,9 @@ class MultiDroneAlgorithmServer:
         self.entropy_history_lock = threading.Lock()
         self._start_time = time.time()
         self._last_entropy_record_time = 0.0
+        self.entropy_dist_history: List[Tuple[float, List[int], List[float]]] = []
+        self.entropy_bins: List[int] = []
+        self.entropy_dist_history_lock = threading.Lock()
         
         # 可视化组件
         self.visualizer = None
@@ -655,6 +658,38 @@ class MultiDroneAlgorithmServer:
         with self.entropy_history_lock:
             return list(self.entropy_history[-limit:])
 
+    def get_entropy_distribution(self, limit: int = 1) -> List[Tuple[float, List[int], List[float]]]:
+        """获取最近的熵值分布（直方图和CDF）"""
+        with self.entropy_dist_history_lock:
+            return list(self.entropy_dist_history[-limit:])
+
+    def _calc_entropy_distribution(self, entropies: List[float], bin_size: int = 5, max_entropy: int = 100) -> Tuple[List[int], List[int], List[float]]:
+        """计算熵值直方图与累积分布（CDF）"""
+        if bin_size <= 0:
+            bin_size = 5
+        if max_entropy <= 0:
+            max_entropy = 100
+
+        bins = list(range(0, max_entropy + bin_size, bin_size))
+        hist = [0] * (len(bins) - 1)
+
+        for e in entropies:
+            idx = int(e // bin_size)
+            if idx < 0:
+                idx = 0
+            if idx >= len(hist):
+                idx = len(hist) - 1
+            hist[idx] += 1
+
+        total = max(sum(hist), 1)
+        cdf: List[float] = []
+        running = 0
+        for count in hist:
+            running += count
+            cdf.append(running / total)
+
+        return bins, hist, cdf
+
     def _record_entropy_snapshot(self) -> None:
         """定期记录网格平均熵值，用于可视化"""
         current_time = time.time()
@@ -669,7 +704,8 @@ class MultiDroneAlgorithmServer:
             if total == 0:
                 return
 
-            total_entropy = sum(cell.entropy for cell in self.grid_data.cells)
+            entropies = [cell.entropy for cell in self.grid_data.cells]
+            total_entropy = sum(entropies)
 
         avg_entropy = total_entropy / total
         elapsed = current_time - self._start_time
@@ -678,6 +714,13 @@ class MultiDroneAlgorithmServer:
             self.entropy_history.append((elapsed, avg_entropy))
             if len(self.entropy_history) > 1800:
                 self.entropy_history = self.entropy_history[-1800:]
+
+        bins, hist, cdf = self._calc_entropy_distribution(entropies)
+        with self.entropy_dist_history_lock:
+            self.entropy_dist_history.append((elapsed, hist, cdf))
+            if len(self.entropy_dist_history) > 1800:
+                self.entropy_dist_history = self.entropy_dist_history[-1800:]
+        self.entropy_bins = bins
 
         self._last_entropy_record_time = current_time
 

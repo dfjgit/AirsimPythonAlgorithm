@@ -5,6 +5,7 @@
 import time
 import threading
 import csv
+import json
 import logging
 import traceback
 from pathlib import Path
@@ -60,6 +61,33 @@ class DataCollector:
             logger.error(f"数据采集系统初始化失败: {str(e)}")
             self.csv_file = None
             self.csv_writer = None
+
+    def _calc_entropy_distribution(self, entropies, bin_size: int = 5, max_entropy: int = 100):
+        """计算熵值直方图和CDF（用于CSV输出）"""
+        if bin_size <= 0:
+            bin_size = 5
+        if max_entropy <= 0:
+            max_entropy = 100
+
+        bins = list(range(0, max_entropy + bin_size, bin_size))
+        hist = [0] * (len(bins) - 1)
+
+        for e in entropies:
+            idx = int(e // bin_size)
+            if idx < 0:
+                idx = 0
+            if idx >= len(hist):
+                idx = len(hist) - 1
+            hist[idx] += 1
+
+        total = max(sum(hist), 1)
+        cdf = []
+        running = 0
+        for count in hist:
+            running += count
+            cdf.append(running / total)
+
+        return bins, hist, cdf
     
     def start(self, 
               get_grid_data_func: Callable,
@@ -207,11 +235,13 @@ class DataCollector:
                     global_scanned_count = 0
                     global_total_count = 0
                     total_entropy = 0.0
+                    entropies = []
                     
                     for cell in grid_data.cells:
                         # 全局统计：所有栅格
                         global_total_count += 1
                         total_entropy += cell.entropy
+                        entropies.append(cell.entropy)
                         
                         # 判断是否已侦察：entropy < 30 表示已侦察
                         if cell.entropy < 30:
@@ -250,6 +280,9 @@ class DataCollector:
                         'scan_ratio',
                         'global_avg_entropy',
                         'global_scan_ratio',
+                        'entropy_bins',
+                        'entropy_hist',
+                        'entropy_cdf',
                         'repulsion_coefficient',
                         'entropy_coefficient',
                         'distance_coefficient',
@@ -273,6 +306,8 @@ class DataCollector:
                     elapsed_time = current_time - self.start_time
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
+                    bins, hist, cdf = self._calc_entropy_distribution(entropies)
+
                     row = [
                         timestamp,
                         f"{elapsed_time:.2f}",
@@ -282,6 +317,9 @@ class DataCollector:
                         f"{scan_ratio:.2f}%",
                         f"{global_avg_entropy:.2f}",
                         f"{global_scan_ratio:.2f}%",
+                        json.dumps(bins, ensure_ascii=False),
+                        json.dumps(hist, ensure_ascii=False),
+                        json.dumps(cdf, ensure_ascii=False),
                         weights.get('repulsionCoefficient', 0.0),
                         weights.get('entropyCoefficient', 0.0),
                         weights.get('distanceCoefficient', 0.0),
