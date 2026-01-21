@@ -1,0 +1,12 @@
+{
+  "drone_name": "UAV1",
+  "total_timesteps": 20,
+  "step_duration": 5.0,
+  "reward_config": null,
+  "save_dir": "models",
+  "continue_model": null,
+  "reset_unity": false,
+  "safety_max_delta": 0.5,
+  "no_safety_limit": false,
+  "progress_interval": 10
+}

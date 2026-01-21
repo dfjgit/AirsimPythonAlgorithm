@@ -6,7 +6,11 @@ import numpy as np
 import gym
 from gym import spaces
 import os
-from dqn_reward_config_data import DQNRewardConfig
+
+try:
+    from .dqn_reward_config_data import DQNRewardConfig
+except ImportError:
+    from dqn_reward_config_data import DQNRewardConfig
 
 
 class SimpleWeightEnv(gym.Env):

@@ -1,0 +1,11 @@
+{
+  "log_path": "crazyflie_flight_log_simulated.json",
+  "total_timesteps": 2000,
+  "reward_config": null,
+  "save_dir": "models",
+  "continue_model": null,
+  "max_steps": null,
+  "random_start": false,
+  "step_stride": 1,
+  "progress_interval": 50
+}

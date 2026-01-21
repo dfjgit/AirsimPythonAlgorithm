@@ -138,12 +138,21 @@ AirsimAlgorithmPython/
 │   │   ├── unity_socket_server.py   # Unity 通信服务
 │   │   └── data_pack.py             # 数据包定义
 │   │
+│   ├── Crazyswarm/                  # Crazyflie 实体机支持
+│   │   ├── crazyflie_operate.py     # 实体机控制
+│   │   ├── crazyflie_wayPoint.py    # 航点控制
+│   │   └── crazyswarm.py            # Crazyswarm 集成
+│   │
 │   ├── DDPG_Weight/                 # DDPG 权重预测模块
 │   │   ├── simple_weight_env.py     # 权重环境定义
-│   │   ├── train_with_airsim_improved.py  # 训练脚本
+│   │   ├── crazyflie_weight_env.py  # Crazyflie 权重环境
+│   │   ├── train_with_airsim_improved.py  # 训练脚本（仿真）
+│   │   ├── train_with_crazyflie_logs.py   # 日志训练
+│   │   ├── train_with_crazyflie_online.py # 在线训练
 │   │   ├── test_trained_model.py    # 模型测试
 │   │   ├── models/                  # 训练好的模型
-│   │   └── dqn_reward_config.json   # 奖励配置
+│   │   ├── dqn_reward_config.json   # 奖励配置（仿真）
+│   │   └── crazyflie_reward_config.json # 奖励配置（实体机）
 │   │
 │   ├── DQN_Movement/                 # DQN 移动控制模块
 │   │   ├── movement_env.py          # 移动环境定义
@@ -151,6 +160,7 @@ AirsimAlgorithmPython/
 │   │   ├── models/                  # 训练好的模型
 │   │   └── movement_dqn_config.json # 配置文件
 │   │
+│   ├── DDPG与DQN介绍.md              # 强化学习模块说明
 │   └── data_logs/                    # 数据采集输出
 │       └── scan_data_YYYYMMDD_HHMMSS.csv
 │
@@ -158,6 +168,8 @@ AirsimAlgorithmPython/
 │   ├── 运行系统-固定权重.bat
 │   ├── 运行系统-DDPG权重.bat
 │   ├── 训练权重DDPG-真实环境.bat
+│   ├── 训练权重DDPG-实体机日志.bat
+│   ├── 训练权重DDPG-实体机在线.bat
 │   └── 训练移动DQN-真实环境.bat
 │
 ├── requirements.txt                  # Python 依赖
@@ -365,6 +377,79 @@ python AlgorithmServer.py --use-learned-weights \
     --model-path DDPG_Weight/models/best_model
 ```
 
+### Crazyflie 实体无人机训练
+
+**配置文件**：
+- `multirotor/DDPG_Weight/crazyflie_logs_train_config.json`
+- `multirotor/DDPG_Weight/crazyflie_online_train_config.json`
+- `multirotor/DDPG_Weight/crazyflie_reward_config.json`
+
+**配置字段说明（日志训练）**：
+- `log_path`：日志文件路径（.json/.csv）
+- `total_timesteps`：训练总步数
+- `reward_config`：奖励配置文件路径，`null` 表示使用默认
+- `save_dir`：模型保存目录
+- `continue_model`：继续训练模型路径（不含 `.zip`），`null` 表示从头训练
+- `max_steps`：每个 episode 最大步数，`null` 表示不限制
+- `random_start`：是否随机起始位置
+- `step_stride`：日志步进间隔（每隔 N 条取一条）
+- `progress_interval`：进度打印间隔（步）
+
+**配置字段说明（在线训练）**：
+- `drone_name`：训练无人机名称
+- `total_timesteps`：训练总步数
+- `step_duration`：每步飞行时长（秒）
+- `reward_config`：奖励配置文件路径，`null` 表示使用默认
+- `save_dir`：模型保存目录
+- `continue_model`：继续训练模型路径（不含 `.zip`），`null` 表示从头训练
+- `reset_unity`：每个 episode 是否重置 Unity 环境
+- `safety_max_delta`：权重变化最大幅度（安全限制）
+- `no_safety_limit`：是否关闭权重变化限制
+- `progress_interval`：进度打印间隔（步）
+
+**奖励配置字段说明**（`crazyflie_reward_config.json`）：
+- `reward_coefficients`：奖励系数
+  - `speed_reward`：速度奖励系数
+  - `speed_penalty_threshold`：速度惩罚阈值
+  - `speed_penalty`：速度惩罚系数
+  - `accel_penalty`：加速度惩罚系数
+  - `angular_rate_penalty`：角速度惩罚系数
+  - `scan_reward`：扫描奖励系数
+  - `out_of_range_penalty`：超出范围惩罚系数
+  - `action_change_penalty`：动作变化惩罚系数
+  - `action_magnitude_penalty`：动作幅度惩罚系数
+  - `battery_optimal_reward`：电池电压在最佳范围的奖励系数
+  - `battery_low_penalty`：电池电压过低惩罚系数
+- `thresholds`：阈值配置
+  - `scan_entropy_threshold`：扫描熵值阈值
+  - `leader_range_buffer`：Leader 范围缓冲
+  - `battery_optimal_min`：电池最佳电压下限
+  - `battery_optimal_max`：电池最佳电压上限
+  - `battery_low_threshold`：电池低电压阈值
+- `episode`：训练 episode 配置
+  - `max_steps`：单个 episode 最大步数
+- `action_space`：动作空间范围
+  - `weight_min`：权重最小值
+  - `weight_max`：权重最大值
+
+**离线日志训练（不影响状态转移）**：
+```bash
+cd multirotor/DDPG_Weight
+python train_with_crazyflie_logs.py --config crazyflie_logs_train_config.json
+```
+
+**在线实体训练（实时日志）**：
+```bash
+cd multirotor/DDPG_Weight
+python train_with_crazyflie_online.py --config crazyflie_online_train_config.json
+```
+
+**Windows 脚本**：
+```bat
+scripts\Train_DDPG_Weights_Crazyflie_Logs.bat
+scripts\Train_DDPG_Weights_Crazyflie_Online.bat
+```
+
 ### DQN 移动控制
 
 **功能**：使用 DQN 直接控制无人机移动
@@ -521,18 +606,8 @@ python -c "from Algorithm.data_collector import DataCollector; print('OK')"
 ## 📖 相关文档
 
 ### 项目文档
-- **主项目 README**：[../README.md](../README.md)
-- **Unity 项目 README**：[../Airsim2022/README.md](../Airsim2022/README.md)
-
-### 详细文档
-- **配置指南**：[docs/配置和故障排除.md](docs/配置和故障排除.md)
-- **DQN 文档**：[docs/DQN/README.md](docs/DQN/README.md)
-- **DQN 快速开始**：[docs/DQN/QUICK_START.md](docs/DQN/QUICK_START.md)
-- **DQN 实现指南**：[docs/DQN/IMPLEMENTATION_GUIDE.md](docs/DQN/IMPLEMENTATION_GUIDE.md)
-
-### 模块文档
-- **路径规划**：[multirotor/path/README.md](multirotor/path/README.md)
-- **DDPG 权重使用**：[multirotor/DDPG_Weight/模型使用指南.md](multirotor/DDPG_Weight/模型使用指南.md)
+- **DDPG 与 DQN 介绍**：`multirotor/DDPG与DQN介绍.md`
+- **Episode 循环说明**：`multirotor/DDPG_Weight/Episode循环说明.md`
 
 ---
 
@@ -565,11 +640,15 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 🔄 版本信息
 
-- **当前版本**：1.0.0
+- **当前版本**：1.1.0
 - **Python 版本**：3.7+
-- **最后更新**：2025-11-28
+- **最后更新**：2026-01-21
 
 ### 更新日志
+
+- **v1.1.0**（2026-01-21）
+  - 增补 Crazyflie 实体机训练说明与配置
+  - 更新脚本列表与项目结构说明
 
 - **v1.0.0**（2025-11-28）
   - 添加数据采集系统
@@ -601,7 +680,7 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 📄 许可证
 
-*[添加许可证信息]*
+暂未提供许可证信息。
 
 ---
 
@@ -621,7 +700,7 @@ backports.ssl_match_hostname  # SSL 支持
 如有问题或建议，欢迎：
 - 提交 Issue
 - 发起 Discussion
-- *[添加其他联系方式]*
+- 其他联系方式：暂无
 
 ---
 
