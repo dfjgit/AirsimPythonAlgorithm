@@ -378,6 +378,7 @@ python train_with_airsim_improved.py --config airsim_train_config_template.json
 
 **配置文件模板**：
 - `multirotor/DDPG_Weight/airsim_train_config_template.json`
+- `multirotor/DDPG_Weight/last_weights_template.json`
 
 **配置字段说明（AirSim 训练）**：
 - `drone_names`：训练无人机名称列表
@@ -389,6 +390,11 @@ python train_with_airsim_improved.py --config airsim_train_config_template.json
 - `initial_weights_path`：初始权重 JSON 路径
 - `safety_limit`：是否启用权重变化安全限制
 - `max_weight_delta`：每步权重变化最大幅度
+
+**初始权重模板说明**：
+- `last_weights_template.json` 用于提供初始权重的示例格式
+- 支持按无人机名称映射权重（如 `UAV1`、`UAV2`）
+- 字段包括：`repulsionCoefficient`、`entropyCoefficient`、`distanceCoefficient`、`leaderRangeCoefficient`、`directionRetentionCoefficient`
 
 **使用模型**：
 ```bash
