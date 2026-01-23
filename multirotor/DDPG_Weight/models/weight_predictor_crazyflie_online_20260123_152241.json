@@ -1,0 +1,9 @@
+{
+  "UAV1": {
+    "repulsionCoefficient": 1.375213861465454,
+    "entropyCoefficient": 1.8074939250946045,
+    "distanceCoefficient": 2.9707090854644775,
+    "leaderRangeCoefficient": 1.7582530975341797,
+    "directionRetentionCoefficient": 2.8341193199157715
+  }
+}

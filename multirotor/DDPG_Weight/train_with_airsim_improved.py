@@ -192,6 +192,29 @@ def _save_final_weights(server, path: str) -> None:
         print(f"⚠️  保存初始权重失败: {exc}")
 
 
+def _derive_weights_path(model_path: str) -> str:
+    """
+    根据模型路径推导权重文件路径
+    
+    功能：
+        权重文件名与模型文件名一致（去掉.zip，加上.json）
+        例如：model_20250123_120000.zip -> model_20250123_120000.json
+        
+    参数：
+        model_path: 模型路径（不含.zip扩展名）
+        
+    返回：
+        str: 权重文件路径（.json扩展名）
+    """
+    if not model_path:
+        return ""
+    # 如果路径以.zip结尾，去掉它
+    if model_path.endswith('.zip'):
+        model_path = model_path[:-4]
+    # 返回与模型文件名一致的权重文件名
+    return f"{model_path}.json"
+
+
 def _load_initial_weights(path: str) -> dict:
     """
     加载初始权重（支持按无人机名映射或单一字典）
@@ -411,7 +434,9 @@ class ImprovedTrainingCallback(BaseCallback):
             # 如果当前平均奖励超过历史最佳，保存最佳模型
             if mean_reward > self.best_mean_reward and mean_reward > 0:
                 self.best_mean_reward = mean_reward
-                model_path = os.path.join(self.save_path, 'best_model')
+                # 使用时间戳作为模型文件名
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                model_path = os.path.join(self.save_path, f'best_model_{timestamp}')
                 self.model.save(model_path)
                 print(f"\n🏆 新最佳模型！奖励: {mean_reward:.2f}")
                 print(f"💾 已保存: {model_path}.zip\n")
@@ -422,9 +447,11 @@ class ImprovedTrainingCallback(BaseCallback):
         # ========== 定期保存检查点 ==========
         # 每check_freq步保存一次检查点，防止训练中断丢失进度
         if self.num_timesteps % self.check_freq == 0 and self.num_timesteps > 0:
-            checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.num_timesteps}')
+            # 使用时间戳作为检查点文件名
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.num_timesteps}_{timestamp}')
             self.model.save(checkpoint_path)
-            print(f"💾 检查点: checkpoint_{self.num_timesteps}.zip")
+            print(f"💾 检查点: checkpoint_{self.num_timesteps}_{timestamp}.zip")
         # ====================================
         
         return True  # 继续训练
@@ -437,7 +464,7 @@ DEFAULT_TOTAL_TIMESTEPS = 100            # 默认总训练步数（快速训练�
 DEFAULT_STEP_DURATION = 5.0              # 默认每步飞行时长（秒），与实体训练对齐
 DEFAULT_CHECKPOINT_FREQ = 1000           # 默认检查点保存频率（每N步保存一次）
 DEFAULT_ENABLE_VISUALIZATION = True      # 默认启用训练可视化
-DEFAULT_INITIAL_WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "models", "last_weights.json")
+DEFAULT_INITIAL_MODEL_PATH = None
 DEFAULT_USE_INITIAL_WEIGHTS = True       # 默认使用初始权重继承
 # =====================================================
 
@@ -469,10 +496,10 @@ def main():
     parser = argparse.ArgumentParser(description="AirSim权重训练（改进版）")
     parser.add_argument("--config", type=str, default=None, help="训练配置文件路径（JSON）")
     parser.add_argument(
-        "--initial-weights-path",
+        "--initial-model-path",
         type=str,
-        default=DEFAULT_INITIAL_WEIGHTS_PATH,
-        help="初始权重JSON路径（默认读取last_weights.json）"
+        default=DEFAULT_INITIAL_MODEL_PATH,
+        help="初始模型路径（不含.zip），用于自动匹配同名权重文件"
     )
     parser.add_argument(
         "--use-initial-weights",
@@ -507,12 +534,13 @@ def main():
     else:
         use_initial_weights = bool(args.use_initial_weights) and not bool(args.no_initial_weights)
     
-    initial_weights_path = _get_config_value(
-        args.initial_weights_path,
+    initial_model_path = _get_config_value(
+        args.initial_model_path,
         config,
-        "initial_weights_path",
-        DEFAULT_INITIAL_WEIGHTS_PATH
+        "initial_model_path",
+        DEFAULT_INITIAL_MODEL_PATH
     )
+    # 注意：initial_weights_path 将在加载时根据 initial_model_path 自动推导
     # ==========================================
     
     # ========== 初始化全局变量（用于资源清理） ==========
@@ -587,7 +615,19 @@ def main():
         # 加载初始权重（若存在）
         initial_weights = {}
         if use_initial_weights:
-            initial_weights = _load_initial_weights(initial_weights_path)
+            if not initial_model_path:
+                print("⚠️  未指定初始模型路径，跳过初始权重加载")
+            else:
+                # 自动查找同名权重文件
+                initial_weights_path = _derive_weights_path(initial_model_path)
+                if os.path.exists(initial_weights_path):
+                    print(f"📂 找到权重文件: {initial_weights_path}")
+                    initial_weights = _load_initial_weights(initial_weights_path)
+                else:
+                    print(f"⚠️  权重文件不存在: {initial_weights_path}")
+                    print(f"   模型路径: {initial_model_path}")
+                    print(f"   将使用默认配置权重")
+                
             if initial_weights:
                 for drone_name in drone_names:
                     weights = initial_weights.get(drone_name) or initial_weights.get("__all__")
@@ -706,12 +746,13 @@ def main():
         
         # 保存最终模型
         print("\n💾 保存最终模型...")
-        final_model_path = os.path.join(model_dir, 'weight_predictor_airsim')
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        final_model_path = os.path.join(model_dir, f"weight_predictor_airsim_{timestamp}")
         model.save(final_model_path)
         print(f"✅ 模型已保存: {final_model_path}.zip")
 
-        # 保存最后权重系数（用于实体训练初始化）
-        weights_path = os.path.join(model_dir, "last_weights.json")
+        # 保存最后权重系数（与模型同名）
+        weights_path = _derive_weights_path(final_model_path)
         _save_final_weights(server, weights_path)
         
         # 显示训练统计
@@ -728,7 +769,7 @@ def main():
         
         print("\n📦 生成的模型文件:")
         print(f"  🏆 最佳模型: models/best_model.zip")
-        print(f"  📄 最终模型: models/weight_predictor_airsim.zip")
+        print("  📄 最终模型: models/weight_predictor_airsim_<timestamp>.zip")
         if checkpoint_freq > 0:
             print(f"  💾 检查点: models/checkpoint_*.zip")
         

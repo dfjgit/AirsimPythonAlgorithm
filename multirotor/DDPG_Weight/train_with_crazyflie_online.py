@@ -152,6 +152,45 @@ def _save_model(model, path: str, logger, note: str) -> bool:
         return False
 
 
+def _save_final_weights(server, path: str, logger) -> None:
+    """
+    保存各无人机最后的权重系数到JSON文件
+    
+    功能：
+        将训练完成后的权重系数保存到JSON文件，用于后续训练或部署
+        
+    参数：
+        server: AlgorithmServer实例，包含所有无人机的算法对象
+        path: 保存路径（JSON文件）
+        logger: 日志记录器
+        
+    保存格式：
+        {
+            "UAV1": {
+                "repulsionCoefficient": 1.0,
+                "entropyCoefficient": 2.0,
+                ...
+            },
+            "UAV2": {...}
+        }
+    """
+    if not server or not path:
+        return
+    weights_by_drone = {}
+    # 遍历所有无人机，收集权重系数
+    for drone_name in server.drone_names:
+        algo = server.algorithms.get(drone_name)
+        if not algo:
+            continue
+        weights_by_drone[drone_name] = algo.get_current_coefficients()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(weights_by_drone, f, ensure_ascii=False, indent=2)
+        logger.info("✅ 权重已保存: %s", path)
+    except Exception as exc:
+        logger.error("⚠️  保存权重失败: %s (%s)", path, exc)
+
+
 def _load_initial_weights(path: str, drone_name: str, logger) -> dict:
     """
     加载初始权重（支持两种格式）
@@ -244,6 +283,29 @@ def _weights_to_action(weights: dict) -> np.ndarray:
     ], dtype=np.float32)
 
 
+def _derive_weights_path(model_path: str) -> str:
+    """
+    根据模型路径推导权重文件路径
+    
+    功能：
+        权重文件名与模型文件名一致（去掉.zip，加上.json）
+        例如：model_20250123_120000.zip -> model_20250123_120000.json
+        
+    参数：
+        model_path: 模型路径（不含.zip扩展名）
+        
+    返回：
+        str: 权重文件路径（.json扩展名）
+    """
+    if not model_path:
+        return ""
+    # 如果路径以.zip结尾，去掉它
+    if model_path.endswith('.zip'):
+        model_path = model_path[:-4]
+    # 返回与模型文件名一致的权重文件名
+    return f"{model_path}.json"
+
+
 def main():
     """
     主训练流程函数
@@ -289,7 +351,7 @@ def main():
     parser.add_argument("--reward-config", type=str, default=None, help="奖励配置路径")
     parser.add_argument("--save-dir", type=str, default=None, help="模型保存目录")
     parser.add_argument("--continue-model", type=str, default=None, help="继续训练模型路径（不含.zip）")
-    parser.add_argument("--initial-weights", type=str, default=None, help="初始权重JSON路径")
+    parser.add_argument("--initial-model-path", type=str, default=None, help="初始模型路径（不含.zip）")
     parser.add_argument("--reset-unity", action="store_true", default=None, help="每个episode重置Unity环境")
     parser.add_argument("--safety-max-delta", type=float, default=None, help="权重变化最大幅度")
     parser.add_argument("--no-safety-limit", action="store_true", default=None, help="关闭权重变化限制")
@@ -309,7 +371,7 @@ def main():
     reward_config = _get_config_value(args.reward_config, config, "reward_config", None)
     save_dir = _get_config_value(args.save_dir, config, "save_dir", "models")
     continue_model = _get_config_value(args.continue_model, config, "continue_model", None)
-    initial_weights = _get_config_value(args.initial_weights, config, "initial_weights", None)
+    initial_model_path = _get_config_value(args.initial_model_path, config, "initial_model_path", None)
     reset_unity = _get_config_value(args.reset_unity, config, "reset_unity", False)
     safety_max_delta = _get_config_value(args.safety_max_delta, config, "safety_max_delta", 0.5)
     progress_interval = _get_config_value(args.progress_interval, config, "progress_interval", 50)
@@ -322,10 +384,9 @@ def main():
     else:
         enable_visualization = _get_config_value(None, config, "enable_visualization", True)
 
-    if not initial_weights:
-        default_weights = os.path.join(os.path.dirname(__file__), "models", "last_weights.json")
-        if os.path.exists(default_weights):
-            initial_weights = default_weights
+    if not initial_model_path and continue_model:
+        initial_model_path = continue_model
+    initial_weights_path = _derive_weights_path(initial_model_path)
 
     # 权重安全限制开关：可由命令行显式指定，或由配置推导
     # no_safety_limit=True 表示关闭安全限制
@@ -489,7 +550,7 @@ def main():
     logger.info(
         "训练参数: drone=%s total=%s step=%.2fs reset_unity=%s safety_limit=%s "
         "max_delta=%.3f progress_interval=%s save_dir=%s continue_model=%s "
-        "initial_weights=%s enable_visualization=%s",
+        "initial_model_path=%s initial_weights_path=%s enable_visualization=%s",
         drone_name,
         total_timesteps,
         step_duration,
@@ -499,7 +560,8 @@ def main():
         progress_interval,
         save_dir,
         continue_model,
-        initial_weights,
+        initial_model_path,
+        initial_weights_path,
         enable_visualization
     )
     
@@ -572,12 +634,22 @@ def main():
         )
 
         # 应用初始权重（若提供）
-        if initial_weights:
-            weights = _load_initial_weights(initial_weights, drone_name, logger)
-            if weights:
-                server.algorithms[drone_name].set_coefficients(weights)
-                env.set_initial_action(_weights_to_action(weights))
-                logger.info("已加载初始权重: %s", initial_weights)
+        if initial_model_path:
+            # 自动查找同名权重文件
+            initial_weights_path = _derive_weights_path(initial_model_path)
+            if os.path.exists(initial_weights_path):
+                logger.info("📂 找到权重文件: %s", initial_weights_path)
+                weights = _load_initial_weights(initial_weights_path, drone_name, logger)
+                if weights:
+                    server.algorithms[drone_name].set_coefficients(weights)
+                    env.set_initial_action(_weights_to_action(weights))
+                    logger.info("✅ 已加载初始权重: %s", initial_weights_path)
+                else:
+                    logger.warning("⚠️  权重文件格式无效: %s", initial_weights_path)
+            else:
+                logger.warning("⚠️  权重文件不存在: %s", initial_weights_path)
+                logger.info("   模型路径: %s", initial_model_path)
+                logger.info("   将使用默认配置权重")
         
         # 创建并启动训练专用可视化
         if enable_visualization:
@@ -603,7 +675,9 @@ def main():
 
         # 确保模型输出目录存在
         os.makedirs(save_dir, exist_ok=True)
-        final_path = os.path.join(save_dir, "weight_predictor_crazyflie_online")
+        # 使用时间戳作为模型文件名
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        final_path = os.path.join(save_dir, f"weight_predictor_crazyflie_online_{timestamp}")
         logger.info("模型保存路径: %s.zip", os.path.abspath(final_path))
 
         # 继续训练：加载已有模型并保持步数累计
@@ -646,12 +720,21 @@ def main():
 
         # 正常结束后保存模型
         model_saved = _save_model(model, final_path, logger, "训练完成，模型已保存")
+        
+        # 保存权重文件（与模型文件名一致）
+        if model_saved and server:
+            weights_path = _derive_weights_path(final_path)
+            _save_final_weights(server, weights_path, logger)
 
     except KeyboardInterrupt:
         # 人工中断时尝试保存当前模型
         logger.warning("训练停止，尝试保存当前模型")
         if not model_saved:
             model_saved = _save_model(model, final_path, logger, "中断保存，模型已保存")
+            # 保存权重文件（与模型文件名一致）
+            if model_saved and server:
+                weights_path = _derive_weights_path(final_path)
+                _save_final_weights(server, weights_path, logger)
     finally:
         # 停止可视化
         if training_visualizer:

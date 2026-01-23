@@ -387,9 +387,13 @@ python train_with_airsim_improved.py --config airsim_train_config_template.json
 - `checkpoint_freq`：检查点保存频率
 - `enable_visualization`：是否启用训练可视化
 - `use_initial_weights`：是否继承初始权重
-- `initial_weights_path`：初始权重 JSON 路径
+- `initial_model_path`：初始模型路径（不含 `.zip`），会自动匹配同名权重文件
 - `safety_limit`：是否启用权重变化安全限制
 - `max_weight_delta`：每步权重变化最大幅度
+
+**模型与权重文件命名**：
+- 训练保存的模型文件名包含时间戳：`weight_predictor_airsim_<timestamp>.zip`
+- 初始权重文件与模型同名：`weight_predictor_airsim_<timestamp>.last_weights.json`
 
 **初始权重模板说明**：
 - `last_weights_template.json` 用于提供初始权重的示例格式
