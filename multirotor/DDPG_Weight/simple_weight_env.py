@@ -88,11 +88,12 @@ class SimpleWeightEnv(gym.Env):
         
         # 如果有server
         if self.server:
-            # 重置电量数据
+            # 重置所有虚拟无人机的电量数据
             if self.reset_unity:
                 print(f"🔋 重置电量数据...")
-                self.server.reset_battery_voltage(self.drone_name)
-                print(f"  ✅ 电量已重置为4.2V")
+                for drone_name in self.server.drone_names:
+                    self.server.reset_battery_voltage(drone_name)
+                print(f"  ✅ 所有无人机电量已重置为4.2V")
             
             # 模式A：标准episode训练（重置Unity环境）
             if self.reset_unity:
@@ -148,10 +149,16 @@ class SimpleWeightEnv(gym.Env):
         
         state = self._get_state()
         
-        # 显示电量信息
+        # 显示所有无人机的电量信息
         if self.server:
-            current_voltage = self.server.get_battery_voltage(self.drone_name)
-            print(f"🔋 当前电量: {current_voltage:.2f}V")
+            print(f"🔋 电量状态:")
+            for drone_name in self.server.drone_names:
+                current_voltage = self.server.get_battery_voltage(drone_name)
+                battery_info = self.server.battery_manager.get_battery_info(drone_name)
+                if battery_info:
+                    print(f"  • {drone_name}: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)")
+                else:
+                    print(f"  • {drone_name}: {current_voltage:.2f}V")
         
         print(f"\n{'='*60}")
         print(f"🎯 开始 Episode #{self.episode_count}")
@@ -211,15 +218,38 @@ class SimpleWeightEnv(gym.Env):
         
         # 在 step() 方法中
         if self.server:
-            # 更新电量消耗（使用新的电量模块）
+            # 更新所有虚拟无人机的电量消耗
             if self.step_count > 1:
-                action_intensity = np.linalg.norm(action - self.last_action)
-                self.server.battery_manager.update_voltage(self.drone_name, action_intensity)
+                with self.server.data_lock:
+                    # 更新训练无人机的电量（使用action计算动作强度）
+                    action_intensity = np.linalg.norm(action - self.last_action)
+                    self.server.battery_manager.update_voltage(self.drone_name, action_intensity)
+                    
+                    # 更新其他虚拟无人机的电量（使用它们的移动速度计算动作强度）
+                    for other_drone_name in self.server.drone_names:
+                        if other_drone_name == self.drone_name:
+                            continue  # 跳过训练无人机，已经更新过了
+                        
+                        # 获取其他无人机的运行时数据
+                        other_runtime_data = self.server.unity_runtime_data.get(other_drone_name)
+                        if other_runtime_data:
+                            # 计算实际速度大小（finalMoveDir是方向向量，乘以moveSpeed得到实际速度）
+                            move_dir = other_runtime_data.finalMoveDir
+                            move_speed = self.server.config_data.moveSpeed
+                            # 计算速度向量的模长（方向向量的模长 * 移动速度）
+                            speed_magnitude = np.sqrt(move_dir.x**2 + move_dir.y**2 + move_dir.z**2) * move_speed
+                            # 将速度归一化到0-1范围作为动作强度（假设最大速度为moveSpeed）
+                            # 如果速度接近0，动作强度也接近0；如果速度接近moveSpeed，动作强度接近1
+                            action_intensity_other = min(1.0, speed_magnitude / max(move_speed, 0.1))
+                            self.server.battery_manager.update_voltage(other_drone_name, action_intensity_other)
             
-            # 显示当前电量
-            battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
-            current_voltage = battery_info.voltage
-            print(f"🔋 当前电量: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)")
+            # 显示所有无人机的当前电量
+            print(f"🔋 电量状态:")
+            for drone_name in self.server.drone_names:
+                battery_info = self.server.battery_manager.get_battery_info(drone_name)
+                if battery_info:
+                    current_voltage = battery_info.voltage
+                    print(f"  • {drone_name}: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)")
             
             # 设置权重（算法线程会使用新权重飞行）
             self.server.algorithms[self.drone_name].set_coefficients(weights)
