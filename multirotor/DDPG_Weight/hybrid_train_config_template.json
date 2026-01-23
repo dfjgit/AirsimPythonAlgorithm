@@ -1,0 +1,12 @@
+{
+  "drone_names": ["UAV1", "UAV2", "UAV3"],
+  "mirror_drones": ["UAV1"],
+  "total_timesteps": 100,
+  "step_duration": 5.0,
+  "checkpoint_freq": 1000,
+  "enable_visualization": true,
+  "use_initial_weights": true,
+  "initial_model_path": "D:/Work/Python Project/airsim-python-algorithm/multirotor/DDPG_Weight/models/weight_predictor_airsim_20260123_120000",
+  "safety_limit": true,
+  "max_weight_delta": 0.5
+}
