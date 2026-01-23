@@ -8,5 +8,6 @@
   "reset_unity": false,
   "safety_max_delta": 0.5,
   "no_safety_limit": false,
-  "progress_interval": 10
+  "progress_interval": 10,
+  "enable_visualization": true
 }

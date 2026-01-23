@@ -8,9 +8,9 @@ from gym import spaces
 import os
 
 try:
-    from .dqn_reward_config_data import DQNRewardConfig
+    from .crazyflie_reward_config import CrazyflieRewardConfig
 except ImportError:
-    from dqn_reward_config_data import DQNRewardConfig
+    from crazyflie_reward_config import CrazyflieRewardConfig
 
 
 class SimpleWeightEnv(gym.Env):
@@ -20,7 +20,16 @@ class SimpleWeightEnv(gym.Env):
     目标: 学习5个权重系数 (α1, α2, α3, α4, α5)
     """
     
-    def __init__(self, server=None, drone_name="UAV1", reward_config_path=None, reset_unity=True, step_duration=5.0):
+    def __init__(
+        self,
+        server=None,
+        drone_name="UAV1",
+        reward_config_path=None,
+        reset_unity=True,
+        step_duration=5.0,
+        safety_limit=True,
+        max_weight_delta=0.5
+    ):
         super(SimpleWeightEnv, self).__init__()
         
         self.server = server
@@ -28,14 +37,13 @@ class SimpleWeightEnv(gym.Env):
         self.reset_unity = reset_unity  # 是否每次episode重置Unity环境
         self.step_duration = step_duration  # 每步飞行时长（秒）
         
-        # 加载奖励配置
+        # 加载奖励配置（与实体训练一致）
         if reward_config_path is None:
-            # 使用默认路径
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            reward_config_path = os.path.join(current_dir, "dqn_reward_config.json")
-        
-        self.reward_config = DQNRewardConfig(reward_config_path)
-        print(f"[OK] DQN环境已加载奖励配置")
+            reward_config_path = os.path.join(current_dir, "crazyflie_reward_config.json")
+
+        self.reward_config = CrazyflieRewardConfig(reward_config_path)
+        print("[OK] 训练环境已加载奖励配置（与实体一致）")
         
         # 状态空间: 18维
         # [位置(3) + 速度(3) + 方向(3) + 熵值(3) + Leader(3) + 扫描(3)]
@@ -60,6 +68,11 @@ class SimpleWeightEnv(gym.Env):
         self.step_count = 0
         self.episode_count = 0  # 记录Episode编号
         self.last_action = np.zeros(5)  # 记录上一步的动作，用于电量消耗计算
+        self.prev_velocity = np.zeros(3, dtype=np.float32)
+        self.prev_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        self.safety_limit = safety_limit
+        self.max_weight_delta = max_weight_delta
+        self._has_initial_action = False
         
     def reset(self):
         """重置环境"""
@@ -129,6 +142,9 @@ class SimpleWeightEnv(gym.Env):
         
         self.step_count = 0
         self.last_action = np.zeros(5)
+        self.prev_velocity = np.zeros(3, dtype=np.float32)
+        self.prev_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        self._has_initial_action = False
         
         state = self._get_state()
         
@@ -161,6 +177,14 @@ class SimpleWeightEnv(gym.Env):
         
         # 确保action在有效范围内
         action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
+        if self.safety_limit and (self.step_count > 0 or self._has_initial_action):
+            action = np.clip(
+                action,
+                self.last_action - self.max_weight_delta,
+                self.last_action + self.max_weight_delta
+            )
+            action = np.clip(action, self.reward_config.weight_min, self.reward_config.weight_max)
+        self._has_initial_action = False
         
         # 将权重设置到APF算法
         weights = {
@@ -218,14 +242,14 @@ class SimpleWeightEnv(gym.Env):
         else:
             time.sleep(0.1)  # 测试模式快速跳过
         
-        # 记录当前动作
-        self.last_action = action.copy()
-        
         # 获取新状态
         next_state = self._get_state()
         
         # 计算奖励
-        reward = self._calculate_reward()
+        reward = self._calculate_reward(action)
+        
+        # 记录当前动作
+        self.last_action = action.copy()
         
         # 判断是否结束
         done = self.step_count >= self.reward_config.max_steps
@@ -238,7 +262,10 @@ class SimpleWeightEnv(gym.Env):
                 grid_data = self.server.grid_data
                 if grid_data and grid_data.cells:
                     total_cells = len(grid_data.cells)
-                    scanned_cells = sum(1 for cell in grid_data.cells if cell.entropy < 30)
+                    scanned_cells = sum(
+                        1 for cell in grid_data.cells
+                        if cell.entropy < self.reward_config.scan_entropy_threshold
+                    )
                     scan_progress = (scanned_cells / total_cells) * 100
                     print(f"🗺️  扫描进度: {scanned_cells}/{total_cells} ({scan_progress:.1f}%)")
         
@@ -309,59 +336,94 @@ class SimpleWeightEnv(gym.Env):
             print(f"获取状态失败: {str(e)}")
             return np.zeros(18, dtype=np.float32)
     
-    def _calculate_reward(self):
-        """计算奖励（包含电量奖励机制）"""
+    def _calculate_reward(self, action: np.ndarray) -> float:
+        """计算奖励（尽量与实体奖励结构一致）"""
         if not self.server:
             return 0.0
-        
+
         reward = 0.0
-        
+
         try:
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data[self.drone_name]
                 grid_data = self.server.grid_data
-                
-                # 1. 探索奖励：新扫描的单元格
-                current_scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30) if grid_data.cells else 0
-                new_scanned = current_scanned - self.prev_scanned_cells
-                reward += new_scanned * self.reward_config.exploration_reward
-                self.prev_scanned_cells = current_scanned
-                
-                # 2. 越界惩罚
-                if runtime_data.leader_position:
-                    dist_to_leader = (runtime_data.position - runtime_data.leader_position).magnitude()
-                    if runtime_data.leader_scan_radius > 0 and dist_to_leader > runtime_data.leader_scan_radius:
-                        reward -= self.reward_config.out_of_range_penalty
-                
-                # 3. 电量奖励机制
-                current_voltage = self.server.get_battery_voltage(self.drone_name)
-                
-                # 最优电量范围奖励 (3.7V - 4.0V)
-                if 3.7 <= current_voltage <= 4.0:
-                    reward += self.reward_config.battery_optimal_reward
-                    print(f"🔋 电量奖励: +{self.reward_config.battery_optimal_reward:.2f} (电量{current_voltage:.2f}V在最优范围)")
-                
-                # 低电量惩罚 (低于3.5V)
-                elif current_voltage < 3.5:
-                    reward -= self.reward_config.battery_low_penalty
-                    print(f"🔋 电量惩罚: -{self.reward_config.battery_low_penalty:.2f} (电量{current_voltage:.2f}V过低)")
-                
-                # 4. 动作平稳奖励（减少剧烈动作）
-                if self.step_count > 1:
-                    action_intensity = np.linalg.norm(self.last_action)
-                    if action_intensity < 0.5:  # 动作强度小于0.5时给予奖励
-                        reward += self.reward_config.action_smooth_reward
-                        print(f"🔄 平稳动作奖励: +{self.reward_config.action_smooth_reward:.2f}")
-                
+
+            # 1. 速度奖励与超速惩罚
+            vel = runtime_data.finalMoveDir
+            current_velocity = np.array(
+                [vel.x, vel.y, vel.z],
+                dtype=np.float32
+            ) * float(self.server.config_data.moveSpeed)
+            speed = float(np.linalg.norm(current_velocity))
+            reward += self.reward_config.speed_reward * speed
+            if speed > self.reward_config.speed_penalty_threshold:
+                reward -= self.reward_config.speed_penalty
+
+            # 2. 加速度惩罚（速度变化近似）
+            if self.step_duration > 0:
+                accel_mag = float(np.linalg.norm(current_velocity - self.prev_velocity) / self.step_duration)
+            else:
+                accel_mag = float(np.linalg.norm(current_velocity - self.prev_velocity))
+            reward -= self.reward_config.accel_penalty * accel_mag
+
+            # 3. 角速度惩罚（方向变化近似）
+            fwd = runtime_data.forward
+            current_direction = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
+            current_norm = np.linalg.norm(current_direction)
+            prev_norm = np.linalg.norm(self.prev_direction)
+            if current_norm > 1e-6 and prev_norm > 1e-6:
+                dot = float(np.clip(np.dot(current_direction, self.prev_direction) / (current_norm * prev_norm), -1.0, 1.0))
+                angle = float(np.arccos(dot))
+                angular_rate = angle / self.step_duration if self.step_duration > 0 else angle
+                reward -= self.reward_config.angular_rate_penalty * angular_rate
+
+            # 4. 扫描奖励
+            current_scanned = 0
+            if grid_data and grid_data.cells:
+                current_scanned = sum(
+                    1 for cell in grid_data.cells
+                    if cell.entropy < self.reward_config.scan_entropy_threshold
+                )
+            new_scanned = current_scanned - self.prev_scanned_cells
+            if new_scanned > 0:
+                reward += self.reward_config.scan_reward * new_scanned
+            self.prev_scanned_cells = current_scanned
+
+            # 5. 越界惩罚（Leader范围）
+            if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
+                dist_to_leader = (runtime_data.position - runtime_data.leader_position).magnitude()
+                leader_radius = runtime_data.leader_scan_radius + self.reward_config.leader_range_buffer
+                if dist_to_leader > leader_radius:
+                    reward -= self.reward_config.out_of_range_penalty
+
+            # 6. 动作变化与幅度惩罚
+            action_delta = float(np.linalg.norm(action - self.last_action))
+            reward -= self.reward_config.action_change_penalty * action_delta
+            reward -= self.reward_config.action_magnitude_penalty * float(np.linalg.norm(action))
+
+            # 7. 电量奖励机制
+            current_voltage = self.server.get_battery_voltage(self.drone_name)
+            if self.reward_config.battery_optimal_min <= current_voltage <= self.reward_config.battery_optimal_max:
+                reward += self.reward_config.battery_optimal_reward
+                print(f"🔋 电量奖励: +{self.reward_config.battery_optimal_reward:.2f} (电量{current_voltage:.2f}V在最优范围)")
+            elif current_voltage < self.reward_config.battery_low_threshold:
+                reward -= self.reward_config.battery_low_penalty
+                print(f"🔋 电量惩罚: -{self.reward_config.battery_low_penalty:.2f} (电量{current_voltage:.2f}V过低)")
+
+            # 更新历史速度/方向
+            self.prev_velocity = current_velocity
+            if current_norm > 1e-6:
+                self.prev_direction = current_direction
+
         except Exception as e:
             print(f"[错误] 计算奖励失败: {str(e)}")
-        
+
         return reward
     
     def _get_entropy_info(self, grid_data, position):
         """获取附近熵值信息"""
         if not grid_data or not grid_data.cells:
-            return [50.0, 50.0, 0.0]
+            return [0.0, 0.0, 0.0]
         
         # 找附近10米内的单元格
         nearby_cells = [
@@ -370,7 +432,7 @@ class SimpleWeightEnv(gym.Env):
         ]
         
         if not nearby_cells:
-            return [50.0, 50.0, 0.0]
+            return [0.0, 0.0, 0.0]
         
         entropies = [cell.entropy for cell in nearby_cells]
         return [
@@ -385,7 +447,10 @@ class SimpleWeightEnv(gym.Env):
             return [0.0, 0.0, 0.0]
         
         total = len(grid_data.cells)
-        scanned = sum(1 for cell in grid_data.cells if cell.entropy < 30)
+        scanned = sum(
+            1 for cell in grid_data.cells
+            if cell.entropy < self.reward_config.scan_entropy_threshold
+        )
         
         return [
             scanned / max(total, 1),
@@ -401,9 +466,23 @@ class SimpleWeightEnv(gym.Env):
         try:
             # 注意：不在这里加锁，避免嵌套锁
             # 调用者应该已经持有data_lock
-            return sum(1 for cell in self.server.grid_data.cells if cell.entropy < 30)
+            return sum(
+                1 for cell in self.server.grid_data.cells
+                if cell.entropy < self.reward_config.scan_entropy_threshold
+            )
         except:
             return 0
+
+    def set_initial_action(self, weights: np.ndarray) -> None:
+        """设置初始动作权重，用于与实体训练对齐安全裁剪"""
+        if weights is None:
+            return
+        weights = np.array(weights, dtype=np.float32)
+        if weights.shape[0] != 5:
+            return
+        weights = np.clip(weights, self.reward_config.weight_min, self.reward_config.weight_max)
+        self.last_action = weights.copy()
+        self._has_initial_action = True
 
 
 # 测试代码

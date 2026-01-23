@@ -370,6 +370,26 @@ python train_with_airsim_improved.py
 
 **注意**：虽然批处理文件名仍包含"DQN"，但实际使用的是 DDPG 算法。
 
+**可选：使用配置文件训练**：
+```bash
+cd multirotor/DDPG_Weight
+python train_with_airsim_improved.py --config airsim_train_config_template.json
+```
+
+**配置文件模板**：
+- `multirotor/DDPG_Weight/airsim_train_config_template.json`
+
+**配置字段说明（AirSim 训练）**：
+- `drone_names`：训练无人机名称列表
+- `total_timesteps`：训练总步数
+- `step_duration`：每步飞行时长（秒）
+- `checkpoint_freq`：检查点保存频率
+- `enable_visualization`：是否启用训练可视化
+- `use_initial_weights`：是否继承初始权重
+- `initial_weights_path`：初始权重 JSON 路径
+- `safety_limit`：是否启用权重变化安全限制
+- `max_weight_delta`：每步权重变化最大幅度
+
 **使用模型**：
 ```bash
 # 使用训练好的模型

@@ -1,94 +1,357 @@
 """
 改进版AirSim环境训练脚本
-解决Unity卡死问题
-支持Ctrl+C强制退出
+
+功能说明：
+    - 在AirSim仿真环境中使用DDPG算法训练APF（人工势场）权重系数
+    - 支持多无人机协同训练模式
+    - 集成训练可视化模块，实时显示训练进度和统计信息
+    - 支持从已有权重继续训练
+    - 自动保存最佳模型和检查点
+
+主要改进：
+    - 解决Unity卡死问题：改进异常处理和资源清理
+    - 支持Ctrl+C强制退出：优雅处理中断信号
+    - 增强的训练回调：显示详细的Episode统计信息
+    - 训练可视化：实时显示训练状态、奖励曲线、权重变化
+
+使用方法：
+    python train_with_airsim_improved.py --config config.json
+    python train_with_airsim_improved.py --total-timesteps 1000 --enable-visualization
+
+作者：训练模块开发团队
+日期：2026-01-23
 """
 import os
 import sys
 import time
 import signal
+import argparse
+import json
 import numpy as np
 
-# 添加项目路径
+# 添加项目根目录到Python路径，以便导入项目模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# 全局标志，用于Ctrl+C处理
+# ==================== 全局变量 ====================
+# 全局标志，用于Ctrl+C中断处理
+# 当用户按下Ctrl+C时，设置此标志为True，训练循环会优雅地停止
 training_interrupted = False
+# ==================================================
 
 def signal_handler(sig, frame):
-    """处理Ctrl+C信号"""
+    """
+    处理Ctrl+C中断信号
+    
+    功能：
+        - 第一次按下Ctrl+C：设置中断标志，训练会优雅停止
+        - 第二次按下Ctrl+C：强制退出程序
+    
+    参数：
+        sig: 信号编号（SIGINT）
+        frame: 当前堆栈帧
+    """
     global training_interrupted
     if not training_interrupted:
+        # 第一次中断：设置标志，允许训练优雅停止
         print("\n\n" + "=" * 60)
         print("[中断] 检测到Ctrl+C，正在停止训练...")
         print("=" * 60)
         training_interrupted = True
     else:
+        # 第二次中断：强制退出
         print("\n[强制退出] 再次按Ctrl+C将强制退出程序")
         sys.exit(1)
 
-# 注册信号处理器
+# 注册信号处理器：捕获Ctrl+C信号
 signal.signal(signal.SIGINT, signal_handler)
 
 print("=" * 60)
 print("DQN训练 - 改进版（防止Unity卡死）")
 print("=" * 60)
 
-# 检查依赖
+# ==================== 依赖检查 ====================
+# 检查并导入必要的第三方库
 print("\n检查依赖...")
 try:
-    import torch
-    from stable_baselines3 import DDPG
-    from stable_baselines3.common.noise import NormalActionNoise
-    from stable_baselines3.common.callbacks import BaseCallback
+    import torch  # PyTorch深度学习框架
+    from stable_baselines3 import DDPG  # DDPG强化学习算法
+    from stable_baselines3.common.noise import NormalActionNoise  # 动作噪声（用于探索）
+    from stable_baselines3.common.callbacks import BaseCallback  # 训练回调基类
     print("[OK] 依赖检查通过")
 except ImportError as e:
     print(f"[错误] 缺少依赖: {e}")
+    print("请运行: pip install stable-baselines3 torch")
     input("按Enter退出...")
     sys.exit(1)
+# ==================================================
 
-# 导入项目模块
+# ==================== 导入项目模块 ====================
+# 导入训练环境：用于AirSim仿真的权重训练环境
 from simple_weight_env import SimpleWeightEnv
+
+# 导入训练可视化模块：实时显示训练统计和进度
 from training_visualizer import TrainingVisualizer
 
-# 导入AlgorithmServer
+# 导入算法服务器：负责与Unity AirSim通信和算法执行
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from AlgorithmServer import MultiDroneAlgorithmServer
+# ==================================================
+
+
+def _load_train_config(path: str) -> dict:
+    """
+    加载训练配置文件
+    
+    功能：
+        从JSON文件读取训练配置参数
+        
+    参数：
+        path: 配置文件路径（JSON格式）
+        
+    返回：
+        dict: 配置参数字典，如果文件不存在或读取失败则返回空字典
+        
+    示例：
+        config = _load_train_config("config.json")
+    """
+    if not path:
+        return {}
+    if not os.path.exists(path):
+        print(f"⚠️  配置文件不存在: {path}")
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        print(f"⚠️  配置文件读取失败: {exc}")
+        return {}
+
+
+def _get_config_value(cli_value, config: dict, key: str, default):
+    """
+    获取配置值（优先级：命令行 > 配置文件 > 默认值）
+    
+    功能：
+        按照优先级顺序获取配置参数值
+        
+    参数：
+        cli_value: 命令行参数值（优先级最高）
+        config: 配置字典
+        key: 配置键名
+        default: 默认值（优先级最低）
+        
+    返回：
+        配置值
+        
+    示例：
+        total_steps = _get_config_value(args.total_timesteps, config, "total_timesteps", 100)
+    """
+    if cli_value is not None:
+        return cli_value
+    if key in config:
+        return config[key]
+    return default
+
+
+def _save_final_weights(server, path: str) -> None:
+    """
+    保存各无人机最后的权重系数到JSON文件
+    
+    功能：
+        将训练完成后的权重系数保存到JSON文件，用于后续训练或部署
+        
+    参数：
+        server: AlgorithmServer实例，包含所有无人机的算法对象
+        path: 保存路径（JSON文件）
+        
+    保存格式：
+        {
+            "UAV1": {
+                "repulsionCoefficient": 1.0,
+                "entropyCoefficient": 2.0,
+                ...
+            },
+            "UAV2": {...}
+        }
+    """
+    if not server or not path:
+        return
+    weights_by_drone = {}
+    # 遍历所有无人机，收集权重系数
+    for drone_name in server.drone_names:
+        algo = server.algorithms.get(drone_name)
+        if not algo:
+            continue
+        weights_by_drone[drone_name] = algo.get_current_coefficients()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(weights_by_drone, f, ensure_ascii=False, indent=2)
+        print(f"✅ 初始权重已保存: {path}")
+    except Exception as exc:
+        print(f"⚠️  保存初始权重失败: {exc}")
+
+
+def _load_initial_weights(path: str) -> dict:
+    """
+    加载初始权重（支持按无人机名映射或单一字典）
+    
+    功能：
+        从JSON文件加载初始权重，支持两种格式：
+        1. 单一字典格式：所有无人机使用相同权重
+        2. 按无人机名映射：每个无人机有独立的权重
+        
+    参数：
+        path: 权重文件路径（JSON格式）
+        
+    返回：
+        dict: 权重字典，格式为 {drone_name: weights} 或 {"__all__": weights}
+        
+    支持的格式：
+        格式1（单一权重）:
+        {
+            "repulsionCoefficient": 1.0,
+            "entropyCoefficient": 2.0,
+            ...
+        }
+        
+        格式2（按无人机）:
+        {
+            "UAV1": {"repulsionCoefficient": 1.0, ...},
+            "UAV2": {"repulsionCoefficient": 1.5, ...}
+        }
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        print(f"⚠️  读取初始权重失败: {exc}")
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    # 检查是否为单一权重字典格式（包含所有必需的权重键）
+    keys = [
+        "repulsionCoefficient",      # α1: 排斥力系数
+        "entropyCoefficient",         # α2: 熵值系数
+        "distanceCoefficient",         # α3: 距离系数
+        "leaderRangeCoefficient",     # α4: Leader范围系数
+        "directionRetentionCoefficient"  # α5: 方向保持系数
+    ]
+    if all(k in data for k in keys):
+        # 单一权重格式，返回为 "__all__" 键
+        return {"__all__": data}
+
+    # 按无人机名映射格式
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _weights_to_action(weights: dict) -> np.ndarray:
+    """
+    将权重字典转换为动作向量（numpy数组）
+    
+    功能：
+        将APF权重系数字典转换为DDPG算法所需的动作向量格式
+        
+    参数：
+        weights: 权重字典，包含5个APF系数
+        
+    返回：
+        np.ndarray: 形状为(5,)的浮点数组，包含5个权重系数
+        
+    权重顺序：
+        [repulsionCoefficient, entropyCoefficient, distanceCoefficient,
+         leaderRangeCoefficient, directionRetentionCoefficient]
+    """
+    return np.array([
+        float(weights.get("repulsionCoefficient", 0.0)),
+        float(weights.get("entropyCoefficient", 0.0)),
+        float(weights.get("distanceCoefficient", 0.0)),
+        float(weights.get("leaderRangeCoefficient", 0.0)),
+        float(weights.get("directionRetentionCoefficient", 0.0))
+    ], dtype=np.float32)
 
 
 class ImprovedTrainingCallback(BaseCallback):
-    """改进的训练回调，突出显示模型和奖励，并更新可视化"""
+    """
+    改进的训练回调类
+    
+    功能：
+        - 监控训练进度，定期打印详细的Episode统计信息
+        - 自动保存最佳模型和检查点
+        - 更新训练可视化模块的统计信息
+        - 支持Ctrl+C优雅中断
+        
+    主要特性：
+        - 美观的Episode完成信息显示（带边框）
+        - 奖励趋势分析（上升/下降）
+        - 自动保存最佳模型（基于平均奖励）
+        - 定期保存检查点（防止训练中断丢失进度）
+        - 实时更新可视化窗口
+        
+    继承自：
+        stable_baselines3.common.callbacks.BaseCallback
+    """
     
     def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', 
                  training_visualizer=None, verbose=1):
-        super(ImprovedTrainingCallback, self).__init__(verbose)
-        self.total_timesteps = total_timesteps
-        self.check_freq = check_freq
-        self.save_path = save_path
-        self.training_visualizer = training_visualizer  # 训练可视化器
-        self.best_mean_reward = -np.inf
-        self.last_print_step = 0
-        self.print_interval = max(total_timesteps // 10, 100)  # 只显示10次
-        self.episode_count = 0
-        self.episode_rewards = []
+        """
+        初始化训练回调
         
+        参数：
+            total_timesteps: 总训练步数
+            check_freq: 检查点保存频率（每N步保存一次）
+            save_path: 模型保存目录路径
+            training_visualizer: 训练可视化器实例（可选）
+            verbose: 详细程度（0=静默，1=显示信息）
+        """
+        super(ImprovedTrainingCallback, self).__init__(verbose)
+        self.total_timesteps = total_timesteps  # 总训练步数
+        self.check_freq = check_freq  # 检查点保存频率
+        self.save_path = save_path  # 模型保存路径
+        self.training_visualizer = training_visualizer  # 训练可视化器引用
+        self.best_mean_reward = -np.inf  # 最佳平均奖励（用于保存最佳模型）
+        self.last_print_step = 0  # 上次打印的步数
+        self.print_interval = max(total_timesteps // 10, 100)  # 打印间隔（总共显示10次）
+        self.episode_count = 0  # 已完成的Episode数量
+        self.episode_rewards = []  # 所有Episode的奖励列表
+        
+        # 确保保存目录存在
         os.makedirs(save_path, exist_ok=True)
         
     def _on_step(self) -> bool:
-        # 检查是否被中断
+        """
+        每个训练步骤调用一次
+        
+        功能：
+            - 检查训练是否被中断（Ctrl+C）
+            - 检测新完成的Episode并显示详细信息
+            - 更新训练可视化统计
+            - 自动保存最佳模型和检查点
+            
+        返回：
+            bool: True继续训练，False停止训练
+        """
+        # ========== 检查中断标志 ==========
         global training_interrupted
         if training_interrupted:
             print("\n[中断] 停止训练...")
             return False  # 返回False停止训练
+        # ===================================
         
-        # 记录episode奖励
+        # ========== Episode完成检测 ==========
+        # 检查是否有新的Episode完成（通过比较ep_info_buffer长度）
         if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer) > self.episode_count:
-            ep_reward = self.model.ep_info_buffer[-1]['r']
-            ep_length = self.model.ep_info_buffer[-1]['l']
+            # 获取最新完成的Episode信息
+            ep_reward = self.model.ep_info_buffer[-1]['r']  # Episode总奖励
+            ep_length = self.model.ep_info_buffer[-1]['l']  # Episode步数
             self.episode_rewards.append(ep_reward)
             self.episode_count = len(self.model.ep_info_buffer)
             
-            # 更新训练可视化
+            # 更新训练可视化（如果启用）
             if self.training_visualizer:
                 self.training_visualizer.update_training_stats(
                     episode_reward=ep_reward,
@@ -96,28 +359,31 @@ class ImprovedTrainingCallback(BaseCallback):
                     is_episode_done=True
                 )
             
+            # ========== 美观的Episode完成信息显示 ==========
             print(f"\n{'╔'+'═'*58+'╗'}")
             print(f"║  🎉 Episode #{self.episode_count} 完成！{' '*(45-len(str(self.episode_count)))}║")
             print(f"{'╠'+'═'*58+'╣'}")
             print(f"║  📈 本次奖励: {ep_reward:+8.2f}{' '*40}║")
             print(f"║  📏 Episode长度: {ep_length:4.0f} 步{' '*36}║")
             
+            # 显示统计信息（需要至少2个Episode）
             if len(self.episode_rewards) > 1:
-                avg_reward = np.mean(self.episode_rewards)
-                best_reward = max(self.episode_rewards)
-                worst_reward = min(self.episode_rewards)
+                avg_reward = np.mean(self.episode_rewards)  # 平均奖励
+                best_reward = max(self.episode_rewards)     # 最佳奖励
+                worst_reward = min(self.episode_rewards)     # 最差奖励
                 print(f"║{' '*58}║")
                 print(f"║  📊 统计信息:{' '*43}║")
                 print(f"║    • 平均奖励: {avg_reward:+8.2f}{' '*35}║")
                 print(f"║    • 最佳奖励: {best_reward:+8.2f}{' '*35}║")
                 print(f"║    • 最差奖励: {worst_reward:+8.2f}{' '*35}║")
                 
-                # 奖励趋势
+                # 奖励趋势分析（需要至少3个Episode）
                 if len(self.episode_rewards) >= 3:
-                    recent_avg = np.mean(self.episode_rewards[-3:])
+                    recent_avg = np.mean(self.episode_rewards[-3:])  # 最近3个Episode的平均
                     trend = "📈 上升" if recent_avg > avg_reward else "📉 下降"
                     print(f"║    • 最近趋势: {trend}{' '*35}║")
             
+            # 显示训练进度
             print(f"║{' '*58}║")
             remaining_steps = self.total_timesteps - self.num_timesteps
             progress = self.num_timesteps / self.total_timesteps * 100
@@ -131,15 +397,18 @@ class ImprovedTrainingCallback(BaseCallback):
                 print(f"🔄 准备下一个Episode（#{self.episode_count + 1}）...")
                 print(f"   环境将自动重置...")
                 print(f"{'─'*60}\n")
+        # ============================================
         
-        # 减少打印频率，避免阻塞
+        # ========== 定期打印和保存最佳模型 ==========
+        # 减少打印频率，避免阻塞训练（总共显示10次）
         if self.num_timesteps - self.last_print_step >= self.print_interval:
+            # 计算当前平均奖励
             if len(self.model.ep_info_buffer) > 0:
                 mean_reward = np.mean([ep_info['r'] for ep_info in self.model.ep_info_buffer])
             else:
                 mean_reward = 0
             
-            # 保存最佳模型
+            # 如果当前平均奖励超过历史最佳，保存最佳模型
             if mean_reward > self.best_mean_reward and mean_reward > 0:
                 self.best_mean_reward = mean_reward
                 model_path = os.path.join(self.save_path, 'best_model')
@@ -148,44 +417,122 @@ class ImprovedTrainingCallback(BaseCallback):
                 print(f"💾 已保存: {model_path}.zip\n")
             
             self.last_print_step = self.num_timesteps
+        # ============================================
         
-        # 定期保存检查点
+        # ========== 定期保存检查点 ==========
+        # 每check_freq步保存一次检查点，防止训练中断丢失进度
         if self.num_timesteps % self.check_freq == 0 and self.num_timesteps > 0:
             checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.num_timesteps}')
             self.model.save(checkpoint_path)
             print(f"💾 检查点: checkpoint_{self.num_timesteps}.zip")
+        # ====================================
         
         return True  # 继续训练
 
 
-# ==================== 训练参数配置 ====================
-DRONE_NAMES = ["UAV1", "UAV2", "UAV3"]  # 使用4台无人机协同训练
-TOTAL_TIMESTEPS = 100            # 总训练步数（快速训练）
-STEP_DURATION = 20.0             # 每步飞行时长（秒） 提高飞行时长
-CHECKPOINT_FREQ = 1000           # 检查点保存频率
-ENABLE_VISUALIZATION = True      # 是否启用可视化（训练专用可视化）
+# ==================== 训练参数默认配置 ====================
+# 这些是训练参数的默认值，可以通过命令行参数或配置文件覆盖
+DEFAULT_DRONE_NAMES = ["UAV1", "UAV2", "UAV3"]  # 默认使用3台无人机协同训练
+DEFAULT_TOTAL_TIMESTEPS = 100            # 默认总训练步数（快速训练模式）
+DEFAULT_STEP_DURATION = 5.0              # 默认每步飞行时长（秒），与实体训练对齐
+DEFAULT_CHECKPOINT_FREQ = 1000           # 默认检查点保存频率（每N步保存一次）
+DEFAULT_ENABLE_VISUALIZATION = True      # 默认启用训练可视化
+DEFAULT_INITIAL_WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "models", "last_weights.json")
+DEFAULT_USE_INITIAL_WEIGHTS = True       # 默认使用初始权重继承
 # =====================================================
 
 def main():
-    """主训练流程"""
+    """
+    主训练流程函数
     
-    # 全局变量，用于清理
-    server = None
-    training_visualizer = None
+    功能：
+        1. 解析命令行参数和配置文件
+        2. 初始化AlgorithmServer（连接Unity AirSim）
+        3. 创建训练环境（SimpleWeightEnv）
+        4. 启动训练可视化（可选）
+        5. 创建并训练DDPG模型
+        6. 保存训练结果和模型
+        
+    训练流程：
+        [1/5] 启动AlgorithmServer
+        [2/5] 启动无人机任务
+        [3/5] 等待系统稳定
+        [4/5] 创建训练环境
+        [4.5/5] 启动训练可视化（可选）
+        [5/5] 创建DDPG模型并开始训练
+        
+    异常处理：
+        - KeyboardInterrupt: 用户中断（Ctrl+C），优雅停止
+        - Exception: 其他错误，显示错误信息并清理资源
+    """
+    # ========== 命令行参数解析 ==========
+    parser = argparse.ArgumentParser(description="AirSim权重训练（改进版）")
+    parser.add_argument("--config", type=str, default=None, help="训练配置文件路径（JSON）")
+    parser.add_argument(
+        "--initial-weights-path",
+        type=str,
+        default=DEFAULT_INITIAL_WEIGHTS_PATH,
+        help="初始权重JSON路径（默认读取last_weights.json）"
+    )
+    parser.add_argument(
+        "--use-initial-weights",
+        action="store_true",
+        default=None,
+        help="启用初始权重继承"
+    )
+    parser.add_argument(
+        "--no-initial-weights",
+        action="store_true",
+        default=None,
+        help="禁用初始权重继承"
+    )
+    args = parser.parse_args()
+    
+    # ========== 加载配置并解析参数 ==========
+    # 优先级：命令行参数 > 配置文件 > 默认值
+    config = _load_train_config(args.config)  # 加载JSON配置文件
+    
+    # 解析训练参数
+    drone_names = _get_config_value(None, config, "drone_names", DEFAULT_DRONE_NAMES)
+    total_timesteps = int(_get_config_value(None, config, "total_timesteps", DEFAULT_TOTAL_TIMESTEPS))
+    step_duration = float(_get_config_value(None, config, "step_duration", DEFAULT_STEP_DURATION))
+    checkpoint_freq = int(_get_config_value(None, config, "checkpoint_freq", DEFAULT_CHECKPOINT_FREQ))
+    enable_visualization = bool(_get_config_value(None, config, "enable_visualization", DEFAULT_ENABLE_VISUALIZATION))
+    safety_limit = bool(_get_config_value(None, config, "safety_limit", True))  # 权重变化安全限制
+    max_weight_delta = float(_get_config_value(None, config, "max_weight_delta", 0.5))  # 权重变化最大幅度
+    
+    # 初始权重使用逻辑：命令行优先
+    if args.use_initial_weights is None and args.no_initial_weights is None:
+        use_initial_weights = bool(_get_config_value(None, config, "use_initial_weights", DEFAULT_USE_INITIAL_WEIGHTS))
+    else:
+        use_initial_weights = bool(args.use_initial_weights) and not bool(args.no_initial_weights)
+    
+    initial_weights_path = _get_config_value(
+        args.initial_weights_path,
+        config,
+        "initial_weights_path",
+        DEFAULT_INITIAL_WEIGHTS_PATH
+    )
+    # ==========================================
+    
+    # ========== 初始化全局变量（用于资源清理） ==========
+    server = None  # AlgorithmServer实例
+    training_visualizer = None  # 训练可视化器实例
+    # ====================================================
     
     print("\n" + "=" * 60)
     print("🚀 DQN权重训练 - 多无人机协同模式")
     print("=" * 60)
-    print(f"🚁 无人机数量: {len(DRONE_NAMES)} 台 ({', '.join(DRONE_NAMES)})")
-    print(f"📊 训练步数: {TOTAL_TIMESTEPS} 步")
-    print(f"⏱️  每步时长: {STEP_DURATION} 秒")
-    print(f"💾 检查点: 每 {CHECKPOINT_FREQ} 步保存一次")
-    print(f"👁️  可视化: {'启用' if ENABLE_VISUALIZATION else '禁用'}")
-    print(f"📈 预计episode数: ~{TOTAL_TIMESTEPS // 50}")
+    print(f"🚁 无人机数量: {len(drone_names)} 台 ({', '.join(drone_names)})")
+    print(f"📊 训练步数: {total_timesteps} 步")
+    print(f"⏱️  每步时长: {step_duration} 秒")
+    print(f"💾 检查点: 每 {checkpoint_freq} 步保存一次")
+    print(f"👁️  可视化: {'启用' if enable_visualization else '禁用'}")
+    print(f"📈 预计episode数: ~{total_timesteps // 50}")
     print("=" * 60)
-    print(f"\n💡 说明: 使用{len(DRONE_NAMES)}台无人机协同训练")
-    print(f"   - 主训练无人机: {DRONE_NAMES[0]} (用于DQN学习)")
-    print(f"   - 协同无人机: {', '.join(DRONE_NAMES[1:])} (提供环境交互)")
+    print(f"\n💡 说明: 使用{len(drone_names)}台无人机协同训练")
+    print(f"   - 主训练无人机: {drone_names[0]} (用于DQN学习)")
+    print(f"   - 协同无人机: {', '.join(drone_names[1:]) if len(drone_names) > 1 else '无'} (提供环境交互)")
     print(f"   - 学到的权重策略将适用于所有无人机")
     print("\n[重要] 请确保Unity AirSim仿真已经运行！")
     
@@ -195,19 +542,24 @@ def main():
         return
     
     try:
+        # ========== [1/5] 启动AlgorithmServer ==========
         print("\n[1/5] 启动AlgorithmServer...")
         
-        # 创建服务器（训练模式不使用学习的权重，禁用AlgorithmServer自带的可视化）
+        # 创建算法服务器（负责与Unity AirSim通信）
+        # 训练模式配置：
+        #   - use_learned_weights=False: 训练时不使用已学习的权重，让DDPG动态调整
+        #   - model_path=None: 训练模式不需要加载预训练模型
+        #   - enable_visualization=False: 禁用AlgorithmServer自带的可视化，使用训练专用可视化
         server = MultiDroneAlgorithmServer(
-            drone_names=DRONE_NAMES,
-            use_learned_weights=False,  # 训练模式不使用学习的权重
-            model_path=None,  # 训练模式不需要加载模型
-            enable_visualization=False  # 禁用AlgorithmServer的可视化，使用训练专用可视化
+            drone_names=drone_names,
+            use_learned_weights=False,  # 训练模式：不使用学习的权重
+            model_path=None,  # 训练模式：不加载模型
+            enable_visualization=False  # 使用训练专用可视化，禁用服务器自带可视化
         )
         
         print(f"✅ 服务器创建成功")
-        print(f"  无人机配置: {', '.join(DRONE_NAMES)}")
-        print(f"  使用训练专用可视化: {'是' if ENABLE_VISUALIZATION else '否'}")
+        print(f"  无人机配置: {', '.join(drone_names)}")
+        print(f"  使用训练专用可视化: {'是' if enable_visualization else '否'}")
     
         # 启动服务器
         if not server.start():
@@ -231,26 +583,50 @@ def main():
         # 等待系统稳定
         print("\n[3/5] 等待系统稳定...")
         time.sleep(5)
+
+        # 加载初始权重（若存在）
+        initial_weights = {}
+        if use_initial_weights:
+            initial_weights = _load_initial_weights(initial_weights_path)
+            if initial_weights:
+                for drone_name in drone_names:
+                    weights = initial_weights.get(drone_name) or initial_weights.get("__all__")
+                    if weights:
+                        server.algorithms[drone_name].set_coefficients(weights)
+                print(f"✅ 已加载初始权重: {initial_weights_path}")
+            else:
+                print("⚠️  未找到可用初始权重，使用默认配置权重")
         
-        # 创建训练环境
+        # ========== [4/5] 创建训练环境 ==========
         print("\n[4/5] 创建训练环境...")
         
+        # 创建SimpleWeightEnv训练环境
+        # 环境功能：
+        #   - 将DDPG的动作（权重系数）应用到APF算法
+        #   - 执行一步飞行并收集状态和奖励
+        #   - 支持episode重置（reset_unity=True）
         env = SimpleWeightEnv(
-            server=server,
-            drone_name=DRONE_NAMES[0],  # 使用第一台无人机进行DQN训练
-            reset_unity=True,          # 标准episode训练
-            step_duration=STEP_DURATION  # 使用配置的飞行时长
+            server=server,  # 算法服务器引用
+            drone_name=drone_names[0],  # 使用第一台无人机进行DDPG训练（主训练机）
+            reset_unity=True,  # 每个episode结束时重置Unity环境
+            step_duration=step_duration,  # 每步飞行时长（秒）
+            safety_limit=safety_limit,  # 是否启用权重变化安全限制
+            max_weight_delta=max_weight_delta  # 权重变化最大幅度（安全限制）
         )
+        if use_initial_weights and initial_weights:
+            training_weights = initial_weights.get(drone_names[0]) or initial_weights.get("__all__")
+            if training_weights:
+                env.set_initial_action(_weights_to_action(training_weights))
         print(f"✅ 环境创建成功")
         print(f"  📋 模式: 多无人机协同训练")
-        print(f"  🎓 训练无人机: {DRONE_NAMES[0]}")
-        print(f"  🤝 协同无人机: {', '.join(DRONE_NAMES[1:]) if len(DRONE_NAMES) > 1 else '无'}")
-        print(f"  ⏱️  每步时长: {STEP_DURATION}秒")
-        print(f"  🎯 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * STEP_DURATION / 60:.1f}分钟")
-        print(f"  💡 预计总训练时长: {TOTAL_TIMESTEPS * STEP_DURATION / 60:.1f}分钟")
+        print(f"  🎓 训练无人机: {drone_names[0]}")
+        print(f"  🤝 协同无人机: {', '.join(drone_names[1:]) if len(drone_names) > 1 else '无'}")
+        print(f"  ⏱️  每步时长: {step_duration}秒")
+        print(f"  🎯 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * step_duration / 60:.1f}分钟")
+        print(f"  💡 预计总训练时长: {total_timesteps * step_duration / 60:.1f}分钟")
         
         # 创建并启动训练专用可视化
-        if ENABLE_VISUALIZATION:
+        if enable_visualization:
             print("\n[4.5/5] 启动训练专用可视化...")
             try:
                 training_visualizer = TrainingVisualizer(server=server, env=env)
@@ -265,29 +641,36 @@ def main():
                 print("💡 训练将继续，但不显示可视化")
                 training_visualizer = None
 
-        # 创建DDPG模型
+        # ========== [5/5] 创建DDPG模型 ==========
         print("\n[5/5] 创建DDPG模型...")
         
+        # 获取动作空间维度（5个APF权重系数）
         n_actions = env.action_space.shape[0]
+        
+        # 创建动作噪声（用于探索）
+        # NormalActionNoise: 高斯噪声，帮助算法探索动作空间
+        # sigma=0.15: 噪声标准差，控制探索强度
         action_noise = NormalActionNoise(
-            mean=np.zeros(n_actions),
-            sigma=0.15 * np.ones(n_actions)  # 适度噪声
+            mean=np.zeros(n_actions),  # 噪声均值为0
+            sigma=0.15 * np.ones(n_actions)  # 适度噪声，平衡探索与利用
         )
         
+        # 创建DDPG模型
+        # DDPG (Deep Deterministic Policy Gradient): 适用于连续动作空间的强化学习算法
         model = DDPG(
-            "MlpPolicy",
-            env,
-            action_noise=action_noise,
-            learning_rate=1e-4,
-            buffer_size=5000,        # 小缓冲区（快速训练）
-            learning_starts=200,     # 尽早开始学习
-            batch_size=64,
-            tau=0.005,
-            gamma=0.99,
-            train_freq=(1, "episode"),
-            gradient_steps=-1,
-            verbose=0,
-            device='cpu'
+            "MlpPolicy",  # 使用多层感知机（MLP）策略网络
+            env,  # 训练环境
+            action_noise=action_noise,  # 动作噪声（探索）
+            learning_rate=1e-4,  # 学习率（较小值，稳定训练）
+            buffer_size=5000,  # 经验回放缓冲区大小（小缓冲区，快速训练）
+            learning_starts=200,  # 开始学习前的步数（收集经验）
+            batch_size=64,  # 批次大小（每次训练使用的样本数）
+            tau=0.005,  # 软更新系数（目标网络更新速度）
+            gamma=0.99,  # 折扣因子（未来奖励的重要性）
+            train_freq=(1, "episode"),  # 训练频率（每个episode训练一次）
+            gradient_steps=-1,  # 梯度步数（-1表示使用所有可用数据）
+            verbose=0,  # 详细程度（0=静默）
+            device='cpu'  # 使用CPU（可改为'cuda'使用GPU）
         )
         
         print("✅ DDPG模型创建成功")
@@ -296,7 +679,7 @@ def main():
         print("\n" + "=" * 60)
         print("🎯 开始训练")
         print("=" * 60)
-        print(f"📊 训练步数: {TOTAL_TIMESTEPS}")
+        print(f"📊 训练步数: {total_timesteps}")
         print(f"⏸️  按 Ctrl+C 可随时停止")
         print("=" * 60 + "\n")
         
@@ -304,15 +687,15 @@ def main():
         os.makedirs(model_dir, exist_ok=True)
         
         training_callback = ImprovedTrainingCallback(
-            total_timesteps=TOTAL_TIMESTEPS,
-            check_freq=CHECKPOINT_FREQ,
+            total_timesteps=total_timesteps,
+            check_freq=checkpoint_freq,
             save_path=model_dir,
             training_visualizer=training_visualizer,  # 传入可视化器
             verbose=1
         )
         
         model.learn(
-            total_timesteps=TOTAL_TIMESTEPS,
+            total_timesteps=total_timesteps,
             log_interval=None,
             callback=training_callback
         )
@@ -326,6 +709,10 @@ def main():
         final_model_path = os.path.join(model_dir, 'weight_predictor_airsim')
         model.save(final_model_path)
         print(f"✅ 模型已保存: {final_model_path}.zip")
+
+        # 保存最后权重系数（用于实体训练初始化）
+        weights_path = os.path.join(model_dir, "last_weights.json")
+        _save_final_weights(server, weights_path)
         
         # 显示训练统计
         print("\n" + "=" * 60)
@@ -342,7 +729,7 @@ def main():
         print("\n📦 生成的模型文件:")
         print(f"  🏆 最佳模型: models/best_model.zip")
         print(f"  📄 最终模型: models/weight_predictor_airsim.zip")
-        if CHECKPOINT_FREQ > 0:
+        if checkpoint_freq > 0:
             print(f"  💾 检查点: models/checkpoint_*.zip")
         
         print("\n🎯 下一步操作:")
@@ -377,7 +764,7 @@ def main():
             print("\n停止AlgorithmServer...")
             try:
                 # 降落无人机
-                for drone_name in DRONE_NAMES:
+                for drone_name in drone_names:
                     try:
                         print(f"  降落 {drone_name}...")
                         server.drone_controller.land(drone_name)

@@ -292,10 +292,12 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         self.step_count = 0
         self.prev_scanned_cells = 0
         self.last_action = np.zeros(5, dtype=np.float32)
+        self._has_initial_action = False
 
     def reset(self):
         self.step_count = 0
         self.last_action = np.zeros(5, dtype=np.float32)
+        self._has_initial_action = False
 
         if self.reset_unity and self.server:
             self.server.reset_environment()
@@ -309,13 +311,14 @@ class CrazyflieOnlineWeightEnv(gym.Env):
 
     def step(self, action):
         action = np.clip(action, self.config.weight_min, self.config.weight_max)
-        if self.safety_limit and self.step_count > 0:
+        if self.safety_limit and (self.step_count > 0 or self._has_initial_action):
             action = np.clip(
                 action,
                 self.last_action - self.max_weight_delta,
                 self.last_action + self.max_weight_delta
             )
             action = np.clip(action, self.config.weight_min, self.config.weight_max)
+        self._has_initial_action = False
 
         weights = {
             "repulsionCoefficient": float(action[0]),
@@ -455,3 +458,14 @@ class CrazyflieOnlineWeightEnv(gym.Env):
             1 for cell in self.server.grid_data.cells
             if _get_cell_entropy(cell) < self.config.scan_entropy_threshold
         )
+
+    def set_initial_action(self, weights: np.ndarray) -> None:
+        """设置初始动作权重，用于与虚拟训练对齐安全裁剪"""
+        if weights is None:
+            return
+        weights = np.array(weights, dtype=np.float32)
+        if weights.shape[0] != 5:
+            return
+        weights = np.clip(weights, self.config.weight_min, self.config.weight_max)
+        self.last_action = weights.copy()
+        self._has_initial_action = True
