@@ -21,7 +21,7 @@ class DataCollector:
     def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0, enable_debug_print: bool = False):
         """
         初始化数据采集器
-        :param data_dir: 数据保存目录（默认使用当前目录下的data_logs）
+        :param data_dir: 数据保存目录（默认使用 DDPG_Weight/airsim_training_logs）
         :param collection_interval: 采集间隔（秒，默认1.0）
         :param enable_debug_print: 是否启用DEBUG打印（默认False，训练时应设置为True）
         """
@@ -45,9 +45,10 @@ class DataCollector:
             if data_dir:
                 data_path = Path(data_dir)
             else:
-                data_path = Path(__file__).parent.parent / "data_logs"
+                # 默认输出到 DDPG_Weight/airsim_training_logs 目录
+                data_path = Path(__file__).parent.parent / "DDPG_Weight" / "airsim_training_logs"
             
-            data_path.mkdir(exist_ok=True)
+            data_path.mkdir(parents=True, exist_ok=True)
             
             # 生成CSV文件名（带时间戳）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -134,7 +134,8 @@ AirsimAlgorithmPython/
 │   │   ├── simple_visualizer.py     # 可视化组件
 │   │   ├── data_collector.py        # 数据采集模块
 │   │   ├── battery_data.py          # 电池数据类
-│   │   └── visualize_scan_csv.py    # CSV数据可视化
+│   │   ├── visualize_scan_csv.py    # CSV数据可视化
+│   │   └── visualize_training_data.py # 训练数据可视化 ✨
 │   │
 │   ├── AirsimServer/                # 服务器组件
 │   │   ├── drone_controller.py      # 无人机控制器
@@ -154,9 +155,11 @@ AirsimAlgorithmPython/
 │   │   ├── train_with_crazyflie_online.py # 在线训练
 │   │   ├── train_with_hybrid.py     # 虚实融合训练
 │   │   ├── training_visualizer.py   # 训练可视化器 ✨
+│   │   ├── crazyflie_data_logger.py # Crazyflie 数据记录器 ✨
 │   │   ├── test_trained_model.py    # 模型测试
 │   │   ├── unified_train_config.json # 统一训练配置 ⭐
 │   │   ├── models/                  # 训练好的模型
+│   │   ├── crazyflie_logs/          # Crazyflie 训练日志 ✨
 │   │   ├── dqn_reward_config.json   # 奖励配置（仿真）
 │   │   └── crazyflie_reward_config.json # 奖励配置（实体机）
 │   │
@@ -167,8 +170,11 @@ AirsimAlgorithmPython/
 │   │   └── movement_dqn_config.json # 配置文件
 │   │
 │   ├── DDPG与DQN介绍.md              # 强化学习模块说明
-│   └── data_logs/                    # 数据采集输出
-│       └── scan_data_YYYYMMDD_HHMMSS.csv
+│   ├── DDPG_Weight/                 # DDPG 权重预测模块
+│   │   ├── airsim_training_logs/    # 虚拟训练数据日志 ✨
+│   │   ├── crazyflie_logs/          # Crazyflie 训练日志 ✨
+│   │   └── ...
+│   └── DQN_Movement/                 # DQN 移动控制模块
 │
 ├── scripts/                          # 批处理脚本
 │   ├── 运行系统-固定权重.bat
@@ -177,7 +183,8 @@ AirsimAlgorithmPython/
 │   ├── 训练权重DDPG-实体机日志.bat
 │   ├── 训练权重DDPG-实体机在线.bat
 │   ├── 训练权重DDPG-虚实融合.bat
-│   └── 训练移动DQN-真实环境.bat
+│   ├── 训练移动DQN-真实环境.bat
+│   └── 数据可视化分析.bat          # ⭐新增！
 │
 ├── requirements.txt                  # Python 依赖
 ├── setup.py                          # 安装脚本
@@ -238,8 +245,13 @@ AirsimAlgorithmPython/
 - 电池电压信息（每架无人机）
 
 **输出格式**：CSV 文件
-- 位置：`multirotor/data_logs/scan_data_YYYYMMDD_HHMMSS.csv`
+- 位置：`multirotor/DDPG_Weight/airsim_training_logs/scan_data_YYYYMMDD_HHMMSS.csv`
 - 频率：每秒一次
+
+**数据可视化**：
+- 使用 `visualize_scan_csv.py` 分析扫描数据
+- 使用 `visualize_training_data.py` 分析训练数据
+- 通过 `start.bat` 选项 [A] 快速启动
 
 ### 4. SimpleVisualizer（可视化）
 
@@ -348,13 +360,176 @@ python multirotor/AlgorithmServer.py --use-learned-weights \
 ### 数据采集
 
 数据采集系统自动运行，输出到：
-- `multirotor/data_logs/scan_data_YYYYMMDD_HHMMSS.csv`
+- `multirotor/DDPG_Weight/airsim_training_logs/scan_data_YYYYMMDD_HHMMSS.csv`
 
 **CSV 格式**：
 ```csv
 timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repulsion_coefficient,entropy_coefficient,distance_coefficient,leader_range_coefficient,direction_retention_coefficient,UAV1_pos_x,UAV1_pos_y,UAV1_pos_z,UAV1_battery_voltage,UAV2_pos_x,UAV2_pos_y,UAV2_pos_z,UAV2_battery_voltage
 2026-01-26 15:10:33,0.00,0,25,25,0.00%,4.0,2.0,2.0,2.0,2.0,0.000,0.000,2.000,3.850,5.000,0.000,2.000,3.820
 2026-01-26 15:10:34,1.00,3,22,25,12.00%,4.0,2.0,2.0,2.0,2.0,1.234,0.567,2.000,3.845,5.678,0.234,2.000,3.815
+```
+
+---
+
+## 📊 数据可视化分析 ✨
+
+### 功能简介
+
+系统提供强大的数据可视化工具，支持对训练数据和扫描数据进行深度分析。
+
+### 支持的数据类型
+
+#### 1. Crazyflie 实体无人机训练数据
+
+**数据格式**：
+- JSON 完整训练日志：`crazyflie_training_log_*.json`
+- CSV 飞行数据：`crazyflie_flight_*.csv`
+- CSV 权重历史：`crazyflie_weights_*.csv`
+
+**可视化内容**：
+- 飞行轨迹（
+- 速度和加速度曲线
+- 权重变化历史
+- Episode 奖励曲线
+- 电池性能分析
+
+**示例图表**：
+- `UAV1_trajectory_2d.png` - 2D 飞行轨迹
+- `UAV1_trajectory_3d.png` - 3D 飞行轨迹
+- `UAV1_flight_stats.png` - 飞行状态（速度、高度、电池）
+- `weight_history.png` - APF 权重系数变化
+- `episode_stats.png` - Episode 统计信息
+
+#### 2. DataCollector 扫描数据
+
+**数据格式**：
+- CSV 扫描数据：`scan_data_*.csv`
+
+**可视化内容**：
+- 扫描进度曲线
+- 熵值变化分析
+- 多无人机轨迹
+- 算法权重变化
+
+### 使用方法
+
+#### 方式一：使用主菜单（推荐）
+
+```bash
+# 启动主菜单
+start.bat
+
+# 选择选项 [A] 数据可视化分析
+```
+
+**子菜单选项**：
+- `[1]` 自动分析所有数据（推荐）- 自动扫描所有数据目录
+- `[2]` 分析 Crazyflie 训练日志 - 只分析实体机训练数据
+- `[3]` 分析扫描数据 - 只分析 DataCollector 数据
+- `[4]` 分析指定文件 - 拖拽文件到窗口
+
+#### 方式二：直接运行批处理
+
+```bash
+# Windows 中文版
+scripts\数据可视化分析.bat
+
+# Windows 英文版
+scripts\Data_Visualization_Analysis.bat
+```
+
+#### 方式三：命令行使用
+
+```bash
+# 自动扫描所有数据
+python multirotor/Algorithm/visualize_training_data.py --auto
+
+# 分析单个 JSON 文件
+python multirotor/Algorithm/visualize_training_data.py --json path/to/file.json
+
+# 分析单个 CSV 文件
+python multirotor/Algorithm/visualize_training_data.py --csv path/to/file.csv
+
+# 分析指定目录
+python multirotor/Algorithm/visualize_training_data.py --dir path/to/logs
+
+# 指定输出目录
+python multirotor/Algorithm/visualize_training_data.py --auto --out my_analysis
+```
+
+### 输出结果
+
+**默认输出目录**：`analysis_results/`
+
+**文件结构**：
+```
+analysis_results/
+├── crazyflie_20260126_153022/     # Crazyflie 训练会话
+│   ├── UAV1_trajectory_2d.png      # 2D 轨迹
+│   ├── UAV1_trajectory_3d.png      # 3D 轨迹
+│   ├── UAV1_flight_stats.png       # 飞行状态
+│   ├── weight_history.png          # 权重历史
+│   └── episode_stats.png           # Episode 统计
+│
+└── scan_data_20260126_150000/  # 扫描数据会话
+    ├── scan_progress.png           # 扫描进度
+    ├── trajectories_xy.png         # 水平轨迹
+    ├── trajectories_3d.png         # 3D 轨迹
+    └── algorithm_weights.png       # 算法权重
+```
+
+### 数据分析建议
+
+#### Crazyflie 训练数据分析
+
+1. **飞行轨迹分析**：
+   - 检查飞行路径是否平滑
+   - 分析速度变化是否合理
+   - 检查是否有异常的加速度
+
+2. **权重变化分析**：
+   - 观察权重是否收敛
+   - 分析不同权重系数的变化趋势
+   - 检查权重变化与奖励的关系
+
+3. **Episode 表现分析**：
+   - 绘制奖励曲线
+   - 分析 Episode 长度的变化
+   - 评估训练效果和收敛速度
+
+4. **电池性能分析**：
+   - 监控电池电压变化
+   - 评估飞行时间与电量的关系
+   - 检查是否有电量过低的情况
+
+#### 扫描数据分析
+
+1. **扫描效率分析**：
+   - 分析扫描完成度曲线
+   - 评估扫描速度
+
+2. **多机协同分析**：
+   - 观察无人机轨迹分布
+   - 检查是否有重叠区域
+
+3. **熵值变化分析**：
+   - 观察全局平均熵值变化
+   - 分析熵值分布的演变
+
+### 示例
+
+**分析所有训练数据**：
+```bash
+start.bat
+# 选择 [A] -> [1]
+# 系统自动扫描并分析所有数据
+# 结果保存在 analysis_results/ 目录
+```
+
+**分析特定训练会话**：
+```bash
+python multirotor/Algorithm/visualize_training_data.py \
+    --json multirotor/DDPG_Weight/crazyflie_logs/crazyflie_training_log_20260126_153022.json
 ```
 
 ---
@@ -677,7 +852,7 @@ self.data_collector = DataCollector(collection_interval=1.0)  # 1秒采集一次
 
 ### 输出文件
 
-- **位置**：`multirotor/data_logs/`
+- **位置**：`multirotor/DDPG_Weight/airsim_training_logs/`
 - **命名**：`scan_data_YYYYMMDD_HHMMSS.csv`
 - **格式**：CSV，UTF-8 编码
 
@@ -839,6 +1014,8 @@ backports.ssl_match_hostname  # SSL 支持
   - ✨ 新增训练可视化器（Episode 奖励曲线、收敛分析）
   - ✨ 数据采集新增电量信息（电池电压）
   - ✨ 新增虚实融合训练模式
+  - ✨ 新增 Crazyflie 实体无人机数据记录器
+  - ✨ 新增训练数据可视化分析工具
   - 🔧 所有批处理脚本更新为使用统一配置
   - 🔧 训练脚本支持向后兼容旧配置文件
   - 📝 更新所有配置文件说明和使用指南

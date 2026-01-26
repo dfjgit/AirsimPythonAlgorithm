@@ -17,6 +17,9 @@ echo.
 echo === DQN Movement Control Training ===
 echo   [5] Train DQN Movement (Real AirSim Environment)[Has some issues]
 echo.
+echo === Data Analysis ===
+echo   [A] Data Visualization Analysis [⭐Available!]
+echo.
 echo === System Information ===
 echo   [6] View System Information
 echo   [0] Exit
@@ -24,15 +27,16 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=Please enter an option (0-6): 
+set /p choice=Please enter an option (0-6,A): 
 
-if "%choice%"=="1" goto run_normal
-if "%choice%"=="2" goto run_dqn
-if "%choice%"=="3" goto run_dqn_movement
-if "%choice%"=="4" goto train_weight_airsim
-if "%choice%"=="5" goto train_movement_airsim
-if "%choice%"=="6" goto info
-if "%choice%"=="0" goto end
+if /i "%choice%"=="1" goto run_normal
+if /i "%choice%"=="2" goto run_dqn
+if /i "%choice%"=="3" goto run_dqn_movement
+if /i "%choice%"=="4" goto train_weight_airsim
+if /i "%choice%"=="5" goto train_movement_airsim
+if /i "%choice%"=="a" goto data_visualization
+if /i "%choice%"=="6" goto info
+if /i "%choice%"=="0" goto end
 
 echo.
 echo Invalid option, please select again
@@ -84,6 +88,15 @@ echo DQN Movement Control Training (Real AirSim Environment)
 echo ============================================================
 echo.
 call scripts\Train_DQN_Movement_Real_Environment.bat
+goto menu
+
+:data_visualization
+cls
+echo ============================================================
+echo Data Visualization Analysis
+echo ============================================================
+echo.
+call scripts\Data_Visualization_Analysis.bat
 goto menu
 
 :info

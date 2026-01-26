@@ -131,8 +131,11 @@ dmypy.json
 cython_debug/
 
 # Data logs
-data_logs/
 multirotor/data_logs/
+multirotor/DDPG_Weight/airsim_training_logs/
+multirotor/DDPG_Weight/crazyflie_logs/
+multirotor/DDPG_Weight/training_visualizer_logs/
+analysis_results/
 
 # ==================== 补充：VS Code 配置忽略 ====================
 # VS Code 全局配置目录

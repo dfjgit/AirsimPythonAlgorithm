@@ -85,7 +85,7 @@ class TrainingVisualizer:
         self.smoothed_rewards: Deque[float] = deque(maxlen=500)  # 存储平滑后的奖励（滑动平均）
         
         # 训练日志保存路径
-        self.log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+        self.log_dir = os.path.join(os.path.dirname(__file__), 'training_visualizer_logs')
         os.makedirs(self.log_dir, exist_ok=True)
         self.csv_path = os.path.join(self.log_dir, f'training_stats_{time.strftime("%Y%m%d_%H%M%S")}.csv')
         self.history_data = []  # 用于导出CSV的完整列表

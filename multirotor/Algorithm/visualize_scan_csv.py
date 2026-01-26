@@ -301,7 +301,7 @@ def main():
                 LOGGER.warning(f"文件 {csv_p.name} 为空，跳过。")
                 continue
                 
-            drones = _detect_detect_drones = _detect_drones(df.columns.tolist())
+            drones = _detect_drones(df.columns.tolist())
 
             # 3. 逐个执行绘图任务（带异常保护）
             _safe_plot_wrapper(plot_scan_progress, df, run_dir, plot_name="扫描进度", run_name=run_name)

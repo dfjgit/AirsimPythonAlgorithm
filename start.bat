@@ -20,6 +20,9 @@ echo.
 echo === DQN移动控制训练 ===
 echo   [8] 训练移动DQN (真实AirSim环境)[还有些问题]
 echo.
+echo === 数据分析 ===
+echo   [A] 数据可视化分析 [⭐可以使用！]
+echo.
 echo === 系统信息 ===
 echo   [9] 查看系统信息
 echo   [0] 退出
@@ -27,18 +30,19 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9): 
+set /p choice=请输入选项 (0-9,A): 
 
-if "%choice%"=="1" goto run_normal
-if "%choice%"=="2" goto run_dqn
-if "%choice%"=="3" goto run_dqn_movement
-if "%choice%"=="4" goto train_weight_airsim
-if "%choice%"=="5" goto train_weight_crazyflie_online
-if "%choice%"=="6" goto train_weight_crazyflie_logs
-if "%choice%"=="7" goto train_weight_hybrid
-if "%choice%"=="8" goto train_movement_airsim
-if "%choice%"=="9" goto info
-if "%choice%"=="0" goto end
+if /i "%choice%"=="1" goto run_normal
+if /i "%choice%"=="2" goto run_dqn
+if /i "%choice%"=="3" goto run_dqn_movement
+if /i "%choice%"=="4" goto train_weight_airsim
+if /i "%choice%"=="5" goto train_weight_crazyflie_online
+if /i "%choice%"=="6" goto train_weight_crazyflie_logs
+if /i "%choice%"=="7" goto train_weight_hybrid
+if /i "%choice%"=="8" goto train_movement_airsim
+if /i "%choice%"=="a" goto data_visualization
+if /i "%choice%"=="9" goto info
+if /i "%choice%"=="0" goto end
 
 echo.
 echo 无效的选项，请重新选择
@@ -117,6 +121,15 @@ echo DQN移动控制训练 (真实AirSim环境)
 echo ============================================================
 echo.
 call scripts\训练移动DQN-真实环境.bat
+goto menu
+
+:data_visualization
+cls
+echo ============================================================
+echo 数据可视化分析
+echo ============================================================
+echo.
+call scripts\数据可视化分析.bat
 goto menu
 
 :info
