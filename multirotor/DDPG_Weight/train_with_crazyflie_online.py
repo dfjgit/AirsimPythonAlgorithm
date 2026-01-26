@@ -49,6 +49,7 @@ if PROJECT_ROOT not in sys.path:
 # 导入训练环境和可视化模块
 from crazyflie_weight_env import CrazyflieOnlineWeightEnv  # 实体无人机在线训练环境
 from training_visualizer import TrainingVisualizer  # 训练可视化模块
+from crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 
 
 def _load_train_config(path: str) -> dict:
@@ -443,6 +444,7 @@ def main():
             print_interval_steps: int = 50,
             print_interval_sec: int = 15,
             training_visualizer=None,
+            data_logger=None,
         ):
             """
             初始化训练进度回调
@@ -462,6 +464,7 @@ def main():
             self.last_print_step = 0  # 上次打印的步数
             self.training_visualizer = training_visualizer  # 可视化器引用
             self.last_episode_count = 0  # 上次记录的Episode数量
+            self.data_logger = data_logger  # 数据记录器引用
 
         def _on_training_start(self) -> None:
             now = time.time()
@@ -508,6 +511,14 @@ def main():
                                 is_episode_done=True
                             )
                             self.last_episode_count = current_episode_count
+                            
+                            # 记录 Episode 统计信息
+                            if self.data_logger:
+                                self.data_logger.record_episode_stats(
+                                    episode=current_episode_count,
+                                    reward=ep_reward,
+                                    length=ep_length
+                                )
                     
                     # 更新当前步的奖励（从locals获取）
                     if 'rewards' in self.locals and len(self.locals['rewards']) > 0:
@@ -528,9 +539,38 @@ def main():
                                 # 获取当前权重并更新可视化
                                 weights = env.server.algorithms[drone_name].get_current_coefficients()
                                 self.training_visualizer.update_weight_history(weights)
+                                
+                                # 记录权重到数据记录器
+                                if self.data_logger:
+                                    self.data_logger.record_weights(
+                                        drone_name=drone_name,
+                                        weights=weights,
+                                        episode=current_episode_count,
+                                        step=self.num_timesteps
+                                    )
                 except Exception as e:
                     # 静默忽略可视化更新错误，避免影响训练
                     pass
+            
+            # ========== 记录实体无人机飞行数据 ==========
+            if self.data_logger:
+                try:
+                    # 从环境中获取当前的 logging_data
+                    if hasattr(self.model, 'env'):
+                        env = self.model.env
+                        # 处理VecEnv包装
+                        if hasattr(env, 'envs') and len(env.envs) > 0:
+                            env = env.envs[0]
+                        if hasattr(env, 'server') and env.server:
+                            drone_name = getattr(env, 'drone_name', None)
+                            if drone_name:
+                                logging_data = env.server.crazyswarm.get_loggingData_by_droneName(drone_name)
+                                if logging_data:
+                                    self.data_logger.record_flight_data(drone_name, logging_data)
+                except Exception as e:
+                    # 静默忽略数据记录错误，避免影响训练
+                    pass
+            # ===========================================
             # ====================================
             
             return True
@@ -604,6 +644,7 @@ def main():
     model = None  # DDPG模型实例
     model_saved = False  # 模型是否已保存标志
     training_visualizer = None  # 训练可视化器实例
+    data_logger = None  # 实体无人机数据记录器实例
     # ====================================
     
     try:
@@ -629,6 +670,17 @@ def main():
         # 等待系统稳定
         time.sleep(2.0)
 
+        # ========== 创建实体无人机数据记录器 ==========
+        # 用于记录训练过程中的实体无人机飞行数据
+        logger.info("创建实体无人机数据记录器...")
+        data_logger = CrazyflieDataLogger(
+            drone_names=[drone_name],
+            output_dir=os.path.join(os.path.dirname(__file__), "crazyflie_logs")
+        )
+        data_logger.start_recording()
+        logger.info("✅ 数据记录器已启动")
+        # =============================================
+        
         # ========== 创建在线训练环境 ==========
         # CrazyflieOnlineWeightEnv: 实体无人机在线训练环境
         # 环境功能：
@@ -722,7 +774,8 @@ def main():
             total_timesteps=total_timesteps,
             print_interval_steps=progress_interval,
             print_interval_sec=15,
-            training_visualizer=training_visualizer
+            training_visualizer=training_visualizer,
+            data_logger=data_logger
         )
         # 训练主循环：达到 total_timesteps 视为训练完成
         model.learn(
@@ -738,6 +791,12 @@ def main():
         if model_saved and server:
             weights_path = _derive_weights_path(final_path)
             _save_final_weights(server, weights_path, logger)
+        
+        # 停止数据记录并保存
+        if data_logger:
+            logger.info("停止并保存实体无人机数据...")
+            data_logger.stop_recording()
+            data_logger.save_all()
 
     except KeyboardInterrupt:
         # 人工中断时尝试保存当前模型
@@ -748,7 +807,22 @@ def main():
             if model_saved and server:
                 weights_path = _derive_weights_path(final_path)
                 _save_final_weights(server, weights_path, logger)
+            # 停止数据记录并保存
+            if data_logger:
+                logger.warning("保存中断时的实体无人机数据...")
+                data_logger.stop_recording()
+                data_logger.save_all()
     finally:
+        # 停止数据记录（最优先，确保数据被保存）
+        if data_logger:
+            try:
+                logger.info("保存实体无人机训练数据...")
+                if data_logger.is_recording:
+                    data_logger.stop_recording()
+                data_logger.save_all()
+            except Exception as e:
+                logger.warning("保存数据时出错: %s", e)
+        
         # 停止可视化
         if training_visualizer:
             logger.info("停止训练可视化...")

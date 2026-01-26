@@ -78,6 +78,7 @@ except ImportError as e:
 # ==================== 导入项目模块 ====================
 from simple_weight_env import SimpleWeightEnv
 from training_visualizer import TrainingVisualizer
+from crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.scanner_config_data import ScannerConfigData
@@ -282,12 +283,15 @@ class ImprovedTrainingCallback(BaseCallback):
     """改进的训练回调类（与train_with_airsim_improved.py相同）"""
     
     def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', 
-                 training_visualizer=None, verbose=1):
+                 training_visualizer=None, data_logger=None, server=None, mirror_drones=None, verbose=1):
         super(ImprovedTrainingCallback, self).__init__(verbose)
         self.total_timesteps = total_timesteps
         self.check_freq = check_freq
         self.save_path = save_path
         self.training_visualizer = training_visualizer
+        self.data_logger = data_logger  # 数据记录器
+        self.server = server  # AlgorithmServer 实例，用于获取实体无人机数据
+        self.mirror_drones = mirror_drones or []  # 镜像无人机列表
         self.best_mean_reward = -np.inf
         self.last_print_step = 0
         self.print_interval = max(total_timesteps // 10, 100)
@@ -312,6 +316,14 @@ class ImprovedTrainingCallback(BaseCallback):
                     episode_reward=ep_reward,
                     episode_length=ep_length,
                     is_episode_done=True
+                )
+            
+            # 记录 Episode 统计信息到数据记录器
+            if hasattr(self, 'data_logger') and self.data_logger:
+                self.data_logger.record_episode_stats(
+                    episode=self.episode_count,
+                    reward=ep_reward,
+                    length=ep_length
                 )
             
             print(f"\n{'╔'+'═'*58+'╗'}")
@@ -356,6 +368,29 @@ class ImprovedTrainingCallback(BaseCallback):
                 print(f"💾 已保存: {model_path}.zip\n")
             
             self.last_print_step = self.num_timesteps
+        
+        # ========== 记录实体无人机飞行数据和权重 ==========
+        if self.data_logger and self.server and self.mirror_drones:
+            try:
+                for drone_name in self.mirror_drones:
+                    # 记录飞行数据
+                    logging_data = self.server.crazyswarm.get_loggingData_by_droneName(drone_name)
+                    if logging_data:
+                        self.data_logger.record_flight_data(drone_name, logging_data)
+                    
+                    # 记录权重变化
+                    if drone_name in self.server.algorithms:
+                        weights = self.server.algorithms[drone_name].get_current_coefficients()
+                        self.data_logger.record_weights(
+                            drone_name=drone_name,
+                            weights=weights,
+                            episode=self.episode_count,
+                            step=self.num_timesteps
+                        )
+            except Exception as e:
+                # 静默忽略数据记录错误，避免影响训练
+                pass
+        # ===========================================
         
         if self.num_timesteps % self.check_freq == 0 and self.num_timesteps > 0:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -439,6 +474,7 @@ def main():
     # ========== 初始化全局变量 ==========
     server = None
     training_visualizer = None
+    data_logger = None  # 实体无人机数据记录器
     temp_config_file = None
     original_config_file = None
     # ====================================================
@@ -509,6 +545,18 @@ def main():
             return
         
         print("[OK] 无人机已起飞，算法线程运行中")
+        
+        # ========== 创建实体无人机数据记录器 ==========
+        # 如果有镜像无人机，则启动数据记录
+        if mirror_drones:
+            print("\n[2.5/5] 创建实体无人机数据记录器...")
+            data_logger = CrazyflieDataLogger(
+                drone_names=mirror_drones,
+                output_dir=os.path.join(os.path.dirname(__file__), "crazyflie_logs")
+            )
+            data_logger.start_recording()
+            print("✅ 数据记录器已启动")
+        # =============================================
         
         # 等待系统稳定
         print("\n[3/5] 等待系统稳定...")
@@ -614,6 +662,9 @@ def main():
             check_freq=checkpoint_freq,
             save_path=model_dir,
             training_visualizer=training_visualizer,
+            data_logger=data_logger,
+            server=server,
+            mirror_drones=mirror_drones,
             verbose=1
         )
         
@@ -638,6 +689,12 @@ def main():
         weights_path = _derive_weights_path(final_model_path)
         _save_final_weights(server, weights_path)
         
+        # 保存实体无人机数据
+        if data_logger:
+            print("\n停止并保存实体无人机数据...")
+            data_logger.stop_recording()
+            data_logger.save_all()
+        
         # 显示训练统计
         print("\n" + "=" * 60)
         print("📊 训练统计")
@@ -661,6 +718,16 @@ def main():
         traceback.print_exc()
     
     finally:
+        # 保存实体无人机数据（最优先）
+        if data_logger:
+            try:
+                print("\n保存实体无人机训练数据...")
+                if data_logger.is_recording:
+                    data_logger.stop_recording()
+                data_logger.save_all()
+            except Exception as e:
+                print(f"[警告] 保存数据时出错: {e}")
+        
         # 清理资源
         if training_visualizer:
             print("\n停止训练可视化...")
