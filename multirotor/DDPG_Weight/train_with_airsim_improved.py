@@ -87,7 +87,7 @@ except ImportError as e:
 
 # ==================== 导入项目模块 ====================
 # 导入训练环境：用于AirSim仿真的权重训练环境
-from simple_weight_env import SimpleWeightEnv
+from envs.simple_weight_env import SimpleWeightEnv
 
 # 导入训练可视化模块：实时显示训练统计和进度
 from training_visualizer import TrainingVisualizer

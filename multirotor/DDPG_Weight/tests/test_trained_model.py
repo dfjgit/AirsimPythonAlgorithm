@@ -13,7 +13,7 @@ print("=" * 60)
 
 # 导入
 from stable_baselines3 import DDPG
-from simple_weight_env import SimpleWeightEnv
+from envs.simple_weight_env import SimpleWeightEnv
 
 # 加载模型
 model_path = os.path.join(os.path.dirname(__file__), 'models', 'weight_predictor_simple')

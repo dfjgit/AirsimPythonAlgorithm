@@ -46,7 +46,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # 导入离线日志训练环境
-from crazyflie_weight_env import CrazyflieLogEnv  # 基于日志的离线训练环境
+from envs.crazyflie_weight_env import CrazyflieLogEnv  # 基于日志的离线训练环境
 
 
 def _load_train_config(path: str) -> dict:

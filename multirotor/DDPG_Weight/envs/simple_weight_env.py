@@ -8,9 +8,15 @@ from gym import spaces
 import os
 
 try:
-    from .crazyflie_reward_config import CrazyflieRewardConfig
+    from configs.crazyflie_reward_config import CrazyflieRewardConfig
 except ImportError:
-    from crazyflie_reward_config import CrazyflieRewardConfig
+    try:
+        from ..configs.crazyflie_reward_config import CrazyflieRewardConfig
+    except ImportError:
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from configs.crazyflie_reward_config import CrazyflieRewardConfig
 
 
 class SimpleWeightEnv(gym.Env):
@@ -40,7 +46,7 @@ class SimpleWeightEnv(gym.Env):
         # 加载奖励配置（与实体训练一致）
         if reward_config_path is None:
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            reward_config_path = os.path.join(current_dir, "crazyflie_reward_config.json")
+            reward_config_path = os.path.join(current_dir, "..", "configs", "crazyflie_reward_config.json")
 
         self.reward_config = CrazyflieRewardConfig(reward_config_path)
         print("[OK] 训练环境已加载奖励配置（与实体一致）")

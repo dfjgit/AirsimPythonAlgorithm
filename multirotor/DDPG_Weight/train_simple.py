@@ -33,7 +33,7 @@ except ImportError:
     sys.exit(1)
 
 # 导入环境
-from simple_weight_env import SimpleWeightEnv
+from envs.simple_weight_env import SimpleWeightEnv
 
 print("\n" + "=" * 60)
 print("步骤1: 创建训练环境")

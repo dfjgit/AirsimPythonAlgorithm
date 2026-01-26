@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from crazyflie_reward_config import CrazyflieRewardConfig
+from configs.crazyflie_reward_config import CrazyflieRewardConfig
 from multirotor.Algorithm.Vector3 import Vector3
 from multirotor.Crazyswarm.crazyflie_logging_data import CrazyflieLoggingData
 

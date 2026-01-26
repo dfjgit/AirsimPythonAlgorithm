@@ -76,9 +76,9 @@ except ImportError as e:
 # ==================================================
 
 # ==================== 导入项目模块 ====================
-from simple_weight_env import SimpleWeightEnv
+from envs.simple_weight_env import SimpleWeightEnv
 from training_visualizer import TrainingVisualizer
-from crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
+from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.scanner_config_data import ScannerConfigData

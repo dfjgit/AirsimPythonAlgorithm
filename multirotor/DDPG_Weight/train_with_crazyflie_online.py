@@ -47,9 +47,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # 导入训练环境和可视化模块
-from crazyflie_weight_env import CrazyflieOnlineWeightEnv  # 实体无人机在线训练环境
+from envs.crazyflie_weight_env import CrazyflieOnlineWeightEnv  # 实体无人机在线训练环境
 from training_visualizer import TrainingVisualizer  # 训练可视化模块
-from crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
+from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 
 
 def _load_train_config(path: str) -> dict:

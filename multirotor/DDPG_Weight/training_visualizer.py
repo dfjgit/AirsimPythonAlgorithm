@@ -10,6 +10,10 @@ import time
 from typing import Dict, List, Optional, Deque
 from collections import deque
 import pygame
+import matplotlib.pyplot as plt
+import matplotlib
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import numpy as np
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -182,7 +186,203 @@ class TrainingVisualizer:
                     writer.writerows(self.history_data)
             print(f"📊 训练统计已保存至: {self.csv_path}")
         except Exception as e:
-            print(f"⚠️ 保存CSV出错: {e}")
+            print(f"⚠️  保存CSV出错: {e}")
+        
+    def generate_training_charts(self, preview_before_save: bool = True, auto_save: bool = False):
+        """
+        生成训练统计图表
+            
+        :param preview_before_save: 是否在保存前预览（默认True）
+        :param auto_save: 是否自动保存而不需用户确认（默认False）
+        :return: 如果保存了文件，返回文件路径列表；否则返回None
+        """
+        if not self.history_data or len(self.reward_history) == 0:
+            print("⚠️  没有足够的训练数据生成图表")
+            return None
+            
+        print("\n📈 正在生成训练统计图表...")
+            
+        # 设置中文字体
+        try:
+            import platform
+            system = platform.system()
+            if system == "Windows":
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
+            elif system == "Darwin":  # macOS
+                plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+            else:  # Linux
+                plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback', 'DejaVu Sans']
+            plt.rcParams['axes.unicode_minus'] = False
+        except:
+            pass
+            
+        # 创建图表：2行2列布局
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle(f'🎯 训练统计分析  (Episodes: {self.episode_count})', 
+                     fontsize=16, fontweight='bold')
+            
+        # 图1：奖励曲线
+        ax1 = axes[0, 0]
+        episodes = list(range(1, len(self.reward_history) + 1))
+        rewards = list(self.reward_history)
+            
+        ax1.plot(episodes, rewards, 'b-', alpha=0.3, linewidth=1, label='原始奖励')
+            
+        # 绘制平滑曲线
+        if len(self.smoothed_rewards) > 0:
+            smoothed = list(self.smoothed_rewards)
+            smooth_episodes = episodes[-len(smoothed):]
+            ax1.plot(smooth_episodes, smoothed, 'r-', linewidth=2, label='平滑奖励 (MA-10)')
+            
+        ax1.set_xlabel('Episode')
+        ax1.set_ylabel('奖励')
+        ax1.set_title('📈 Episode 奖励曲线')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+            
+        # 显示平均值和最大值
+        avg_reward = np.mean(rewards)
+        max_reward = np.max(rewards)
+        ax1.axhline(y=avg_reward, color='g', linestyle='--', alpha=0.5, 
+                    label=f'平均: {avg_reward:.2f}')
+        ax1.legend()
+            
+        # 图2：权重变化历史
+        ax2 = axes[0, 1]
+        if any(len(v) > 0 for v in self.weight_history.values()):
+            weight_labels = {
+                'repulsionCoefficient': '排斥系数',
+                'entropyCoefficient': '熄系数',
+                'distanceCoefficient': '距离系数',
+                'leaderRangeCoefficient': '领机系数',
+                'directionRetentionCoefficient': '方向保持系数'
+            }
+            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8']
+                
+            for idx, (key, label) in enumerate(weight_labels.items()):
+                if key in self.weight_history and len(self.weight_history[key]) > 0:
+                    values = list(self.weight_history[key])
+                    steps = list(range(1, len(values) + 1))
+                    ax2.plot(steps, values, color=colors[idx], 
+                            linewidth=2, marker='o', markersize=3, 
+                            label=label, alpha=0.8)
+                
+            ax2.set_xlabel('更新次数')
+            ax2.set_ylabel('权重值')
+            ax2.set_title('🎯 权重系数变化')
+            ax2.legend(loc='best', fontsize=8)
+            ax2.grid(True, alpha=0.3)
+        else:
+            ax2.text(0.5, 0.5, '暂无权重数据', 
+                    ha='center', va='center', fontsize=14, color='gray')
+            ax2.set_xticks([])
+            ax2.set_yticks([])
+            
+        # 图3：Episode长度统计
+        ax3 = axes[1, 0]
+        if len(self.episode_lengths) > 0:
+            lengths = list(self.episode_lengths)
+            ep_nums = list(range(1, len(lengths) + 1))
+            ax3.bar(ep_nums, lengths, color='skyblue', alpha=0.7)
+            ax3.set_xlabel('Episode')
+            ax3.set_ylabel('步数')
+            ax3.set_title('👣 Episode 长度分布')
+            ax3.grid(True, alpha=0.3, axis='y')
+                
+            # 显示平均长度
+            avg_length = np.mean(lengths)
+            ax3.axhline(y=avg_length, color='r', linestyle='--', 
+                       label=f'平均: {avg_length:.1f}')
+            ax3.legend()
+        else:
+            ax3.text(0.5, 0.5, '暂无Episode长度数据', 
+                    ha='center', va='center', fontsize=14, color='gray')
+            ax3.set_xticks([])
+            ax3.set_yticks([])
+            
+        # 图4：训练速率统计
+        ax4 = axes[1, 1]
+        if len(self.step_timestamps) > 1:
+            # 计算每步耗时
+            timestamps = list(self.step_timestamps)
+            time_diffs = [timestamps[i] - timestamps[i-1] 
+                         for i in range(1, len(timestamps))]
+                
+            # 计算移动平均速率 (steps/sec)
+            window_size = min(20, len(time_diffs))
+            if window_size > 0:
+                step_rates = []
+                for i in range(len(time_diffs)):
+                    start_idx = max(0, i - window_size + 1)
+                    window_times = time_diffs[start_idx:i+1]
+                    avg_time = np.mean(window_times)
+                    rate = 1.0 / avg_time if avg_time > 0 else 0
+                    step_rates.append(rate)
+                    
+                steps = list(range(1, len(step_rates) + 1))
+                ax4.plot(steps, step_rates, 'g-', linewidth=2)
+                ax4.set_xlabel('步数')
+                ax4.set_ylabel('速率 (steps/sec)')
+                ax4.set_title('🚀 训练速率')
+                ax4.grid(True, alpha=0.3)
+                    
+                # 显示平均速率
+                avg_rate = np.mean(step_rates)
+                ax4.axhline(y=avg_rate, color='r', linestyle='--', 
+                           label=f'平均: {avg_rate:.2f} steps/s')
+                ax4.legend()
+        else:
+            ax4.text(0.5, 0.5, '暂无训练速率数据', 
+                    ha='center', va='center', fontsize=14, color='gray')
+            ax4.set_xticks([])
+            ax4.set_yticks([])
+            
+        plt.tight_layout()
+            
+        # 决定是否显示和保存
+        saved_files = []
+            
+        if preview_before_save:
+            # 显示预览窗口
+            print("👀 正在显示预览窗口...")
+            print("提示：")
+            print("  - 关闭窗口后将提示是否保存")
+            print("  - 您可以在窗口中放大、缩小、查看详情")
+                
+            plt.show()  # 阻塞显示，等待用户关闭
+                
+            # 用户关闭窗口后，询问是否保存
+            if not auto_save:
+                print("\n💾 是否保存图表？")
+                response = input("输入 'y' 或 'yes' 保存，其他任意键取消: ").strip().lower()
+                    
+                if response in ['y', 'yes', '是', 'Y']:
+                    # 保存图表
+                    output_path = os.path.join(self.log_dir, 
+                                             f'training_charts_{time.strftime("%Y%m%d_%H%M%S")}.png')
+                    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+                    saved_files.append(output_path)
+                    print(f"✅ 图表已保存: {output_path}")
+                else:
+                    print("❌ 已取消保存")
+            else:
+                # auto_save=True 但 preview_before_save=True，显示后自动保存
+                output_path = os.path.join(self.log_dir, 
+                                         f'training_charts_{time.strftime("%Y%m%d_%H%M%S")}.png')
+                fig.savefig(output_path, dpi=150, bbox_inches='tight')
+                saved_files.append(output_path)
+                print(f"✅ 图表已自动保存: {output_path}")
+        else:
+            # 不预览，直接保存
+            output_path = os.path.join(self.log_dir, 
+                                     f'training_charts_{time.strftime("%Y%m%d_%H%M%S")}.png')
+            fig.savefig(output_path, dpi=150, bbox_inches='tight')
+            saved_files.append(output_path)
+            print(f"✅ 图表已保存: {output_path}")
+            
+        plt.close(fig)  # 关闭图表释放内存
+            
+        return saved_files if saved_files else None
     
     def world_to_screen(self, vector):
         """将世界坐标转换为屏幕坐标"""
