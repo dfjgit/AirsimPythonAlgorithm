@@ -10,6 +10,7 @@ echo   - 自动发现并分析所有训练数据
 echo   - 支持 Crazyflie 实体无人机训练日志
 echo   - 支持 DataCollector 扫描数据
 echo   - 生成完整的分析报告和图表
+echo   - 预览模式：显示图表后由用户确认是否保存
 echo.
 echo ============================================================
 echo.
@@ -49,7 +50,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -80,7 +81,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\crazyflie_logs --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\crazyflie_logs --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -111,7 +112,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_scan_csv.py --csv-dir multirotor\DDPG_Weight\airsim_training_logs --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\airsim_training_logs --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -168,9 +169,9 @@ call myvenv\Scripts\activate.bat
 REM 判断文件类型
 echo %file_path% | findstr /i ".json" >nul
 if %ERRORLEVEL% EQU 0 (
-    python multirotor\Algorithm\visualize_training_data.py --json "%file_path%" --out analysis_results
+    python multirotor\Algorithm\visualize_training_data.py --json "%file_path%" --out analysis_results --show
 ) else (
-    python multirotor\Algorithm\visualize_training_data.py --csv "%file_path%" --out analysis_results
+    python multirotor\Algorithm\visualize_training_data.py --csv "%file_path%" --out analysis_results --show
 )
 
 echo.

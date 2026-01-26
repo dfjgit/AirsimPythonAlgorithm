@@ -107,12 +107,22 @@ def load_and_prepare(csv_path: Path) -> Tuple[pd.DataFrame, List[List[float]], L
     if not csv_path.exists():
         raise FileNotFoundError(f"未找到文件: {csv_path}")
     
+    # 检查文件是否为空
+    if csv_path.stat().st_size == 0:
+        LOGGER.warning(f"{csv_path.name} 是空文件，跳过。")
+        return pd.DataFrame(), [], [], []
+    
     try:
         df = pd.read_csv(csv_path)
+    except pd.errors.EmptyDataError:
+        LOGGER.warning(f"{csv_path.name} 没有数据，跳过。")
+        return pd.DataFrame(), [], [], []
     except Exception as e:
-        raise IOError(f"读取 CSV 失败: {e}")
+        LOGGER.warning(f"读取 CSV 失败: {csv_path.name}, 原因: {e}")
+        return pd.DataFrame(), [], [], []
 
     if df.empty:
+        LOGGER.warning(f"{csv_path.name} 数据为空，跳过。")
         return df, [], [], []
 
     # 1. 转换时间字段。如果缺失，则按行索引生成模拟时间。
@@ -144,7 +154,7 @@ def load_and_prepare(csv_path: Path) -> Tuple[pd.DataFrame, List[List[float]], L
 
 # --- 绘图函数部分 ---
 
-def plot_scan_progress(df: pd.DataFrame, out_dir: Path) -> None:
+def plot_scan_progress(df: pd.DataFrame, out_dir: Path, close_fig: bool = True) -> None:
     """绘制扫描完成度随时间变化的曲线。"""
     if "elapsed_time" not in df.columns or "scan_ratio" not in df.columns:
         LOGGER.warning("缺失扫描比例相关列，跳过 plot_scan_progress")
@@ -162,9 +172,10 @@ def plot_scan_progress(df: pd.DataFrame, out_dir: Path) -> None:
     ax.legend()
     fig.tight_layout()
     fig.savefig(out_dir / "scan_progress.png", dpi=150)
-    plt.close(fig)
+    if close_fig:
+        plt.close(fig)
 
-def plot_trajectories(df: pd.DataFrame, drones: List[str], out_dir: Path) -> None:
+def plot_trajectories(df: pd.DataFrame, drones: List[str], out_dir: Path, close_fig: bool = True) -> None:
     """绘制无人机的 2D 和 3D 飞行轨迹。"""
     if not drones:
         return
@@ -182,7 +193,8 @@ def plot_trajectories(df: pd.DataFrame, drones: List[str], out_dir: Path) -> Non
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.savefig(out_dir / "trajectories_xy.png", dpi=150)
-    plt.close(fig)
+    if close_fig:
+        plt.close(fig)
 
     # 3D 轨迹绘制
     try:
@@ -205,10 +217,12 @@ def plot_trajectories(df: pd.DataFrame, drones: List[str], out_dir: Path) -> Non
     except Exception as e:
         LOGGER.error(f"3D 轨迹绘图失败: {e}")
     finally:
-        plt.close(fig)
+        if close_fig:
+            plt.close(fig)
 
 def plot_entropy_snapshots(
-    df: pd.DataFrame, entropy_bins: List[List[float]], entropy_hist: List[List[float]], out_dir: Path, max_snapshots: int
+    df: pd.DataFrame, entropy_bins: List[List[float]], entropy_hist: List[List[float]], 
+    out_dir: Path, max_snapshots: int, close_fig: bool = True
 ) -> None:
     """绘制信息熵分布直方图的快照。"""
     if not entropy_bins or not entropy_hist:
@@ -243,7 +257,8 @@ def plot_entropy_snapshots(
     ax.legend()
     ax.grid(True, alpha=0.2)
     fig.savefig(out_dir / "entropy_hist_snapshots.png", dpi=150)
-    plt.close(fig)
+    if close_fig:
+        plt.close(fig)
 
 # --- 工具与包装器 ---
 

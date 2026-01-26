@@ -10,6 +10,7 @@ echo   - Auto discover and analyze all training data
 echo   - Support Crazyflie drone training logs
 echo   - Support DataCollector scan data
 echo   - Generate comprehensive analysis reports and charts
+echo   - Preview mode: Show charts first, save after user confirmation
 echo.
 echo ============================================================
 echo.
@@ -49,7 +50,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -80,7 +81,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\crazyflie_logs --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\crazyflie_logs --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -111,7 +112,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_scan_csv.py --csv-dir multirotor\DDPG_Weight\airsim_training_logs --out analysis_results
+python multirotor\Algorithm\visualize_training_data.py --dir multirotor\DDPG_Weight\airsim_training_logs --out analysis_results --show
 
 echo.
 echo ============================================================
@@ -168,9 +169,9 @@ call myvenv\Scripts\activate.bat
 REM Determine file type
 echo %file_path% | findstr /i ".json" >nul
 if %ERRORLEVEL% EQU 0 (
-    python multirotor\Algorithm\visualize_training_data.py --json "%file_path%" --out analysis_results
+    python multirotor\Algorithm\visualize_training_data.py --json "%file_path%" --out analysis_results --show
 ) else (
-    python multirotor\Algorithm\visualize_training_data.py --csv "%file_path%" --out analysis_results
+    python multirotor\Algorithm\visualize_training_data.py --csv "%file_path%" --out analysis_results --show
 )
 
 echo.
