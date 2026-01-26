@@ -18,7 +18,6 @@
     python train_with_airsim_improved.py --config config.json
     python train_with_airsim_improved.py --total-timesteps 1000 --enable-visualization
 
-作者：训练模块开发团队
 日期：2026-01-23
 """
 import os
