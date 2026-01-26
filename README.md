@@ -14,9 +14,10 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 - ✅ **强化学习支持**：DDPG 权重预测（DQN 移动控制开发中）
 - ✅ **多无人机协同**：支持 1-10 台无人机同时控制
 - ✅ **实时通信**：与 Unity 双向数据交互（TCP Socket）
-- ✅ **数据采集系统**：自动采集扫描数据和权重值
-- ✅ **可视化工具**：2D 实时可视化（熵值、无人机位置等）
-- ✅ **配置管理**：JSON 配置文件，参数可调
+- ✅ **数据采集系统**：自动采集扫描数据、权重值和电量信息
+- ✅ **可视化工具**：2D 实时可视化 + 训练可视化（奖励曲线、收敛分析）
+- ✅ **统一配置管理**：unified_train_config.json 统一管理所有训练模式
+- ✅ **模型覆盖控制**：支持固定名称覆盖或时间戳版本控制
 
 ---
 
@@ -131,7 +132,9 @@ AirsimAlgorithmPython/
 │   │   ├── HexGridDataModel.py      # 网格数据模型
 │   │   ├── Vector3.py               # 3D 向量类
 │   │   ├── simple_visualizer.py     # 可视化组件
-│   │   └── data_collector.py        # 数据采集模块
+│   │   ├── data_collector.py        # 数据采集模块
+│   │   ├── battery_data.py          # 电池数据类
+│   │   └── visualize_scan_csv.py    # CSV数据可视化
 │   │
 │   ├── AirsimServer/                # 服务器组件
 │   │   ├── drone_controller.py      # 无人机控制器
@@ -149,7 +152,10 @@ AirsimAlgorithmPython/
 │   │   ├── train_with_airsim_improved.py  # 训练脚本（仿真）
 │   │   ├── train_with_crazyflie_logs.py   # 日志训练
 │   │   ├── train_with_crazyflie_online.py # 在线训练
+│   │   ├── train_with_hybrid.py     # 虚实融合训练
+│   │   ├── training_visualizer.py   # 训练可视化器 ✨
 │   │   ├── test_trained_model.py    # 模型测试
+│   │   ├── unified_train_config.json # 统一训练配置 ⭐
 │   │   ├── models/                  # 训练好的模型
 │   │   ├── dqn_reward_config.json   # 奖励配置（仿真）
 │   │   └── crazyflie_reward_config.json # 奖励配置（实体机）
@@ -170,6 +176,7 @@ AirsimAlgorithmPython/
 │   ├── 训练权重DDPG-真实环境.bat
 │   ├── 训练权重DDPG-实体机日志.bat
 │   ├── 训练权重DDPG-实体机在线.bat
+│   ├── 训练权重DDPG-虚实融合.bat
 │   └── 训练移动DQN-真实环境.bat
 │
 ├── requirements.txt                  # Python 依赖
@@ -220,13 +227,15 @@ AirsimAlgorithmPython/
 
 ### 3. DataCollector（数据采集）
 
-**功能**：自动采集扫描数据和权重值
+**功能**：自动采集扫描数据、权重值和电量信息
 
 **采集内容**：
 - 时间戳和运行时间
 - AOI 区域内栅格状态（已侦察/未侦察）
 - 扫描比例
 - 5 个权重系数值
+- 无人机位置信息（x, y, z）
+- 电池电压信息（每架无人机）
 
 **输出格式**：CSV 文件
 - 位置：`multirotor/data_logs/scan_data_YYYYMMDD_HHMMSS.csv`
@@ -343,141 +352,289 @@ python multirotor/AlgorithmServer.py --use-learned-weights \
 
 **CSV 格式**：
 ```csv
-timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repulsion_coefficient,entropy_coefficient,distance_coefficient,leader_range_coefficient,direction_retention_coefficient
-2025-11-28 15:10:33,0.00,0,25,25,0.00%,4.0,2.0,2.0,2.0,2.0
-2025-11-28 15:10:34,1.00,3,22,25,12.00%,4.0,2.0,2.0,2.0,2.0
+timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repulsion_coefficient,entropy_coefficient,distance_coefficient,leader_range_coefficient,direction_retention_coefficient,UAV1_pos_x,UAV1_pos_y,UAV1_pos_z,UAV1_battery_voltage,UAV2_pos_x,UAV2_pos_y,UAV2_pos_z,UAV2_battery_voltage
+2026-01-26 15:10:33,0.00,0,25,25,0.00%,4.0,2.0,2.0,2.0,2.0,0.000,0.000,2.000,3.850,5.000,0.000,2.000,3.820
+2026-01-26 15:10:34,1.00,3,22,25,12.00%,4.0,2.0,2.0,2.0,2.0,1.234,0.567,2.000,3.845,5.678,0.234,2.000,3.815
 ```
 
 ---
 
-## 🧠 DDPG 强化学习
+## ⚡ DDPG 强化学习
 
-### DDPG 权重预测
+### 统一配置文件系统 ✨
 
-**功能**：使用 DDPG 强化学习动态调整 APF 算法权重
+**新特性**：从 v1.2.0 开始，所有训练模式统一使用 `unified_train_config.json` 配置文件。
 
-**训练模型**：
+**配置文件位置**：
+- `multirotor/DDPG_Weight/unified_train_config.json`
+
+**配置结构**：
+```json
+{
+  "_comment": "统一训练配置文件 - 支持虚拟训练、实体训练、虚实融合训练",
+  
+  "common": {
+    "total_timesteps": 100,
+    "enable_visualization": true,
+    "checkpoint_freq": 1000,
+    "overwrite_model": false,
+    "model_name": "weight_predictor"
+  },
+  
+  "airsim_virtual": {
+    "drone_names": ["UAV1", "UAV2", "UAV3"],
+    "step_duration": 5.0,
+    "model_name": "weight_predictor_airsim"
+  },
+  
+  "crazyflie_online": {
+    "drone_name": "UAV1",
+    "step_duration": 5.0
+  },
+  
+  "crazyflie_logs": {
+    "log_path": "crazyflie_flight_log.json",
+    "step_stride": 1
+  },
+  
+  "hybrid": {
+    "drone_names": ["UAV1", "UAV2", "UAV3"],
+    "mirror_drones": ["UAV1"],
+    "step_duration": 5.0
+  }
+}
+```
+
+**配置合并逻辑**：
+- 每个训练模式会自动合并 `common` 和对应模式的配置
+- 模式专用配置优先级高于 `common` 配置
+- 例如：AirSim 训练使用 `common` + `airsim_virtual` 的合并结果
+
+**向后兼容**：
+- 所有训练脚本仍然支持旧配置文件：
+  - `airsim_train_config_template.json`
+  - `crazyflie_online_train_config.json`
+  - `crazyflie_logs_train_config.json`
+  - `hybrid_train_config_template.json`
+
+### 模型覆盖控制 ✨
+
+**新特性**：控制模型保存策略，避免频繁生成新模型。
+
+**使用场景**：
+1. **调试阶段**：使用覆盖模式，避免生成大量测试模型
+2. **正式训练**：使用时间戳模式，保留每次训练的历史版本
+
+**配置方式**：
+
+1. **配置文件**：
+```json
+{
+  "common": {
+    "overwrite_model": false,  // false=生成新模型, true=覆盖现有模型
+    "model_name": "weight_predictor_airsim"  // 模型基础名称
+  }
+}
+```
+
+2. **命令行参数**：
 ```bash
-# 进入 DDPG_Weight 目录
-cd multirotor/DDPG_Weight
+# 覆盖模式（固定名称）
+python train_with_airsim_improved.py --overwrite-model --model-name my_model
 
-# 训练模型（真实 AirSim 环境）
+# 新建模式（带时间戳）
+python train_with_airsim_improved.py --model-name my_model
+```
+
+**模型命名规则**：
+- **覆盖模式** (`overwrite_model=true`)：
+  - 最佳模型：`best_{model_name}.zip`
+  - 检查点：`ckpt_{checkpoint}_{model_name}.zip`
+  - 最终模型：`{model_name}.zip`
+  
+- **新建模式** (`overwrite_model=false`)：
+  - 最佳模型：`best_model_{timestamp}.zip`
+  - 检查点：`checkpoint_{checkpoint}_{timestamp}.zip`
+  - 最终模型：`{model_name}_{timestamp}.zip`
+
+### 训练可视化器 ✨
+
+**新特性**：实时显示训练进度和奖励曲线，分析模型收敛情况。
+
+**显示内容**：
+1. **Episode 奖励曲线**：每个 Episode 的总奖励
+2. **平滑奖励曲线**：移动平均，观察趨势
+3. **收敛分析**：
+   - 训练状态：未收敛 / 收敛中 / 已收敛
+   - 目标奖励：显示90%最大奖励基准线
+   - 收敛进度：百分比显示
+4. **实时统计**：当前 Episode、平均奖励、最大奖励、最小奖励
+
+**启用方式**：
+```json
+{
+  "common": {
+    "enable_visualization": true
+  }
+}
+```
+
+**关闭可视化**：
+```bash
+python train_with_airsim_improved.py --no-visualization
+```
+
+### 训练模式
+
+系统支持 4 种训练模式，均使用统一配置文件：
+
+#### 1️⃣ 虚拟训练（AirSim 环境）
+
+**适用场景**：快速迭代、安全测试、多无人机协同
+
+**运行方式**：
+```bash
+# 方式 1：使用批处理脚本（推荐）
+scripts\训练权重DDPG-真实环境.bat
+
+# 方式 2：命令行（使用统一配置）
+cd multirotor/DDPG_Weight
 python train_with_airsim_improved.py
 
-# 或使用批处理脚本
-..\..\scripts\训练权重DDPG-真实环境.bat
+# 方式 3：指定自定义配置
+python train_with_airsim_improved.py --config my_config.json
+
+# 方式 4：命令行覆盖参数
+python train_with_airsim_improved.py --overwrite-model --total-timesteps 500
 ```
 
-**注意**：虽然批处理文件名仍包含"DQN"，但实际使用的是 DDPG 算法。
+**前置条件**：
+- Unity AirSim 仿真场景已启动
+- 配置中的无人机名称与 Unity 场景中一致
 
-**可选：使用配置文件训练**：
+#### 2️⃣ 实体在线训练（Crazyflie）
+
+**适用场景**：真实环境验证、在线调优
+
+**运行方式**：
 ```bash
+# 使用批处理脚本
+scripts\训练权重DDPG-实体机在线.bat
+
+# 命令行
 cd multirotor/DDPG_Weight
+python train_with_crazyflie_online.py
+```
+
+**前置条件**：
+- Crazyflie 实体机已连接
+- AlgorithmServer 和 Crazyswarm 已启动
+
+#### 3️⃣ 实体离线训练（日志）
+
+**适用场景**：离线分析、不影响实体机运行
+
+**运行方式**：
+```bash
+# 使用批处理脚本
+scripts\训练权重DDPG-实体机日志.bat
+
+# 命令行
+cd multirotor/DDPG_Weight
+python train_with_crazyflie_logs.py
+```
+
+**前置条件**：
+- 在配置中指定 `log_path`（.json 或 .csv 文件）
+
+#### 4️⃣ 虚实融合训练
+
+**适用场景**：结合虚拟和真实环境的优势
+
+**运行方式**：
+```bash
+# 使用批处理脚本
+scripts\训练权重DDPG-虚实融合.bat
+
+# 命令行
+cd multirotor/DDPG_Weight
+python train_with_hybrid.py
+
+# 指定镜像无人机（使用实体机数据）
+python train_with_hybrid.py --mirror-drones UAV1 UAV2
+```
+
+**前置条件**：
+- Unity AirSim 场景已启动
+- Crazyflie 实体机已连接（用于镜像无人机）
+
+**特点**：
+- 指定的 `mirror_drones` 使用实体机实时数据
+- 其他无人机使用 AirSim 虚拟数据
+
+### 通用命令行参数
+
+所有训练脚本支持以下参数：
+
+```bash
+--config PATH              # 指定配置文件路径
+--overwrite-model          # 覆盖现有模型（不生成时间戳）
+--model-name NAME          # 指定模型名称
+--total-timesteps N        # 总训练步数
+--no-visualization         # 关闭训练可视化
+--continue-model PATH      # 继续训练指定模型
+```
+
+**示例**：
+```bash
+# 调试模式：快速迭代，覆盖模型
+python train_with_airsim_improved.py \
+  --overwrite-model \
+  --model-name debug_model \
+  --total-timesteps 100 \
+  --no-visualization
+
+# 生产模式：保留历史版本
+python train_with_airsim_improved.py \
+  --model-name production_v1 \
+  --total-timesteps 10000
+
+# 继续训练
+python train_with_airsim_improved.py \
+  --continue-model models/weight_predictor_airsim_20260126 \
+  --total-timesteps 5000
+```
+
+### 旧配置文件说明
+
+为了向后兼容，以下旧配置文件仍然可用：
+
+- `airsim_train_config_template.json` - AirSim 虚拟训练配置
+- `crazyflie_online_train_config.json` - Crazyflie 在线训练配置
+- `crazyflie_logs_train_config.json` - Crazyflie 日志训练配置
+- `hybrid_train_config_template.json` - 虚实融合训练配置
+
+**使用方式**：
+```bash
 python train_with_airsim_improved.py --config airsim_train_config_template.json
-```
-
-**配置文件模板**：
-- `multirotor/DDPG_Weight/airsim_train_config_template.json`
-- `multirotor/DDPG_Weight/last_weights_template.json`
-
-**配置字段说明（AirSim 训练）**：
-- `drone_names`：训练无人机名称列表
-- `total_timesteps`：训练总步数
-- `step_duration`：每步飞行时长（秒）
-- `checkpoint_freq`：检查点保存频率
-- `enable_visualization`：是否启用训练可视化
-- `use_initial_weights`：是否继承初始权重
-- `initial_model_path`：初始模型路径（不含 `.zip`），会自动匹配同名权重文件
-- `safety_limit`：是否启用权重变化安全限制
-- `max_weight_delta`：每步权重变化最大幅度
-
-**模型与权重文件命名**：
-- 训练保存的模型文件名包含时间戳：`weight_predictor_airsim_<timestamp>.zip`
-- 初始权重文件与模型同名：`weight_predictor_airsim_<timestamp>.last_weights.json`
-
-**初始权重模板说明**：
-- `last_weights_template.json` 用于提供初始权重的示例格式
-- 支持按无人机名称映射权重（如 `UAV1`、`UAV2`）
-- 字段包括：`repulsionCoefficient`、`entropyCoefficient`、`distanceCoefficient`、`leaderRangeCoefficient`、`directionRetentionCoefficient`
-
-**使用模型**：
-```bash
-# 使用训练好的模型
-python AlgorithmServer.py --use-learned-weights \
-    --model-path DDPG_Weight/models/best_model
-```
-
-### Crazyflie 实体无人机训练
-
-**配置文件**：
-- `multirotor/DDPG_Weight/crazyflie_logs_train_config.json`
-- `multirotor/DDPG_Weight/crazyflie_online_train_config.json`
-- `multirotor/DDPG_Weight/crazyflie_reward_config.json`
-
-**配置字段说明（日志训练）**：
-- `log_path`：日志文件路径（.json/.csv）
-- `total_timesteps`：训练总步数
-- `reward_config`：奖励配置文件路径，`null` 表示使用默认
-- `save_dir`：模型保存目录
-- `continue_model`：继续训练模型路径（不含 `.zip`），`null` 表示从头训练
-- `max_steps`：每个 episode 最大步数，`null` 表示不限制
-- `random_start`：是否随机起始位置
-- `step_stride`：日志步进间隔（每隔 N 条取一条）
-- `progress_interval`：进度打印间隔（步）
-
-**配置字段说明（在线训练）**：
-- `drone_name`：训练无人机名称
-- `total_timesteps`：训练总步数
-- `step_duration`：每步飞行时长（秒）
-- `reward_config`：奖励配置文件路径，`null` 表示使用默认
-- `save_dir`：模型保存目录
-- `continue_model`：继续训练模型路径（不含 `.zip`），`null` 表示从头训练
-- `reset_unity`：每个 episode 是否重置 Unity 环境
-- `safety_max_delta`：权重变化最大幅度（安全限制）
-- `no_safety_limit`：是否关闭权重变化限制
-- `progress_interval`：进度打印间隔（步）
-
-**奖励配置字段说明**（`crazyflie_reward_config.json`）：
-- `reward_coefficients`：奖励系数
-  - `speed_reward`：速度奖励系数
-  - `speed_penalty_threshold`：速度惩罚阈值
-  - `speed_penalty`：速度惩罚系数
-  - `accel_penalty`：加速度惩罚系数
-  - `angular_rate_penalty`：角速度惩罚系数
-  - `scan_reward`：扫描奖励系数
-  - `out_of_range_penalty`：超出范围惩罚系数
-  - `action_change_penalty`：动作变化惩罚系数
-  - `action_magnitude_penalty`：动作幅度惩罚系数
-  - `battery_optimal_reward`：电池电压在最佳范围的奖励系数
-  - `battery_low_penalty`：电池电压过低惩罚系数
-- `thresholds`：阈值配置
-  - `scan_entropy_threshold`：扫描熵值阈值
-  - `leader_range_buffer`：Leader 范围缓冲
-  - `battery_optimal_min`：电池最佳电压下限
-  - `battery_optimal_max`：电池最佳电压上限
-  - `battery_low_threshold`：电池低电压阈值
-- `episode`：训练 episode 配置
-  - `max_steps`：单个 episode 最大步数
-- `action_space`：动作空间范围
-  - `weight_min`：权重最小值
-  - `weight_max`：权重最大值
-
-**离线日志训练（不影响状态转移）**：
-```bash
-cd multirotor/DDPG_Weight
-python train_with_crazyflie_logs.py --config crazyflie_logs_train_config.json
-```
-
-**在线实体训练（实时日志）**：
-```bash
-cd multirotor/DDPG_Weight
 python train_with_crazyflie_online.py --config crazyflie_online_train_config.json
 ```
 
-**Windows 脚本**：
-```bat
-scripts\Train_DDPG_Weights_Crazyflie_Logs.bat
-scripts\Train_DDPG_Weights_Crazyflie_Online.bat
+**推荐使用统一配置文件** `unified_train_config.json`，更易于管理和维护。
+
+### 使用训练好的模型
+
+```bash
+# 使用默认最佳模型
+python AlgorithmServer.py --use-learned-weights
+
+# 使用指定模型
+python AlgorithmServer.py --use-learned-weights \
+    --model-path DDPG_Weight/models/weight_predictor_airsim
+
+# 使用时间戳模型
+python AlgorithmServer.py --use-learned-weights \
+    --model-path DDPG_Weight/models/weight_predictor_airsim_20260126_153022
 ```
 
 ### DQN 移动控制
@@ -670,11 +827,21 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 🔄 版本信息
 
-- **当前版本**：1.1.0
+- **当前版本**：1.2.0
 - **Python 版本**：3.7+
-- **最后更新**：2026-01-21
+- **最后更新**：2026-01-26
 
 ### 更新日志
+
+- **v1.2.0**（2026-01-26）
+  - ✨ 新增统一配置文件系统（unified_train_config.json）
+  - ✨ 新增模型覆盖控制功能（--overwrite-model）
+  - ✨ 新增训练可视化器（Episode 奖励曲线、收敛分析）
+  - ✨ 数据采集新增电量信息（电池电压）
+  - ✨ 新增虚实融合训练模式
+  - 🔧 所有批处理脚本更新为使用统一配置
+  - 🔧 训练脚本支持向后兼容旧配置文件
+  - 📝 更新所有配置文件说明和使用指南
 
 - **v1.1.0**（2026-01-21）
   - 增补 Crazyflie 实体机训练说明与配置
