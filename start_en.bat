@@ -100,9 +100,10 @@ echo   - multirotor\DQN_Movement\         : DQN Movement Control Training
 echo   - myvenv\                           : Python Virtual Environment
 echo.
 echo Configuration Files:
-echo   - multirotor\scanner_config.json                : APF Algorithm Config
-echo   - multirotor\DDPG_Weight\dqn_reward_config.json  : Weight DDPG Config
-echo   - multirotor\DQN_Movement\movement_dqn_config.json : Movement DQN Config
+echo   - multirotor\scanner_config.json                     : APF Algorithm Config
+echo   - multirotor\DDPG_Weight\unified_train_config.json    : Unified Training Config (Recommended)
+echo   - multirotor\DDPG_Weight\*_train_config*.json        : Old Training Configs (Compatible)
+echo   - multirotor\DQN_Movement\movement_dqn_config.json    : Movement DQN Config
 echo.
 echo Batch Files:
 echo   - start.bat                         : Main Menu (Current)

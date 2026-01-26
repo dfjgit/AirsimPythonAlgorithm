@@ -16,9 +16,10 @@ echo   4. 这些无人机将使用实体机的实时状态数据
 echo   5. 其他无人机仍使用虚拟AirSim环境数据
 echo   6. 训练完成后，模型将保存到 multirotor\DDPG_Weight\models\
 echo.
-echo 训练参数将从JSON配置文件读取
+echo 训练参数将从 JSON 配置文件读取
 echo 默认配置:
-echo   multirotor\DDPG_Weight\hybrid_train_config_template.json
+echo   [推荐] 统一配置: unified_train_config.json
+echo   [兼容] 旧配置: hybrid_train_config_template.json
 echo.
 echo 可将自定义配置路径作为第一个参数传入，
 echo 或直接覆盖参数，例如:
@@ -29,7 +30,7 @@ echo.
 echo ============================================================
 echo.
 
-set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\hybrid_train_config_template.json"
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\unified_train_config.json"
 if not "%~1"=="" (
     set "CONFIG_PATH=%~1"
     shift

@@ -14,9 +14,10 @@ echo   2. 确保AlgorithmServer与Crazyswarm已启动
 echo   3. 训练过程会实时更新权重
 echo   4. 模型将保存到 multirotor\DDPG_Weight\models\
 echo.
-echo 训练参数将从JSON配置文件读取
+echo 训练参数将从 JSON 配置文件读取
 echo 默认配置:
-echo   multirotor\DDPG_Weight\crazyflie_online_train_config.json
+echo   [推荐] 统一配置: unified_train_config.json
+echo   [兼容] 旧配置: crazyflie_online_train_config.json
 echo.
 echo 可将自定义配置路径作为第一个参数传入，
 echo 或直接覆盖参数，例如:
@@ -26,7 +27,7 @@ echo   --total-timesteps 500 --step-duration 5
 echo.
 echo ============================================================
 echo.
-set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\crazyflie_online_train_config.json"
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\unified_train_config.json"
 if not "%~1"=="" (
     set "CONFIG_PATH=%~1"
     shift

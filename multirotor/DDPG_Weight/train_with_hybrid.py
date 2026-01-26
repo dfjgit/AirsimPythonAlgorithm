@@ -85,7 +85,15 @@ from Algorithm.scanner_config_data import ScannerConfigData
 
 
 def _load_train_config(path: str) -> dict:
-    """加载训练配置文件"""
+    """
+    加载训练配置文件
+    
+    功能：
+        从 JSON 文件读取训练配置参数
+        支持两种格式：
+        1. 传统格式：直接返回配置字典
+        2. 统一格式：包含 common 和模式专用配置，自动合并
+    """
     if not path:
         return {}
     if not os.path.exists(path):
@@ -94,7 +102,19 @@ def _load_train_config(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        
+        # 检查是否为统一配置格式（包含 common 和 hybrid 键）
+        if "common" in data and "hybrid" in data:
+            # 统一配置格式：合并 common 和 hybrid 配置
+            merged_config = {}
+            merged_config.update(data.get("common", {}))
+            merged_config.update(data.get("hybrid", {}))
+            return merged_config
+        else:
+            # 传统配置格式：直接返回
+            return data
     except Exception as exc:
         print(f"⚠️  配置文件读取失败: {exc}")
         return {}
@@ -366,6 +386,8 @@ def main():
     parser.add_argument("--initial-model-path", type=str, default=None, help="初始模型路径")
     parser.add_argument("--use-initial-weights", action="store_true", default=None, help="启用初始权重继承")
     parser.add_argument("--no-initial-weights", action="store_true", default=None, help="禁用初始权重继承")
+    parser.add_argument("--overwrite-model", action="store_true", default=None, help="覆盖现有模型（不生成新时间戳）")
+    parser.add_argument("--model-name", type=str, default=None, help="指定模型名称（不含.zip）")
     args = parser.parse_args()
     
     # ========== 加载配置并解析参数 ==========
@@ -395,6 +417,22 @@ def main():
         config,
         "initial_model_path",
         DEFAULT_INITIAL_MODEL_PATH
+    )
+    
+    # 模型覆盖逻辑
+    overwrite_model = bool(_get_config_value(
+        args.overwrite_model if args.overwrite_model is not None else None,
+        config,
+        "overwrite_model",
+        False
+    ))
+    
+    # 模型名称
+    model_name = _get_config_value(
+        args.model_name,
+        config,
+        "model_name",
+        "weight_predictor_hybrid"
     )
     # ==========================================
     

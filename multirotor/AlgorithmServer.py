@@ -48,7 +48,7 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
@@ -56,6 +56,7 @@ class MultiDroneAlgorithmServer:
         :param use_learned_weights: 是否使用学习的权重（DQN模型预测）
         :param model_path: DQN模型路径（不含.zip后缀），如果为None则使用默认模型
         :param enable_visualization: 是否启用可视化（默认True）
+        :param enable_data_collection_print: 是否启用数据采集DEBUG打印（默认False，训练模式下应设为True）
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -113,8 +114,8 @@ class MultiDroneAlgorithmServer:
         self.visualizer = None
         self.enable_visualization = enable_visualization
 
-        # 数据采集系统
-        self.data_collector = DataCollector(collection_interval=1.0)
+        # 数据采集系统（传递enable_debug_print参数控制DEBUG打印）
+        self.data_collector = DataCollector(collection_interval=1.0, enable_debug_print=enable_data_collection_print)
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -421,6 +422,7 @@ class MultiDroneAlgorithmServer:
                 get_runtime_data_func=lambda: self.unity_runtime_data,
                 get_algorithms_func=lambda: self.algorithms,
                 get_drone_names_func=lambda: self.drone_names,
+                get_battery_data_func=lambda: self.get_all_battery_data(),  # 添加电量数据获取函数
                 data_lock=self.data_lock,
                 grid_lock=self.grid_lock
             )
@@ -892,6 +894,10 @@ class MultiDroneAlgorithmServer:
 
     def _check_drone_stuck(self, drone_name: str, current_pos: Vector3) -> None:
         """检查无人机是否卡住（位置长时间不变）"""
+        # 如果服务已停止，不再进行卡住检测（避免训练结束后继续打印警告）
+        if not self.running:
+            return
+        
         current_time = time.time()
         
         # 检查位置是否发生变化

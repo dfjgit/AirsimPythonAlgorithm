@@ -18,11 +18,12 @@ logger = logging.getLogger("DataCollector")
 class DataCollector:
     """数据采集器类，负责采集和记录扫描数据"""
     
-    def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0):
+    def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0, enable_debug_print: bool = False):
         """
         初始化数据采集器
         :param data_dir: 数据保存目录（默认使用当前目录下的data_logs）
         :param collection_interval: 采集间隔（秒，默认1.0）
+        :param enable_debug_print: 是否启用DEBUG打印（默认False，训练时应设置为True）
         """
         self.collection_interval = collection_interval
         self.running = False
@@ -32,6 +33,7 @@ class DataCollector:
         self.start_time = time.time()
         self.header_written = False  # 表头是否已写入
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
+        self.enable_debug_print = enable_debug_print  # 控制DEBUG打印开关
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -94,6 +96,7 @@ class DataCollector:
               get_runtime_data_func: Callable,
               get_algorithms_func: Callable,
               get_drone_names_func: Callable,
+              get_battery_data_func: Callable,  # 新增：获取电量数据的函数
               data_lock: threading.Lock,
               grid_lock: threading.Lock):
         """
@@ -119,6 +122,7 @@ class DataCollector:
                 get_runtime_data_func,
                 get_algorithms_func,
                 get_drone_names_func,
+                get_battery_data_func,  # 新增
                 data_lock,
                 grid_lock
             ),
@@ -152,6 +156,7 @@ class DataCollector:
                           get_runtime_data_func,
                           get_algorithms_func,
                           get_drone_names_func,
+                          get_battery_data_func,  # 新增
                           data_lock,
                           grid_lock):
         """数据采集线程主循环"""
@@ -221,6 +226,14 @@ class DataCollector:
                             'leaderRangeCoefficient': config.leaderRangeCoefficient,
                             'directionRetentionCoefficient': config.directionRetentionCoefficient
                         }
+                
+                # 获取所有无人机的电量数据
+                battery_data = {}
+                try:
+                    battery_data = get_battery_data_func()
+                except Exception as e:
+                    logger.debug(f"获取电量数据失败: {str(e)}")
+                    battery_data = {}
                 
                 # 统计AOI区域内的栅格状态和全局统计
                 with grid_lock:
@@ -295,6 +308,10 @@ class DataCollector:
                         header.append(f'{drone_name}_y')
                         header.append(f'{drone_name}_z')
                     
+                    # 为每个无人机添加电量列
+                    for drone_name in self.drone_names_list:
+                        header.append(f'{drone_name}_battery_voltage')
+                    
                     self.csv_writer.writerow(header)
                     self.csv_file.flush()
                     self.header_written = True
@@ -334,16 +351,24 @@ class DataCollector:
                         row.append(f"{pos['y']:.3f}")
                         row.append(f"{pos['z']:.3f}")
                     
+                    # 添加所有无人机的电量
+                    for drone_name in self.drone_names_list:
+                        drone_battery = battery_data.get(drone_name, {})
+                        voltage = drone_battery.get('voltage', 0.0)
+                        row.append(f"{voltage:.3f}")
+                    
                     self.csv_writer.writerow(row)
                     self.csv_file.flush()  # 立即刷新到文件
                     
-                    logger.debug(
-                        f"数据采集: 时间={elapsed_time:.1f}s, "
-                        f"已侦察={scanned_count}, 未侦察={unscanned_count}, "
-                        f"总数={total_count}, 扫描比例={scan_ratio:.2f}%, "
-                        f"全局平均熵值={global_avg_entropy:.2f}, 全局采集比例={global_scan_ratio:.2f}%, "
-                        f"权重={weights}, 无人机数={len(self.drone_names_list)}"
-                    )
+                    # 仅在启用DEBUG打印时输出（训练时启用）
+                    if self.enable_debug_print:
+                        logger.debug(
+                            f"数据采集: 时间={elapsed_time:.1f}s, "
+                            f"已侦察={scanned_count}, 未侦察={unscanned_count}, "
+                            f"总数={total_count}, 扫描比例={scan_ratio:.2f}%, "
+                            f"全局平均熵值={global_avg_entropy:.2f}, 全局采集比例={global_scan_ratio:.2f}%, "
+                            f"权重={weights}, 无人机数={len(self.drone_names_list)}"
+                        )
                 
             except Exception as e:
                 logger.error(f"数据采集线程出错: {str(e)}")

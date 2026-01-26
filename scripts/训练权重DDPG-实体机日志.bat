@@ -13,9 +13,10 @@ echo   1. 需在JSON配置中提供 log_path（.json/.csv）
 echo   2. 日志仅用于离线训练，不控制实体机
 echo   3. 模型将保存到 multirotor\DDPG_Weight\models\
 echo.
-echo 训练参数将从JSON配置文件读取
+echo 训练参数将从 JSON 配置文件读取
 echo 默认配置:
-echo   multirotor\DDPG_Weight\crazyflie_logs_train_config.json
+echo   [推荐] 统一配置: unified_train_config.json
+echo   [兼容] 旧配置: crazyflie_logs_train_config.json
 echo.
 echo 示例:
 echo   训练权重DDPG-实体机日志.bat "path\to\custom_config.json" ^
@@ -25,7 +26,7 @@ echo.
 echo ============================================================
 echo.
 
-set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\crazyflie_logs_train_config.json"
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\unified_train_config.json"
 if not "%~1"=="" (
     set "CONFIG_PATH=%~1"
     shift

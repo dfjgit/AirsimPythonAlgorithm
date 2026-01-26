@@ -56,7 +56,10 @@ def _load_train_config(path: str) -> dict:
     加载训练配置文件
     
     功能：
-        从JSON文件读取训练配置参数
+        从 JSON 文件读取训练配置参数
+        支持两种格式：
+        1. 传统格式：直接返回配置字典
+        2. 统一格式：包含 common 和模式专用配置，自动合并
         
     参数：
         path: 配置文件路径（JSON格式）
@@ -76,7 +79,17 @@ def _load_train_config(path: str) -> dict:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError("配置文件必须为JSON对象")
-    return data
+    
+    # 检查是否为统一配置格式（包含 common 和 crazyflie_online 键）
+    if "common" in data and "crazyflie_online" in data:
+        # 统一配置格式：合并 common 和 crazyflie_online 配置
+        merged_config = {}
+        merged_config.update(data.get("common", {}))
+        merged_config.update(data.get("crazyflie_online", {}))
+        return merged_config
+    else:
+        # 传统配置格式：直接返回
+        return data
 
 
 def _get_config_value(cli_value, config: dict, key: str, default):

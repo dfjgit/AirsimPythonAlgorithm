@@ -81,7 +81,14 @@ class TrainingVisualizer:
         self.last_step_time = time.time()
         
         # 奖励曲线历史（用于绘图）
-        self.reward_history: Deque[float] = deque(maxlen=50)  # 最近50个数据点
+        self.reward_history: Deque[float] = deque(maxlen=500)  # 扩展到最近500个数据点
+        self.smoothed_rewards: Deque[float] = deque(maxlen=500)  # 存储平滑后的奖励（滑动平均）
+        
+        # 训练日志保存路径
+        self.log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.csv_path = os.path.join(self.log_dir, f'training_stats_{time.strftime("%Y%m%d_%H%M%S")}.csv')
+        self.history_data = []  # 用于导出CSV的完整列表
         
         # 权重历史
         self.weight_history: Dict[str, Deque[float]] = {
@@ -124,9 +131,33 @@ class TrainingVisualizer:
         if is_episode_done and episode_reward is not None:
             self.episode_rewards.append(episode_reward)
             self.reward_history.append(episode_reward)
+            
+            # 计算滑动平均值 (Window size = 10)
+            window = 10
+            recent_rewards = list(self.reward_history)[-window:]
+            avg_reward = sum(recent_rewards) / len(recent_rewards)
+            self.smoothed_rewards.append(avg_reward)
+            
+            # 记录用于导出的数据
+            self.history_data.append({
+                'episode': self.episode_count + 1,
+                'reward': episode_reward,
+                'smoothed_reward': avg_reward,
+                'steps': self.current_episode_steps,
+                'total_steps': self.total_steps,
+                'timestamp': time.time()
+            })
+            
+            # 每10个episode自动保存一次CSV
+            if (self.episode_count + 1) % 10 == 0:
+                self.save_to_csv()
+            
             if episode_length is not None:
                 self.episode_lengths.append(episode_length)
             self.episode_count += 1
+            
+            # 调试输出：确认数据被正确记录
+            print(f"[TrainingVisualizer] Episode {self.episode_count} 完成: 奖励={episode_reward:.2f}, 当前数据量={len(self.reward_history)}")
             
             # 重置当前episode统计
             self.current_episode_reward = 0.0
@@ -137,6 +168,21 @@ class TrainingVisualizer:
         for key, value in weights.items():
             if key in self.weight_history:
                 self.weight_history[key].append(value)
+    
+    def save_to_csv(self):
+        """将统计数据保存到CSV文件"""
+        if not self.history_data:
+            return
+        try:
+            import csv
+            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                if self.history_data:
+                    writer = csv.DictWriter(f, fieldnames=self.history_data[0].keys())
+                    writer.writeheader()
+                    writer.writerows(self.history_data)
+            print(f"📊 训练统计已保存至: {self.csv_path}")
+        except Exception as e:
+            print(f"⚠️ 保存CSV出错: {e}")
     
     def world_to_screen(self, vector):
         """将世界坐标转换为屏幕坐标"""
@@ -382,6 +428,11 @@ class TrainingVisualizer:
         self.screen.blit(text, (panel_x + 15, y))
         y += 18
         
+        # 调试信息：显示奖励历史数据量
+        debug_text = self._info_font.render(f"奖励数据: {len(self.reward_history)}条", True, self.DARK_GRAY)
+        self.screen.blit(debug_text, (panel_x + 15, y))
+        y += 18
+        
         # 当前episode信息
         text = self._info_font.render(f"当前Episode步数: {self.current_episode_steps}", True, self.CYAN)
         self.screen.blit(text, (panel_x + 15, y))
@@ -413,7 +464,59 @@ class TrainingVisualizer:
             avg_length = sum(self.episode_lengths) / len(self.episode_lengths)
             text = self._info_font.render(f"平均步长: {avg_length:.1f}", True, self.WHITE)
             self.screen.blit(text, (panel_x + 15, y))
-            y += 25
+            y += 10
+        
+        # ========== 新增：收敛性分析量化指标 ==========
+        if len(self.episode_rewards) >= 5:
+            y += 5
+            pygame.draw.line(self.screen, self.GRAY, (panel_x + 10, y), (panel_x + panel_width - 10, y), 1)
+            y += 8
+            
+            analysis_title = self._info_font.render("🔍 收敛性分析:", True, self.ORANGE)
+            self.screen.blit(analysis_title, (panel_x + 15, y))
+            y += 20
+            
+            # 计算收敛稳定性 (最近10个episode的奖励标准差)
+            recent = list(self.episode_rewards)[-10:]
+            if len(recent) >= 5:
+                # 计算标准差
+                mean_val = sum(recent) / len(recent)
+                variance = sum((x - mean_val) ** 2 for x in recent) / len(recent)
+                stability = variance ** 0.5  # 标准差
+                
+                stability_text = "稳定" if stability < 50 else ("波动" if stability < 200 else "极不稳定")
+                color = self.GREEN if stability < 50 else (self.YELLOW if stability < 200 else self.RED)
+                
+                text = self._info_font.render(f"状态: {stability_text} (σ:{stability:.1f})", True, color)
+                self.screen.blit(text, (panel_x + 15, y))
+                y += 18
+                
+                # 计算学习增益 (最近10个 vs 之前10个)
+                if len(self.episode_rewards) >= 20:
+                    prev = list(self.episode_rewards)[-20:-10]
+                    improvement = sum(recent)/len(recent) - sum(prev)/len(prev)
+                    imp_text = f"增益: {improvement:+.2f}"
+                    imp_color = self.GREEN if improvement > 0 else self.RED
+                    text = self._info_font.render(imp_text, True, imp_color)
+                    self.screen.blit(text, (panel_x + 15, y))
+                    y += 18
+                
+                # 显示收敛进度条
+                convergence_ratio = min(1.0, self.episode_count / 50)  # 假设50个episode后基本收敛
+                bar_x = panel_x + 15
+                bar_y = y + 2
+                bar_width = 200
+                bar_height = 8
+                
+                pygame.draw.rect(self.screen, self.DARK_GRAY, (bar_x, bar_y, bar_width, bar_height))
+                fill_width = int(bar_width * convergence_ratio)
+                if fill_width > 0:
+                    pygame.draw.rect(self.screen, self.CYAN, (bar_x, bar_y, fill_width, bar_height))
+                pygame.draw.rect(self.screen, self.WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
+                
+                conv_text = self._info_font.render(f"收敛进度: {convergence_ratio*100:.0f}%", True, self.WHITE)
+                self.screen.blit(conv_text, (bar_x + bar_width + 10, bar_y - 2))
+                y += 20
         
         # 环境信息
         if self.env:
@@ -423,10 +526,8 @@ class TrainingVisualizer:
             y += 18
     
     def draw_reward_curve(self):
-        """绘制奖励曲线（右侧，训练统计面板下方）"""
-        if len(self.reward_history) < 2:
-            return
-        
+        """绘制增强版奖励曲线（包含平滑线和收敛趋势分析）"""
+        # 绘制面板背景和边框（即使没有数据也显示）
         if not hasattr(self, '_curve_font'):
             try:
                 self._curve_font = pygame.font.SysFont(['SimHei', 'Microsoft YaHei', 'Arial'], 12)
@@ -447,8 +548,15 @@ class TrainingVisualizer:
         pygame.draw.rect(self.screen, self.CYAN, panel_rect, 2)
         
         # 标题
-        title = self._curve_font.render("📈 奖励曲线（最近50个Episode）", True, self.CYAN)
+        title = self._curve_font.render(f"📈 奖励曲线（最近{len(self.reward_history)}个Episode）", True, self.CYAN)
         self.screen.blit(title, (panel_x + 10, panel_y + 5))
+        
+        # 如果数据不足，显示提示信息
+        if len(self.reward_history) < 2:
+            hint_text = self._curve_font.render("等待Episode完成以显示曲线...", True, self.GRAY)
+            hint_rect = hint_text.get_rect(center=(panel_x + panel_width // 2, panel_y + panel_height // 2))
+            self.screen.blit(hint_text, hint_rect)
+            return
         
         # 图表区域
         graph_x = panel_x + 40
@@ -466,6 +574,7 @@ class TrainingVisualizer:
         
         # 计算缩放
         rewards = list(self.reward_history)
+        smooth_rewards = list(self.smoothed_rewards)
         if not rewards:
             return
         
@@ -473,7 +582,7 @@ class TrainingVisualizer:
         min_reward = min(rewards)
         reward_range = max_reward - min_reward if max_reward != min_reward else 1.0
         
-        # 绘制曲线
+        # 1. 绘制原始奖励曲线（淡蓝色细线）
         points = []
         for i, reward in enumerate(rewards):
             x = graph_x + (i / (len(rewards) - 1)) * graph_width
@@ -481,11 +590,23 @@ class TrainingVisualizer:
             points.append((int(x), int(y)))
         
         if len(points) > 1:
-            pygame.draw.lines(self.screen, self.GREEN, False, points, 2)
+            pygame.draw.lines(self.screen, (100, 149, 237), False, points, 1)  # 淡蓝色背景线
         
-        # 绘制数据点
-        for point in points:
-            pygame.draw.circle(self.screen, self.YELLOW, point, 3)
+        # 2. 绘制平滑曲线（深绿色粗线）- 核心收敛指标
+        if len(smooth_rewards) >= 2:
+            smooth_points = []
+            for i, reward in enumerate(smooth_rewards):
+                x = graph_x + (i / (len(smooth_rewards) - 1)) * graph_width
+                y = graph_y + graph_height - ((reward - min_reward) / reward_range) * graph_height
+                smooth_points.append((int(x), int(y)))
+            
+            if len(smooth_points) > 1:
+                pygame.draw.lines(self.screen, self.GREEN, False, smooth_points, 3)  # 深绿粗线
+            
+            # 3. 高亮显示最新点
+            if smooth_points:
+                pygame.draw.circle(self.screen, self.WHITE, smooth_points[-1], 5)
+                pygame.draw.circle(self.screen, self.GREEN, smooth_points[-1], 3)
         
         # Y轴标签
         label_max = self._curve_font.render(f"{max_reward:.1f}", True, self.WHITE)
@@ -500,7 +621,7 @@ class TrainingVisualizer:
             avg_y = graph_y + graph_height - ((avg_reward - min_reward) / reward_range) * graph_height
             pygame.draw.line(self.screen, self.ORANGE, 
                            (graph_x, int(avg_y)), 
-                           (graph_x + graph_width, int(avg_y)), 1, )
+                           (graph_x + graph_width, int(avg_y)), 1)
             
             label_avg = self._curve_font.render(f"Avg: {avg_reward:.1f}", True, self.ORANGE)
             self.screen.blit(label_avg, (graph_x + graph_width - 60, int(avg_y) - 15))

@@ -103,7 +103,10 @@ def _load_train_config(path: str) -> dict:
     加载训练配置文件
     
     功能：
-        从JSON文件读取训练配置参数
+        从 JSON 文件读取训练配置参数
+        支持两种格式：
+        1. 传统格式：直接返回配置字典
+        2. 统一格式：包含 common 和模式专用配置，自动合并
         
     参数：
         path: 配置文件路径（JSON格式）
@@ -122,7 +125,19 @@ def _load_train_config(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        
+        # 检查是否为统一配置格式（包含 common 和 airsim_virtual 键）
+        if "common" in data and "airsim_virtual" in data:
+            # 统一配置格式：合并 common 和 airsim_virtual 配置
+            merged_config = {}
+            merged_config.update(data.get("common", {}))
+            merged_config.update(data.get("airsim_virtual", {}))
+            return merged_config
+        else:
+            # 传统配置格式：直接返回
+            return data
     except Exception as exc:
         print(f"⚠️  配置文件读取失败: {exc}")
         return {}
@@ -320,15 +335,17 @@ class ImprovedTrainingCallback(BaseCallback):
     """
     
     def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', 
-                 training_visualizer=None, verbose=1):
+                 training_visualizer=None, overwrite_model=False, model_name="weight_predictor_airsim", verbose=1):
         """
         初始化训练回调
-        
-        参数：
+            
+        参数:
             total_timesteps: 总训练步数
             check_freq: 检查点保存频率（每N步保存一次）
             save_path: 模型保存目录路径
             training_visualizer: 训练可视化器实例（可选）
+            overwrite_model: 是否覆盖现有模型（不生成新时间戳）
+            model_name: 模型名称（不含.zip）
             verbose: 详细程度（0=静默，1=显示信息）
         """
         super(ImprovedTrainingCallback, self).__init__(verbose)
@@ -336,12 +353,14 @@ class ImprovedTrainingCallback(BaseCallback):
         self.check_freq = check_freq  # 检查点保存频率
         self.save_path = save_path  # 模型保存路径
         self.training_visualizer = training_visualizer  # 训练可视化器引用
+        self.overwrite_model = overwrite_model  # 是否覆盖模型
+        self.model_name = model_name  # 模型名称
         self.best_mean_reward = -np.inf  # 最佳平均奖励（用于保存最佳模型）
         self.last_print_step = 0  # 上次打印的步数
         self.print_interval = max(total_timesteps // 10, 100)  # 打印间隔（总共显示10次）
         self.episode_count = 0  # 已完成的Episode数量
         self.episode_rewards = []  # 所有Episode的奖励列表
-        
+            
         # 确保保存目录存在
         os.makedirs(save_path, exist_ok=True)
         
@@ -434,9 +453,16 @@ class ImprovedTrainingCallback(BaseCallback):
             # 如果当前平均奖励超过历史最佳，保存最佳模型
             if mean_reward > self.best_mean_reward and mean_reward > 0:
                 self.best_mean_reward = mean_reward
-                # 使用时间戳作为模型文件名
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                model_path = os.path.join(self.save_path, f'best_model_{timestamp}')
+                
+                # 根据 overwrite_model 决定文件名
+                if self.overwrite_model:
+                    # 覆盖模式：使用固定名称
+                    model_path = os.path.join(self.save_path, f'best_{self.model_name}')
+                else:
+                    # 生成新模型：添加时间戳
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    model_path = os.path.join(self.save_path, f'best_model_{timestamp}')
+                
                 self.model.save(model_path)
                 print(f"\n🏆 新最佳模型！奖励: {mean_reward:.2f}")
                 print(f"💾 已保存: {model_path}.zip\n")
@@ -447,11 +473,18 @@ class ImprovedTrainingCallback(BaseCallback):
         # ========== 定期保存检查点 ==========
         # 每check_freq步保存一次检查点，防止训练中断丢失进度
         if self.num_timesteps % self.check_freq == 0 and self.num_timesteps > 0:
-            # 使用时间戳作为检查点文件名
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.num_timesteps}_{timestamp}')
+            # 根据 overwrite_model 决定文件名
+            if self.overwrite_model:
+                # 覆盖模式：使用固定名称
+                checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.model_name}')
+                print(f"💾 检查点: checkpoint_{self.model_name}.zip (覆盖)")
+            else:
+                # 生成新模型：添加时间戳
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                checkpoint_path = os.path.join(self.save_path, f'checkpoint_{self.num_timesteps}_{timestamp}')
+                print(f"💾 检查点: checkpoint_{self.num_timesteps}_{timestamp}.zip")
+            
             self.model.save(checkpoint_path)
-            print(f"💾 检查点: checkpoint_{self.num_timesteps}_{timestamp}.zip")
         # ====================================
         
         return True  # 继续训练
@@ -466,6 +499,7 @@ DEFAULT_CHECKPOINT_FREQ = 1000           # 默认检查点保存频率（每N步
 DEFAULT_ENABLE_VISUALIZATION = True      # 默认启用训练可视化
 DEFAULT_INITIAL_MODEL_PATH = None
 DEFAULT_USE_INITIAL_WEIGHTS = True       # 默认使用初始权重继承
+DEFAULT_OVERWRITE_MODEL = False          # 默认不覆盖模型，生成新模型（带时间戳）
 # =====================================================
 
 def main():
@@ -513,6 +547,18 @@ def main():
         default=None,
         help="禁用初始权重继承"
     )
+    parser.add_argument(
+        "--overwrite-model",
+        action="store_true",
+        default=None,
+        help="覆盖现有模型（不生成新时间戳），用于未改变算法时的调试训练"
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=None,
+        help="指定模型名称（不含.zip），配合--overwrite-model使用。默认为weight_predictor_airsim"
+    )
     args = parser.parse_args()
     
     # ========== 加载配置并解析参数 ==========
@@ -527,6 +573,22 @@ def main():
     enable_visualization = bool(_get_config_value(None, config, "enable_visualization", DEFAULT_ENABLE_VISUALIZATION))
     safety_limit = bool(_get_config_value(None, config, "safety_limit", True))  # 权重变化安全限制
     max_weight_delta = float(_get_config_value(None, config, "max_weight_delta", 0.5))  # 权重变化最大幅度
+    
+    # 模型覆盖逻辑：命令行优先
+    overwrite_model = bool(_get_config_value(
+        args.overwrite_model if args.overwrite_model is not None else None,
+        config,
+        "overwrite_model",
+        DEFAULT_OVERWRITE_MODEL
+    ))
+    
+    # 模型名称
+    model_name = _get_config_value(
+        args.model_name,
+        config,
+        "model_name",
+        "weight_predictor_airsim"  # 默认模型名
+    )
     
     # 初始权重使用逻辑：命令行优先
     if args.use_initial_weights is None and args.no_initial_weights is None:
@@ -556,6 +618,7 @@ def main():
     print(f"⏱️  每步时长: {step_duration} 秒")
     print(f"💾 检查点: 每 {checkpoint_freq} 步保存一次")
     print(f"👁️  可视化: {'启用' if enable_visualization else '禁用'}")
+    print(f"💾 模型策略: {'覆盖模式 (' + model_name + ')' if overwrite_model else '生成新模型（带时间戳）'}")
     print(f"📈 预计episode数: ~{total_timesteps // 50}")
     print("=" * 60)
     print(f"\n💡 说明: 使用{len(drone_names)}台无人机协同训练")
@@ -578,11 +641,13 @@ def main():
         #   - use_learned_weights=False: 训练时不使用已学习的权重，让DDPG动态调整
         #   - model_path=None: 训练模式不需要加载预训练模型
         #   - enable_visualization=False: 禁用AlgorithmServer自带的可视化，使用训练专用可视化
+        #   - enable_data_collection_print=True: 训练模式下启用数据采集DEBUG打印，便于监控训练过程
         server = MultiDroneAlgorithmServer(
             drone_names=drone_names,
             use_learned_weights=False,  # 训练模式：不使用学习的权重
             model_path=None,  # 训练模式：不加载模型
-            enable_visualization=False  # 使用训练专用可视化，禁用服务器自带可视化
+            enable_visualization=False,  # 使用训练专用可视化，禁用服务器自带可视化
+            enable_data_collection_print=True  # 训练模式：启用数据采集DEBUG打印
         )
         
         print(f"✅ 服务器创建成功")
@@ -731,6 +796,8 @@ def main():
             check_freq=checkpoint_freq,
             save_path=model_dir,
             training_visualizer=training_visualizer,  # 传入可视化器
+            overwrite_model=overwrite_model,  # 传入覆盖模式标志
+            model_name=model_name,  # 传入模型名称
             verbose=1
         )
         
@@ -746,8 +813,18 @@ def main():
         
         # 保存最终模型
         print("\n💾 保存最终模型...")
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        final_model_path = os.path.join(model_dir, f"weight_predictor_airsim_{timestamp}")
+        
+        # 根据 overwrite_model 参数决定模型文件名
+        if overwrite_model:
+            # 覆盖模式：使用固定名称，不添加时间戳
+            final_model_path = os.path.join(model_dir, model_name)
+            print(f"⚠️  覆盖模式：将覆盖现有模型 {model_name}")
+        else:
+            # 生成新模型：添加时间戳
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            final_model_path = os.path.join(model_dir, f"{model_name}_{timestamp}")
+            print(f"✨ 生成新模型：使用时间戳 {timestamp}")
+        
         model.save(final_model_path)
         print(f"✅ 模型已保存: {final_model_path}.zip")
 
@@ -768,10 +845,16 @@ def main():
         print("=" * 60)
         
         print("\n📦 生成的模型文件:")
-        print(f"  🏆 最佳模型: models/best_model.zip")
-        print("  📄 最终模型: models/weight_predictor_airsim_<timestamp>.zip")
-        if checkpoint_freq > 0:
-            print(f"  💾 检查点: models/checkpoint_*.zip")
+        if overwrite_model:
+            print(f"  🏆 最佳模型: models/best_{model_name}.zip (覆盖模式)")
+            print(f"  📄 最终模型: models/{model_name}.zip (覆盖模式)")
+            if checkpoint_freq > 0:
+                print(f"  💾 检查点: models/checkpoint_{model_name}.zip (覆盖模式)")
+        else:
+            print(f"  🏆 最佳模型: models/best_model_*.zip")
+            print(f"  📄 最终模型: models/{model_name}_<timestamp>.zip")
+            if checkpoint_freq > 0:
+                print(f"  💾 检查点: models/checkpoint_*.zip")
         
         print("\n🎯 下一步操作:")
         print("  1️⃣  测试模型: python test_trained_model.py")
@@ -804,6 +887,17 @@ def main():
         if server:
             print("\n停止AlgorithmServer...")
             try:
+                # 先停止所有线程和服务（包括数据采集线程、算法线程）
+                print("  停止数据采集线程...")
+                server.data_collector.stop()
+                
+                print("  停止算法线程...")
+                server.running = False  # 设置运行标志为False，停止所有算法线程
+                
+                # 等待算法线程结束（使用已导入的time模块）
+                import time as time_module  # 使用别名避免变量冲突
+                time_module.sleep(1)  # 等待1秒让线程正常退出
+                
                 # 降落无人机
                 for drone_name in drone_names:
                     try:
@@ -812,9 +906,11 @@ def main():
                     except:
                         pass
                 
-                # 停止服务器（由于没启动算法线程，这里只是断开连接）
+                # 停止Unity通信
+                print("  断开Unity连接...")
                 server.unity_socket.stop()
-                print("[OK] AlgorithmServer已停止")
+                
+                print("[OK] AlgorithmServer已完全停止")
             except Exception as e:
                 print(f"[警告] 清理资源时出现错误: {e}")
         

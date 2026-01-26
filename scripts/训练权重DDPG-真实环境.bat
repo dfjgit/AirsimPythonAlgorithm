@@ -9,12 +9,30 @@ echo.
 echo 本脚本将使用真实的Unity AirSim仿真环境训练DDPG模型
 echo.
 echo 重要提示:
-echo   1. 请先启动Unity AirSim仿真场景
-echo   2. 确保Unity场景中有4台无人机 (UAV1-UAV4) 和环境
-echo   3. 训练时间约33分钟，请保持Unity运行
-echo   4. 训练完成后，模型将保存到 multirotor\DDPG_Weight\models\
+   1. 请先启动Unity AirSim仿真场景
+   2. 确保Unity场景中有4台无人机 (UAV1-UAV4) 和环境
+   3. 训练时间约33分钟，请保持Unity运行
+   4. 训练完成后，模型将保存到 multirotor\DDPG_Weight\models\
+echo.
+echo 配置文件选项:
+echo   [推荐] 统一配置: unified_train_config.json
+echo   [兼容] 旧配置: airsim_train_config_template.json
+echo.
+echo 你可以直接运行使用统一配置，或作为参数传入自定义配置:
+echo   使用统一配置: 训练权重DDPG-真实环境.bat
+echo   自定义配置: 训练权重DDPG-真实环境.bat "path\to\config.json"
+echo   命令行覆盖: 训练权重DDPG-真实环境.bat --overwrite-model --model-name my_model
 echo.
 echo ============================================================
+echo.
+
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\unified_train_config.json"
+if not "%~1"=="" (
+    set "CONFIG_PATH=%~1"
+    shift
+)
+
+echo 使用配置: %CONFIG_PATH%
 echo.
 echo 按任意键开始训练...
 pause >nul
@@ -45,7 +63,7 @@ REM 切换到训练脚本目录并运行
 echo [3/3] 开始训练...
 echo.
 cd /d "%~dp0..\multirotor\DDPG_Weight"
-python train_with_airsim_improved.py
+python train_with_airsim_improved.py --config "%CONFIG_PATH%" %*
 
 echo.
 echo ============================================================

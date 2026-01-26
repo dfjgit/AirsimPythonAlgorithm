@@ -1,0 +1,64 @@
+{
+  "_comment": "统一训练配置文件 - 支持虚拟训练、实体训练、虚实融合训练",
+  "_usage": {
+    "airsim_virtual": "python train_with_airsim_improved.py --config unified_train_config.json",
+    "crazyflie_online": "python train_with_crazyflie_online.py --config unified_train_config.json",
+    "crazyflie_logs": "python train_with_crazyflie_logs.py --config unified_train_config.json",
+    "hybrid": "python train_with_hybrid.py --config unified_train_config.json"
+  },
+
+  "common": {
+    "_comment": "所有训练模式共用的配置",
+    "total_timesteps": 100,
+    "enable_visualization": true,
+    "checkpoint_freq": 1000,
+    "progress_interval": 10,
+    "save_dir": "models",
+    "reward_config": null,
+    "continue_model": null,
+    "overwrite_model": false,
+    "model_name": "weight_predictor"
+  },
+
+  "airsim_virtual": {
+    "_comment": "虚拟训练（AirSim仿真）专用配置",
+    "drone_names": ["UAV1", "UAV2", "UAV3"],
+    "step_duration": 5.0,
+    "use_initial_weights": true,
+    "initial_model_path": null,
+    "safety_limit": true,
+    "max_weight_delta": 0.5,
+    "model_name": "weight_predictor_airsim"
+  },
+
+  "crazyflie_online": {
+    "_comment": "实体在线训练（Crazyflie实时）专用配置",
+    "drone_name": "UAV1",
+    "step_duration": 5.0,
+    "reset_unity": false,
+    "safety_max_delta": 0.5,
+    "no_safety_limit": false,
+    "model_name": "weight_predictor_crazyflie_online"
+  },
+
+  "crazyflie_logs": {
+    "_comment": "实体离线训练（历史日志）专用配置",
+    "log_path": "crazyflie_flight_log_simulated.json",
+    "max_steps": null,
+    "random_start": false,
+    "step_stride": 1,
+    "model_name": "weight_predictor_crazyflie_logs"
+  },
+
+  "hybrid": {
+    "_comment": "虚实融合训练专用配置",
+    "drone_names": ["UAV1", "UAV2", "UAV3"],
+    "mirror_drones": ["UAV1"],
+    "step_duration": 5.0,
+    "use_initial_weights": true,
+    "initial_model_path": null,
+    "safety_limit": true,
+    "max_weight_delta": 0.5,
+    "model_name": "weight_predictor_hybrid"
+  }
+}

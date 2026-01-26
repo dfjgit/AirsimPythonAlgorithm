@@ -133,9 +133,10 @@ echo   - multirotor\DQN_Movement\         : DQN移动控制训练
 echo   - myvenv\                           : Python虚拟环境
 echo.
 echo 配置文件:
-echo   - multirotor\scanner_config.json                : APF算法配置
-echo   - multirotor\DDPG_Weight\dqn_reward_config.json  : 权重DDPG配置
-echo   - multirotor\DQN_Movement\movement_dqn_config.json : 移动DQN配置
+echo   - multirotor\scanner_config.json                     : APF算法配置
+echo   - multirotor\DDPG_Weight\unified_train_config.json    : 统一训练配置 (推荐)
+echo   - multirotor\DDPG_Weight\*_train_config*.json        : 旧式训练配置 (兼容)
+echo   - multirotor\DQN_Movement\movement_dqn_config.json    : 移动DQN配置
 echo.
 echo 批处理文件:
 echo   - start.bat                         : 主菜单(当前)
