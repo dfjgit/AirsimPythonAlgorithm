@@ -741,7 +741,7 @@ class ScanDataVisualizer:
                     # 合并图例
                     lines1, labels1 = ax8_1.get_legend_handles_labels()
                     lines2, labels2 = ax8_2.get_legend_handles_labels()
-                    ax8_1.legend(lines1 + lines2, loc='lower left', fontsize=9)
+                    ax8_1.legend(lines1 + lines2, labels1 + labels2, loc='lower left', fontsize=9)
                     
                     fig8.tight_layout()
                     figures.append((fig8, "battery_endurance_analysis.png"))
