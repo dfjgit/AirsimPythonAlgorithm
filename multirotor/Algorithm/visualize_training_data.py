@@ -675,6 +675,53 @@ class ScanDataVisualizer:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '活跃度分析': {e}")
 
+            # 6. 电压下降与任务耐力分析 (Endurance Analysis)
+            try:
+                battery_cols = [c for c in df.columns if 'battery_voltage' in c]
+                if battery_cols and "elapsed_time" in df.columns:
+                    fig8, ax8_1 = plt.subplots(figsize=(10, 6))
+                    
+                    # 1. 绘制电压下降曲线
+                    for col in battery_cols:
+                        uav_name = col.split('_')[0]
+                        ax8_1.plot(df["elapsed_time"], df[col], linewidth=2, label=f'{uav_name} 电压')
+                    
+                    ax8_1.set_xlabel("时间 (s)")
+                    ax8_1.set_ylabel("电池电压 (V)")
+                    ax8_1.set_title("续航效能分析 (证明在电量耗尽前完成任务)", fontsize=14, fontweight='bold')
+                    ax8_1.grid(True, alpha=0.3)
+                    
+                    # 2. 叠加任务进度 (Scan Ratio)
+                    ax8_2 = ax8_1.twinx()
+                    if "scan_ratio" in df.columns:
+                        ax8_2.plot(df["elapsed_time"], df["scan_ratio"], color='red', linestyle=':', linewidth=3, label='任务进度 (Scan %)')
+                        ax8_2.set_ylabel("任务完成度 (%)", color='red')
+                        ax8_2.tick_params(axis='y', labelcolor='red')
+                        ax8_2.set_ylim(0, 105)
+                        
+                        # 标注任务完成时的电压余量
+                        completion_idx = df[df["scan_ratio"] >= 90].index
+                        if not completion_idx.empty:
+                            idx = completion_idx[0]
+                            time_done = df["elapsed_time"].iloc[idx]
+                            ax8_1.axvline(x=time_done, color='green', linestyle='--', alpha=0.5)
+                            ax8_1.text(time_done, df[battery_cols[0]].min(), f' 90% 完成 @ {time_done:.1f}s', 
+                                      color='green', rotation=90, verticalalignment='bottom')
+                    
+                    # 合并图例
+                    lines1, labels1 = ax8_1.get_legend_handles_labels()
+                    lines2, labels2 = ax8_2.get_legend_handles_labels()
+                    ax8_1.legend(lines1 + lines2, loc='lower left', fontsize=9)
+                    
+                    fig8.tight_layout()
+                    figures.append((fig8, "battery_endurance_analysis.png"))
+                    LOGGER.info(f"  [成功] 生成图表: 电压下降与续航分析")
+                    if self.show_plots:
+                        plt.show()
+                        plt.pause(0.1)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
+
             # 4. 如果是预览模式，问用户是否保存
             if self.show_plots:
                 plt.ioff()  # 关闭交互模式
