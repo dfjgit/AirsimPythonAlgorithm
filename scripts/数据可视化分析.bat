@@ -23,14 +23,16 @@ echo   [1] 自动分析所有数据 (推荐)
 echo   [2] 分析 Crazyflie 训练日志目录
 echo   [3] 分析扫描数据目录
 echo   [4] 分析指定文件
+echo   [5] 对比分析 (将同类数据叠画在一张图上)
 echo   [0] 返回主菜单
 echo.
-set /p choice=请输入选项 (0-4): 
+set /p choice=请输入选项 (0-5): 
 
 if "%choice%"=="1" goto auto_analyze
 if "%choice%"=="2" goto analyze_crazyflie
 if "%choice%"=="3" goto analyze_scan
 if "%choice%"=="4" goto analyze_file
+if "%choice%"=="5" goto compare_analyze
 if "%choice%"=="0" goto end
 
 echo.
@@ -186,6 +188,30 @@ set /p open_dir=是否打开结果目录? (y/n):
 if /i "%open_dir%"=="y" (
     start "" "%cd%\analysis_results"
 )
+
+pause
+goto menu
+
+:compare_analyze
+cls
+echo ============================================================
+echo 对比分析 (多份数据指标叠加)
+echo ============================================================
+echo.
+echo 正在扫描并对比同类数据...
+echo.
+
+cd /d "%~dp0.."
+call myvenv\Scripts\activate.bat
+
+python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results --compare --show
+
+echo.
+echo ============================================================
+echo 对比分析完成！
+echo 结果保存在: %cd%\analysis_results\comparison_results
+echo ============================================================
+echo.
 
 pause
 goto menu

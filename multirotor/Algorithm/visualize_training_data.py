@@ -615,6 +615,152 @@ def auto_discover_data() -> Tuple[List[Path], List[Path]]:
     return crazyflie_files, scan_files
 
 
+class DataComparer:
+    """多份数据对比分析器"""
+    
+    def __init__(self, output_dir: Path, show_plots: bool = False):
+        self.output_dir = output_dir
+        self.show_plots = show_plots
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def compare_scan_data(self, csv_files: List[Path]) -> bool:
+        """对比多份扫描数据"""
+        if len(csv_files) < 2:
+            LOGGER.warning("⚠️  对比分析至少需要 2 份数据文件")
+            return False
+        
+        LOGGER.info(f"📊 开始对比分析 {len(csv_files)} 份扫描数据...")
+        
+        all_data = []
+        for f in csv_files:
+            try:
+                df, _, _, _ = load_and_prepare(f)
+                if not df.empty:
+                    all_data.append((f.stem, df))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取对比文件失败 {f.name}: {e}")
+        
+        if not all_data:
+            return False
+        
+        compare_dir = self.output_dir / "comparison_results"
+        compare_dir.mkdir(exist_ok=True)
+        
+        # 1. 对比扫描比例
+        fig1, ax1 = plt.subplots(figsize=(12, 7))
+        for label, df in all_data:
+            if "elapsed_time" in df.columns and "scan_ratio" in df.columns:
+                ax1.plot(df["elapsed_time"], df["scan_ratio"], label=label, linewidth=2)
+        
+        ax1.set_xlabel("时间 (s)", fontsize=12)
+        ax1.set_ylabel("扫描完成度 (%)", fontsize=12)
+        ax1.set_title("不同实验 - 扫描进度对比", fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='lower right', fontsize=9)
+        plt.tight_layout()
+        plt.savefig(compare_dir / "compare_scan_progress.png", dpi=150)
+        
+        # 2. 对比平均熵
+        fig2, ax2 = plt.subplots(figsize=(12, 7))
+        has_entropy = False
+        for label, df in all_data:
+            if "elapsed_time" in df.columns and "global_avg_entropy" in df.columns:
+                ax2.plot(df["elapsed_time"], df["global_avg_entropy"], label=label, linewidth=2)
+                has_entropy = True
+        
+        if has_entropy:
+            ax2.set_xlabel("时间 (s)", fontsize=12)
+            ax2.set_ylabel("平均熵值", fontsize=12)
+            ax2.set_title("不同实验 - 熵值变化对比", fontsize=14, fontweight='bold')
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(loc='upper right', fontsize=9)
+            plt.tight_layout()
+            plt.savefig(compare_dir / "compare_entropy_trend.png", dpi=150)
+        else:
+            plt.close(fig2)
+        
+        # 3. 对比最终扫描比例 (柱状图)
+        fig3, ax3 = plt.subplots(figsize=(10, 6))
+        labels = [item[0] for item in all_data]
+        final_ratios = [item[1]["scan_ratio"].iloc[-1] if "scan_ratio" in item[1].columns else 0 for item in all_data]
+        
+        colors = plt.cm.viridis(np.linspace(0, 1, len(labels)))
+        bars = ax3.bar(labels, final_ratios, color=colors)
+        
+        ax3.set_ylabel("最终扫描比例 (%)")
+        ax3.set_title("不同实验 - 最终扫描完成度对比")
+        ax3.set_ylim(0, 105)
+        
+        # 添加数值标签
+        for bar in bars:
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{height:.1f}%', ha='center', va='bottom')
+        
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(compare_dir / "compare_final_completion.png", dpi=150)
+            
+        LOGGER.info(f"✅ 对比分析完成，结果保存在: {compare_dir}")
+        
+        if self.show_plots:
+            plt.show()
+        else:
+            plt.close('all')
+            
+        return True
+
+    def compare_crazyflie_data(self, csv_files: List[Path]) -> bool:
+        """对比多份 Crazyflie 飞行数据"""
+        if len(csv_files) < 2:
+            return False
+            
+        LOGGER.info(f"📊 开始对比分析 {len(csv_files)} 份 Crazyflie 数据...")
+        
+        all_data = []
+        for f in csv_files:
+            try:
+                df = pd.read_csv(f)
+                if not df.empty:
+                    all_data.append((f.stem, df))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取对比文件失败 {f.name}: {e}")
+                
+        if not all_data:
+            return False
+            
+        compare_dir = self.output_dir / "comparison_results_crazyflie"
+        compare_dir.mkdir(exist_ok=True)
+        
+        # 对比速度
+        fig, ax = plt.subplots(figsize=(12, 7))
+        has_speed = False
+        for label, df in all_data:
+            if "elapsed_time" in df.columns and "speed" in df.columns:
+                ax.plot(df["elapsed_time"], df["speed"], label=label, alpha=0.7)
+                has_speed = True
+        
+        if has_speed:
+            ax.set_xlabel("时间 (s)")
+            ax.set_ylabel("速度 (m/s)")
+            ax.set_title("不同实验 - 飞行速度对比")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='best', fontsize=9)
+            plt.tight_layout()
+            plt.savefig(compare_dir / "compare_flight_speed.png", dpi=150)
+        else:
+            plt.close(fig)
+            
+        LOGGER.info(f"✅ 对比分析完成，结果保存在: {compare_dir}")
+        
+        if self.show_plots:
+            plt.show()
+        else:
+            plt.close('all')
+            
+        return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="训练数据可视化工具")
     parser.add_argument("--auto", action="store_true", help="自动扫描所有数据目录")
@@ -623,6 +769,7 @@ def main():
     parser.add_argument("--dir", type=str, help="分析指定目录下的所有数据文件")
     parser.add_argument("--out", type=str, default="analysis_results", help="输出目录")
     parser.add_argument("--show", action="store_true", help="完成后显示图表窗口")
+    parser.add_argument("--compare", action="store_true", help="对同类型数据进行对比分析")
     args = parser.parse_args()
     
     output_dir = Path(args.out)
@@ -663,6 +810,20 @@ def main():
     LOGGER.info(f"开始处理 {len(files_to_process)} 个文件")
     LOGGER.info(f"{'='*60}\n")
     
+    # 对比分析
+    if args.compare:
+        comparer = DataComparer(output_dir, show_plots=args.show)
+        
+        # 分组文件
+        scan_to_compare = [f for f in files_to_process if 'scan_data' in f.name and f.suffix == '.csv']
+        crazyflie_to_compare = [f for f in files_to_process if 'crazyflie' in f.name and f.suffix == '.csv']
+        
+        if scan_to_compare:
+            comparer.compare_scan_data(scan_to_compare)
+        
+        if crazyflie_to_compare:
+            comparer.compare_crazyflie_data(crazyflie_to_compare)
+            
     success_count = 0
     fail_count = 0
     

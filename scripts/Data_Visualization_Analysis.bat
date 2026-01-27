@@ -23,14 +23,16 @@ echo   [1] Auto analyze all data (Recommended)
 echo   [2] Analyze Crazyflie training logs
 echo   [3] Analyze scan data
 echo   [4] Analyze specific file
+echo   [5] Comparison Analysis (Overlay metrics on one graph)
 echo   [0] Return to main menu
 echo.
-set /p choice=Enter option (0-4): 
+set /p choice=Enter option (0-5): 
 
 if "%choice%"=="1" goto auto_analyze
 if "%choice%"=="2" goto analyze_crazyflie
 if "%choice%"=="3" goto analyze_scan
 if "%choice%"=="4" goto analyze_file
+if "%choice%"=="5" goto compare_analyze
 if "%choice%"=="0" goto end
 
 echo.
@@ -186,6 +188,30 @@ set /p open_dir=Open result directory? (y/n):
 if /i "%open_dir%"=="y" (
     start "" "%cd%\analysis_results"
 )
+
+pause
+goto menu
+
+:compare_analyze
+cls
+echo ============================================================
+echo Comparison Analysis (Overlaying Metrics)
+echo ============================================================
+echo.
+echo Scanning and comparing similar data...
+echo.
+
+cd /d "%~dp0.."
+call myvenv\Scripts\activate.bat
+
+python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results --compare --show
+
+echo.
+echo ============================================================
+echo Comparison Analysis Completed!
+echo Results saved in: %cd%\analysis_results\comparison_results
+echo ============================================================
+echo.
 
 pause
 goto menu
