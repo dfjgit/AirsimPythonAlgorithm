@@ -35,8 +35,17 @@ class DataCollector:
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
         self.enable_debug_print = enable_debug_print  # 控制DEBUG打印开关
         
+        # 外部数据记录
+        self.external_data = {}
+        self.external_data_lock = threading.Lock()
+        
         # 初始化CSV文件
         self._init_csv_file(data_dir)
+    
+    def set_external_data(self, key: str, value: Any):
+        """设置外部数据（如训练奖励、步数等），将在下一次采集时记录"""
+        with self.external_data_lock:
+            self.external_data[key] = value
     
     def _init_csv_file(self, data_dir: Optional[str] = None):
         """初始化CSV文件并写入表头"""
@@ -97,15 +106,18 @@ class DataCollector:
               get_runtime_data_func: Callable,
               get_algorithms_func: Callable,
               get_drone_names_func: Callable,
-              get_battery_data_func: Callable,  # 新增：获取电量数据的函数
-              data_lock: threading.Lock,
-              grid_lock: threading.Lock):
+              get_battery_data_func: Callable,  
+              get_training_data_func: Optional[Callable] = None,  # 新增：获取训练数据的函数
+              data_lock: Optional[threading.Lock] = None,
+              grid_lock: Optional[threading.Lock] = None):
         """
         启动数据采集线程
         :param get_grid_data_func: 获取网格数据的函数
         :param get_runtime_data_func: 获取运行时数据的函数（返回Dict[str, ScannerRuntimeData]）
         :param get_algorithms_func: 获取算法实例的函数（返回Dict[str, ScannerAlgorithm]）
         :param get_drone_names_func: 获取无人机名称列表的函数
+        :param get_battery_data_func: 获取电量数据的函数
+        :param get_training_data_func: 获取训练数据的函数（返回Dict[str, Any]）
         :param data_lock: 数据锁
         :param grid_lock: 网格锁
         """
@@ -116,6 +128,12 @@ class DataCollector:
         self.running = True
         self.start_time = time.time()
         
+        # 兼容旧版本调用（如果没有传锁）
+        if data_lock is None:
+            data_lock = threading.Lock()
+        if grid_lock is None:
+            grid_lock = threading.Lock()
+            
         self.collection_thread = threading.Thread(
             target=self._collection_thread,
             args=(
@@ -123,7 +141,8 @@ class DataCollector:
                 get_runtime_data_func,
                 get_algorithms_func,
                 get_drone_names_func,
-                get_battery_data_func,  # 新增
+                get_battery_data_func,
+                get_training_data_func,  # 新增
                 data_lock,
                 grid_lock
             ),
@@ -157,7 +176,8 @@ class DataCollector:
                           get_runtime_data_func,
                           get_algorithms_func,
                           get_drone_names_func,
-                          get_battery_data_func,  # 新增
+                          get_battery_data_func,
+                          get_training_data_func,  # 新增
                           data_lock,
                           grid_lock):
         """数据采集线程主循环"""
@@ -173,6 +193,18 @@ class DataCollector:
                 runtime_data_dict = get_runtime_data_func()
                 algorithms_dict = get_algorithms_func()
                 drone_names = get_drone_names_func()
+                
+                # 获取训练数据
+                training_data = {}
+                if get_training_data_func:
+                    try:
+                        training_data = get_training_data_func()
+                    except:
+                        pass
+                
+                # 获取外部手动设置的数据
+                with self.external_data_lock:
+                    training_data.update(self.external_data)
                 
                 # 检查数据是否就绪
                 first_drone_name = None
@@ -301,7 +333,11 @@ class DataCollector:
                         'entropy_coefficient',
                         'distance_coefficient',
                         'leader_range_coefficient',
-                        'direction_retention_coefficient'
+                        'direction_retention_coefficient',
+                        'training_episode',   # 新增
+                        'training_step',      # 新增
+                        'step_reward',        # 新增
+                        'total_reward'        # 新增
                     ]
                     # 为每个无人机添加坐标列
                     for drone_name in self.drone_names_list:
@@ -342,7 +378,11 @@ class DataCollector:
                         weights.get('entropyCoefficient', 0.0),
                         weights.get('distanceCoefficient', 0.0),
                         weights.get('leaderRangeCoefficient', 0.0),
-                        weights.get('directionRetentionCoefficient', 0.0)
+                        weights.get('directionRetentionCoefficient', 0.0),
+                        training_data.get('episode', 0),
+                        training_data.get('step', 0),
+                        f"{training_data.get('reward', 0.0):.4f}",
+                        f"{training_data.get('total_reward', 0.0):.4f}"
                     ]
                     
                     # 添加所有无人机的坐标

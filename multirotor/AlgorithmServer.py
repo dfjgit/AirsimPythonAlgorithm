@@ -269,6 +269,14 @@ class MultiDroneAlgorithmServer:
         """重置指定无人机的电量为初始值"""
         return self.battery_manager.reset_voltage(drone_name)
 
+    def set_training_stats(self, episode: int, step: int, reward: float, total_reward: float):
+        """设置训练统计信息，用于数据采集记录"""
+        if self.data_collector:
+            self.data_collector.set_external_data('episode', episode)
+            self.data_collector.set_external_data('step', step)
+            self.data_collector.set_external_data('reward', reward)
+            self.data_collector.set_external_data('total_reward', total_reward)
+
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         """获取所有无人机的电量数据"""
         return self.battery_manager.get_all_battery_data()
@@ -422,7 +430,7 @@ class MultiDroneAlgorithmServer:
                 get_runtime_data_func=lambda: self.unity_runtime_data,
                 get_algorithms_func=lambda: self.algorithms,
                 get_drone_names_func=lambda: self.drone_names,
-                get_battery_data_func=lambda: self.get_all_battery_data(),  # 添加电量数据获取函数
+                get_battery_data_func=lambda: self.get_all_battery_data(),
                 data_lock=self.data_lock,
                 grid_lock=self.grid_lock
             )

@@ -310,38 +310,68 @@ class CrazyflieDataVisualizer:
                 plt.close()
     
     def _plot_episode_stats(self, episode_stats: List[Dict], output_dir: Path):
-        """绘制 Episode 统计信息"""
+        """绘制 Episode 统计信息与学习速度分析"""
         df = pd.DataFrame(episode_stats)
         
         if df.empty:
             return
         
-        fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+        fig, axes = plt.subplots(3, 1, figsize=(14, 15))
         
-        # 奖励曲线
+        # 1. 奖励曲线与平滑趋势
         if 'reward' in df.columns and 'episode' in df.columns:
-            axes[0].plot(df['episode'], df['reward'], linewidth=2, marker='o', markersize=4)
+            axes[0].plot(df['episode'], df['reward'], color='blue', alpha=0.3, label='原始奖励')
+            
+            # 移动平均线
+            window = max(2, min(10, len(df) // 2))
+            moving_avg = df['reward'].rolling(window=window).mean()
+            axes[0].plot(df['episode'], moving_avg, linewidth=3, color='red', label=f'{window}-Episode 移动平均')
+            
             axes[0].set_xlabel('Episode', fontsize=12)
             axes[0].set_ylabel('总奖励', fontsize=12)
-            axes[0].set_title('Episode 奖励曲线', fontsize=14, fontweight='bold')
+            axes[0].set_title('Episode 奖励曲线 (收敛趋势)', fontsize=14, fontweight='bold')
             axes[0].grid(True, alpha=0.3)
+            axes[0].legend()
+
+        # 2. 学习速度分析 (奖励上升斜率)
+        if 'reward' in df.columns and len(df) > 5:
+            # 计算奖励的变化斜率 (使用平滑后的数据)
+            # 斜率代表每 Episode 奖励的增长量
+            slope = moving_avg.diff().fillna(0)
             
-            # 添加移动平均线
-            if len(df) > 5:
-                window = min(10, len(df) // 2)
-                moving_avg = df['reward'].rolling(window=window).mean()
-                axes[0].plot(df['episode'], moving_avg, linewidth=3, alpha=0.6, 
-                           label=f'{window}-Episode 移动平均', color='red')
-                axes[0].legend()
-        
-        # Episode 长度
-        if 'length' in df.columns and 'episode' in df.columns:
-            axes[1].plot(df['episode'], df['length'], linewidth=2, marker='s', 
-                        markersize=4, color='orange')
+            # 使用填色图展示学习爆发期
+            axes[1].fill_between(df['episode'], slope, 0, where=(slope >= 0), 
+                               color='green', alpha=0.3, label='正向学习 (策略改进)')
+            axes[1].fill_between(df['episode'], slope, 0, where=(slope < 0), 
+                               color='red', alpha=0.2, label='策略波动')
+            
+            axes[1].plot(df['episode'], slope, color='darkgreen', linewidth=1.5)
+            
+            # 计算平均学习速率
+            avg_slope = slope.mean()
+            axes[1].axhline(y=avg_slope, color='blue', linestyle='--', alpha=0.5, 
+                           label=f'平均学习速率: {avg_slope:.2f}/ep')
+            
             axes[1].set_xlabel('Episode', fontsize=12)
-            axes[1].set_ylabel('步数', fontsize=12)
-            axes[1].set_title('Episode 长度变化', fontsize=14, fontweight='bold')
+            axes[1].set_ylabel('奖励增长斜率', fontsize=12)
+            axes[1].set_title('学习速度分析 (证明策略快速习得)', fontsize=14, fontweight='bold')
             axes[1].grid(True, alpha=0.3)
+            axes[1].legend()
+        
+        # 3. Episode 长度
+        if 'length' in df.columns and 'episode' in df.columns:
+            axes[2].plot(df['episode'], df['length'], linewidth=2, marker='s', 
+                        markersize=4, color='orange', label='步数')
+            axes[2].set_xlabel('Episode', fontsize=12)
+            axes[2].set_ylabel('单次步数', fontsize=12)
+            axes[2].set_title('Episode 持续时长 (策略稳定性证明)', fontsize=14, fontweight='bold')
+            axes[2].grid(True, alpha=0.3)
+            
+            # 标注稳定性：如果后期步数变短且奖励变高，证明找到了更优路径
+            if len(df) > 10:
+                final_length = df['length'].tail(5).mean()
+                axes[2].axhline(y=final_length, color='red', linestyle=':', label=f'近期平均步数: {final_length:.1f}')
+                axes[2].legend()
         
         plt.tight_layout()
         plt.savefig(output_dir / "episode_stats.png", dpi=150)
@@ -722,6 +752,56 @@ class ScanDataVisualizer:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
 
+            # 7. 实时训练奖励与策略同步分析 (Training Sync Analysis)
+            try:
+                if "step_reward" in df.columns and "elapsed_time" in df.columns:
+                    fig9, ax9_1 = plt.subplots(figsize=(10, 6))
+                    
+                    # 绘制单步奖励
+                    ax9_1.plot(df["elapsed_time"], df["step_reward"], color='#1f77b4', alpha=0.4, label='实时步奖励')
+                    # 绘制移动平均奖励
+                    if len(df) > 10:
+                        reward_ma = df["step_reward"].rolling(window=10).mean()
+                        ax9_1.plot(df["elapsed_time"], reward_ma, color='#1f77b4', linewidth=2, label='步奖励趋势 (MA-10)')
+                    
+                    ax9_1.set_xlabel("时间 (s)")
+                    ax9_1.set_ylabel("奖励值", color='#1f77b4')
+                    ax9_1.tick_params(axis='y', labelcolor='#1f77b4')
+                    
+                    # 绘制累计奖励
+                    ax9_2 = ax9_1.twinx()
+                    if "total_reward" in df.columns:
+                        ax9_2.plot(df["elapsed_time"], df["total_reward"], color='darkred', linewidth=2.5, label='当前Episode累计奖励')
+                        ax9_2.set_ylabel("累计奖励", color='darkred')
+                        ax9_2.tick_params(axis='y', labelcolor='darkred')
+                    
+                    # 标注 Episode 切换点
+                    if "training_episode" in df.columns:
+                        ep_changes = df[df["training_episode"].diff() != 0].index
+                        for idx in ep_changes:
+                            if idx == 0: continue
+                            t = df["elapsed_time"].iloc[idx]
+                            ax9_1.axvline(x=t, color='gray', linestyle='--', alpha=0.5)
+                            ax9_1.text(t, ax9_1.get_ylim()[1], f' Ep.{int(df["training_episode"].iloc[idx])}', 
+                                      rotation=90, verticalalignment='top', fontsize=8)
+
+                    ax9_1.set_title("训练过程实时分析 (奖励与环境同步)", fontsize=14, fontweight='bold')
+                    
+                    # 合并图例
+                    h1, l1 = ax9_1.get_legend_handles_labels()
+                    h2, l2 = ax9_2.get_legend_handles_labels()
+                    ax9_1.legend(h1+h2, l1+l2, loc='upper left', fontsize=9)
+                    
+                    ax9_1.grid(True, alpha=0.3)
+                    fig9.tight_layout()
+                    figures.append((fig9, "training_realtime_sync.png"))
+                    LOGGER.info(f"  [成功] 生成图表: 训练实时同步分析")
+                    if self.show_plots:
+                        plt.show()
+                        plt.pause(0.1)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '训练实时同步': {e}")
+
             # 4. 如果是预览模式，问用户是否保存
             if self.show_plots:
                 plt.ioff()  # 关闭交互模式
@@ -919,7 +999,94 @@ class DataComparer:
         else:
             plt.close(fig5)
             
-        LOGGER.info(f"✅ 对比分析完成，结果保存在: {compare_dir}")
+        return True
+
+    def compare_training_results(self, files: List[Path]) -> bool:
+        """对比多份训练运行的学习曲线（支持 JSON 和 CSV 混合对比）"""
+        if len(files) < 2:
+            return False
+            
+        LOGGER.info(f"📊 开始跨格式对比分析 {len(files)} 份训练奖励数据...")
+        
+        all_stats = []
+        for f in files:
+            try:
+                if f.suffix == '.json':
+                    # 处理实体训练 JSON
+                    with open(f, 'r', encoding='utf-8') as jf:
+                        data = json.load(jf)
+                        stats = data.get('episode_stats', [])
+                        if stats:
+                            df = pd.DataFrame(stats)
+                            # 统一字段名：将实体 JSON 的 length 映射为 steps 以对齐 CSV
+                            if 'length' in df.columns:
+                                df = df.rename(columns={'length': 'steps'})
+                            all_stats.append((f.stem, df))
+                elif f.suffix == '.csv' and 'training_stats' in f.name:
+                    # 处理虚拟训练 CSV
+                    df = pd.read_csv(f)
+                    if not df.empty:
+                        # 确保 CSV 也有 episode 字段（如果 CSV 叫 'episode' 就不动）
+                        all_stats.append((f.stem, df))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取训练对比文件失败 {f.name}: {e}")
+                
+        if not all_stats:
+            LOGGER.warning("⚠️ 没有找到有效的训练统计数据进行对比")
+            return False
+            
+        compare_dir = self.output_dir / "comparison_training"
+        compare_dir.mkdir(exist_ok=True)
+        
+        # 1. 奖励曲线叠加对比
+        fig1, ax1 = plt.subplots(figsize=(12, 7))
+        for label, df in all_stats:
+            if 'reward' in df.columns and 'episode' in df.columns:
+                # 使用移动平均进行平滑对比
+                window = max(2, min(10, len(df) // 2))
+                smooth_reward = df['reward'].rolling(window=window).mean()
+                ax1.plot(df['episode'], smooth_reward, label=f'{label} (平滑)', linewidth=2)
+        
+        ax1.set_xlabel("Episode")
+        ax1.set_ylabel("总奖励")
+        ax1.set_title("不同实验 - 学习曲线对比 (奖励上升速度)", fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='best', fontsize=9)
+        plt.tight_layout()
+        plt.savefig(compare_dir / "compare_learning_curves.png", dpi=150)
+        
+        # 2. 学习速率 (斜率) 对比
+        fig2, ax2 = plt.subplots(figsize=(12, 7))
+        slopes = []
+        for label, df in all_stats:
+            if 'reward' in df.columns and 'episode' in df.columns and len(df) > 5:
+                # 计算总体的奖励上升斜率 (线性拟合)
+                from scipy import stats as scipy_stats
+                # 过滤掉前几个Episode（通常是随机探索）
+                learn_df = df.tail(int(len(df)*0.8))
+                if len(learn_df) > 2:
+                    slope, _, _, _, _ = scipy_stats.linregress(learn_df['episode'], learn_df['reward'])
+                    slopes.append({'label': label, 'slope': slope})
+        
+        if slopes:
+            df_slopes = pd.DataFrame(slopes)
+            bars = ax2.bar(df_slopes['label'], df_slopes['slope'], color=plt.cm.viridis(np.linspace(0.3, 0.8, len(slopes))))
+            ax2.set_ylabel("奖励增长斜率 (Learning Rate)")
+            ax2.set_title("学习速度量化对比 (证明算法习得效率)", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值
+            for bar in bars:
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}', ha='center', va='bottom')
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "compare_learning_speed.png", dpi=150)
+        else:
+            plt.close(fig2)
+            
+        LOGGER.info(f"✅ 训练对比分析完成，结果保存在: {compare_dir}")
         
         if self.show_plots:
             plt.show()
@@ -1035,12 +1202,17 @@ def main():
         # 分组文件
         scan_to_compare = [f for f in files_to_process if 'scan_data' in f.name and f.suffix == '.csv']
         crazyflie_to_compare = [f for f in files_to_process if 'crazyflie' in f.name and f.suffix == '.csv']
+        # 训练奖励对比：合并 JSON 和 training_stats CSV
+        training_to_compare = [f for f in files_to_process if f.suffix == '.json' or ('training_stats' in f.name and f.suffix == '.csv')]
         
         if scan_to_compare:
             comparer.compare_scan_data(scan_to_compare)
         
         if crazyflie_to_compare:
             comparer.compare_crazyflie_data(crazyflie_to_compare)
+
+        if training_to_compare:
+            comparer.compare_training_results(training_to_compare)
             
     success_count = 0
     fail_count = 0

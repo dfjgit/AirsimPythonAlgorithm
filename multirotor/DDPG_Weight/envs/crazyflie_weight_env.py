@@ -541,6 +541,8 @@ class CrazyflieOnlineWeightEnv(gym.Env):
 
         # 环境状态变量
         self.step_count = 0  # 当前步数计数
+        self.episode_count = 0  # Episode 计数
+        self.total_episode_reward = 0.0  # 当前 Episode 总奖励
         self.prev_scanned_cells = 0  # 上一次扫描的网格单元数量
         self.last_action = np.zeros(5, dtype=np.float32)  # 上一次的动作（权重）
         self._has_initial_action = False  # 是否已设置初始动作（用于安全限制）
@@ -555,8 +557,12 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         返回:
             初始观察状态（18维numpy数组）
         """
+        # Episode 计数
+        self.episode_count += 1
+        
         # 重置计数器
         self.step_count = 0
+        self.total_episode_reward = 0.0
         self.last_action = np.zeros(5, dtype=np.float32)
         self._has_initial_action = False
 
@@ -630,6 +636,17 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         # 获取新状态并计算奖励
         next_state = self._get_state()
         reward = self._calculate_reward(action)
+        self.total_episode_reward += reward
+        
+        # 将训练统计信息传递给服务器（用于数据采集到 CSV）
+        if self.server:
+            self.server.set_training_stats(
+                episode=self.episode_count,
+                step=self.step_count,
+                reward=float(reward),
+                total_reward=float(self.total_episode_reward)
+            )
+
         # 判断是否结束：达到最大步数
         done = self.step_count >= self.config.max_steps
 

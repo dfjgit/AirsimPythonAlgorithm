@@ -73,6 +73,7 @@ class SimpleWeightEnv(gym.Env):
         self.prev_scanned_cells = 0
         self.step_count = 0
         self.episode_count = 0  # 记录Episode编号
+        self.total_episode_reward = 0.0  # 记录当前Episode的总奖励
         self.last_action = np.zeros(5)  # 记录上一步的动作，用于电量消耗计算
         self.prev_velocity = np.zeros(3, dtype=np.float32)
         self.prev_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -148,6 +149,7 @@ class SimpleWeightEnv(gym.Env):
                 self.prev_scanned_cells = 0
         
         self.step_count = 0
+        self.total_episode_reward = 0.0
         self.last_action = np.zeros(5)
         self.prev_velocity = np.zeros(3, dtype=np.float32)
         self.prev_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -283,6 +285,16 @@ class SimpleWeightEnv(gym.Env):
         
         # 计算奖励
         reward = self._calculate_reward(action)
+        self.total_episode_reward += reward
+        
+        # 将训练统计信息传递给服务器（用于数据采集）
+        if self.server:
+            self.server.set_training_stats(
+                episode=self.episode_count,
+                step=self.step_count,
+                reward=float(reward),
+                total_reward=float(self.total_episode_reward)
+            )
         
         # 记录当前动作
         self.last_action = action.copy()
