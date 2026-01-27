@@ -263,18 +263,51 @@ class CrazyflieDataVisualizer:
             'directionRetentionCoefficient': '方向保持系数'
         }
         
-        fig, ax = plt.subplots(figsize=(14, 7))
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), gridspec_kw={'height_ratios': [2, 1]})
         
+        # 1. 权重值变化
         for col in weight_cols:
             if col in df.columns:
-                ax.plot(df['step'], df[col], label=weight_names.get(col, col), 
+                ax1.plot(df['step'], df[col], label=weight_names.get(col, col), 
                        linewidth=2, alpha=0.8, marker='o', markersize=3)
         
-        ax.set_xlabel('训练步数', fontsize=12)
-        ax.set_ylabel('系数值', fontsize=12)
-        ax.set_title('APF 权重系数变化历史', fontsize=14, fontweight='bold')
-        ax.legend(loc='best', fontsize=10)
-        ax.grid(True, alpha=0.3)
+        ax1.set_xlabel('训练步数', fontsize=12)
+        ax1.set_ylabel('系数值', fontsize=12)
+        ax1.set_title('APF 权重系数变化历史 (策略演进过程)', fontsize=14, fontweight='bold')
+        ax1.legend(loc='best', fontsize=10)
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. 稳定性分析 (滚动标准差)
+        # 计算所有权重的滚动标准差之和，作为策略震荡的量化指标
+        window = max(5, len(df) // 10)
+        stability_df = pd.DataFrame()
+        for col in weight_cols:
+            if col in df.columns:
+                stability_df[col] = df[col].rolling(window=window).std()
+        
+        if not stability_df.empty:
+            total_std = stability_df.mean(axis=1)
+            ax2.fill_between(df['step'], total_std, 0, color='purple', alpha=0.2, label='平均波动强度')
+            ax2.plot(df['step'], total_std, color='purple', linewidth=1.5)
+            
+            # 标注收敛点：如果后期标准差保持在较低水平
+            late_std = total_std.tail(len(df)//5).mean()
+            ax2.axhline(y=late_std, color='red', linestyle='--', alpha=0.6, 
+                       label=f'后期平均波动: {late_std:.4f}')
+            
+            if late_std < 0.05:
+                ax2.text(0.05, 0.85, "✅ 策略已趋于稳定 (收敛)", transform=ax2.transAxes, 
+                        color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+            else:
+                ax2.text(0.05, 0.85, "⚠️ 策略仍在震荡 (未完全收敛)", transform=ax2.transAxes, 
+                        color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+
+        ax2.set_xlabel('训练步数', fontsize=12)
+        ax2.set_ylabel('标准差 (Stability)', fontsize=12)
+        ax2.set_title(f'策略收敛性证明 (滚动窗口={window}) - 波动越小越稳定', fontsize=13, fontweight='bold')
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.grid(True, alpha=0.3)
+
         plt.tight_layout()
         plt.savefig(output_dir / "weight_history.png", dpi=150)
         if self.show_plots:
@@ -642,19 +675,52 @@ class ScanDataVisualizer:
                 except Exception as e:
                     LOGGER.error(f"  [失败] 生成图表 '熵值快照': {e}", exc_info=True)
 
-            # 算法权重
-            weight_cols = ["repulsion_coefficient", "entropy_coefficient", "distance_coefficient"]
+            # 算法权重与策略稳定性分析
+            weight_cols = ["repulsion_coefficient", "entropy_coefficient", "distance_coefficient", 
+                           "leader_range_coefficient", "direction_retention_coefficient"]
             if any(c in df.columns for c in weight_cols):
                 try:
-                    fig6, ax6 = plt.subplots(figsize=(10, 5))
+                    fig6, (ax6_1, ax6_2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [2, 1]})
+                    
+                    # 1. 权重变化曲线
                     for c in weight_cols:
                         if c in df.columns:
-                            ax6.plot(df["elapsed_time"], df[c], label=c.replace('_', ' '))
-                    ax6.set_title("算法自适应权重变化", fontsize=14, fontweight='bold')
-                    ax6.set_xlabel("时间 (s)")
-                    ax6.set_ylabel("系数值")
-                    ax6.legend()
-                    ax6.grid(True, alpha=0.3)
+                            ax6_1.plot(df["elapsed_time"], df[c], label=c.replace('_', ' '), linewidth=1.5)
+                    ax6_1.set_title("算法权重动态响应 (策略执行详志)", fontsize=14, fontweight='bold')
+                    ax6_1.set_ylabel("系数值")
+                    ax6_1.legend(loc='best', fontsize=8)
+                    ax6_1.grid(True, alpha=0.3)
+                    
+                    # 2. 策略震荡分析 (Stability)
+                    # 计算权重变化的滚动方差
+                    window = max(5, len(df) // 10)
+                    var_df = pd.DataFrame()
+                    for c in weight_cols:
+                        if c in df.columns:
+                            var_df[c] = df[c].rolling(window=window).var()
+                    
+                    if not var_df.empty:
+                        total_var = var_df.mean(axis=1).fillna(0)
+                        ax6_2.fill_between(df["elapsed_time"], total_var, 0, color='darkorange', alpha=0.2, label='策略波动强度 (Variance)')
+                        ax6_2.plot(df["elapsed_time"], total_var, color='darkorange', linewidth=1)
+                        
+                        # 稳定性评估
+                        late_var = total_var.tail(len(df)//4).mean()
+                        ax6_2.axhline(y=late_var, color='red', linestyle='--', alpha=0.5, label=f'后期平均波动: {late_var:.6f}')
+                        
+                        if late_var < 0.001:
+                            ax6_2.text(0.05, 0.8, "✅ 权重已收敛，参数输出稳定", transform=ax6_2.transAxes, 
+                                    color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
+                        else:
+                            ax6_2.text(0.05, 0.8, "⚠️ 权重仍在动态调整中", transform=ax6_2.transAxes, 
+                                    color='blue', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
+                    
+                    ax6_2.set_xlabel("时间 (s)")
+                    ax6_2.set_ylabel("方差 (Stability)")
+                    ax6_2.set_title("策略收敛性证明 - 曲线趋平证明参数已稳定", fontsize=12, fontweight='bold')
+                    ax6_2.grid(True, alpha=0.3)
+                    ax6_2.legend(loc='upper right', fontsize=8)
+                    
                     fig6.tight_layout()
                     figures.append((fig6, "algorithm_weights.png"))
                     LOGGER.info(f"  [成功] 生成图表: 权重变化")

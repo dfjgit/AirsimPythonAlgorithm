@@ -374,9 +374,10 @@ timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repu
 - **电压-进度双轴图**：在 `battery_endurance_analysis.png` 中对齐电压下降曲线（左轴）与扫描进度曲线（右轴）。
 - **任务闭环证明**：证明在电池电压下降到安全阈值之前，扫描任务已达到 90% 以上的完成度，验证工程落地的可行性。
 
-#### 4. 学习速度与策略习得证明 (Learning Analysis)
+#### 4. 学习速度与策略收敛证明 (Learning & Convergence Analysis)
 - **奖励增长斜率**：使用线性回归（Linear Regression）量化奖励曲线的上升斜率。
-- **习得效率证明**：通过 `compare_learning_speed.png` 对比不同实验的斜率，量化证明 DDPG 算法能快速从随机探索转向有效决策。
+- **权重稳定性证明**：通过计算训练后期权重参数的滚动标准差（Rolling Std），量化证明策略已趋于稳定，而非发散震荡。
+- **收敛状态判定**：系统自动根据波动强度判定“已收敛”或“震荡中”，为模型可用性提供科学依据。
 
 #### 5. 多机协作加速比证明 (Collaboration Speedup)
 - **加速比 (Speedup)**：计算公式为 $S = T_{single} / T_{multi}$。
