@@ -10,14 +10,13 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 
 ### 核心特性
 
-- ✅ **人工势场算法（APF）**：多因素权重合成，智能路径规划
-- ✅ **强化学习支持**：DDPG 权重预测（DQN 移动控制开发中）
-- ✅ **多无人机协同**：支持 1-10 台无人机同时控制
-- ✅ **实时通信**：与 Unity 双向数据交互（TCP Socket）
-- ✅ **数据采集系统**：自动采集扫描数据、权重值和电量信息
-- ✅ **可视化工具**：2D 实时可视化 + 训练可视化（奖励曲线、收敛分析）
-- ✅ **统一配置管理**：unified_train_config.json 统一管理所有训练模式
-- ✅ **模型覆盖控制**：支持固定名称覆盖或时间戳版本控制
+- ✅ **人工势场算法（APF）**：多因素权重合成，实现避障与探索的动态平衡。
+- ✅ **科学论证支持 (PoC)**：内置系统活跃度、多机加速比、续航闭环、学习速率等量化证明工具。
+- ✅ **强化学习集成**：支持 DDPG 权重预测，实现算法参数的在线/离线智能进化。
+- ✅ **全链路数据采集**：同步记录物理、决策、电池及训练元数据，确保分析的闭环完整性。
+- ✅ **虚实融合训练**：支持虚拟仿真与实体无人机数据的混合实时训练（Hybrid Training）。
+- ✅ **跨格式透明分析**：无缝对比 JSON（实体机）与 CSV（仿真）数据，自动字段对齐。
+- ✅ **多无人机协同**：支持 1-10 台无人机集群控制，提供协同效能量化评估。
 
 ---
 
@@ -127,15 +126,12 @@ AirsimAlgorithmPython/
 │   │
 │   ├── Algorithm/                   # 算法实现模块
 │   │   ├── scanner_algorithm.py     # APF 算法核心
-│   │   ├── scanner_config_data.py   # 配置数据类
-│   │   ├── scanner_runtime_data.py  # 运行时数据类
-│   │   ├── HexGridDataModel.py      # 网格数据模型
-│   │   ├── Vector3.py               # 3D 向量类
-│   │   ├── simple_visualizer.py     # 可视化组件
 │   │   ├── data_collector.py        # 数据采集模块
-│   │   ├── battery_data.py          # 电池数据类
-│   │   ├── visualize_scan_csv.py    # CSV数据可视化
-│   │   └── visualize_training_data.py # 训练数据可视化 ✨
+│   │   ├── HexGridDataModel.py      # 网格数据模型
+│   │   ├── battery_data.py          # 电池状态模型
+│   │   ├── simple_visualizer.py     # 2D 实时可视化
+│   │   ├── visualize_scan_csv.py    # CSV 数据分布可视化
+│   │   └── visualize_training_data.py # 科学论证分析工具 (PoC) ✨
 │   │
 │   ├── AirsimServer/                # 服务器组件
 │   │   ├── drone_controller.py      # 无人机控制器
@@ -144,37 +140,26 @@ AirsimAlgorithmPython/
 │   │
 │   ├── Crazyswarm/                  # Crazyflie 实体机支持
 │   │   ├── crazyflie_operate.py     # 实体机控制
-│   │   ├── crazyflie_wayPoint.py    # 航点控制
 │   │   └── crazyswarm.py            # Crazyswarm 集成
 │   │
-│   ├── DDPG_Weight/                 # DDPG 权重预测模块
-│   │   ├── simple_weight_env.py     # 权重环境定义
-│   │   ├── crazyflie_weight_env.py  # Crazyflie 权重环境
+│   ├── DDPG_Weight/                 # DDPG 权重预测模块 ⭐
+│   │   ├── configs/                 # 配置文件目录
+│   │   ├── envs/                    # 强化学习环境与日志记录器
+│   │   ├── models/                  # 训练好的模型
+│   │   ├── tests/                   # 集成与单元测试
 │   │   ├── train_with_airsim_improved.py  # 训练脚本（仿真）
 │   │   ├── train_with_crazyflie_logs.py   # 日志训练
 │   │   ├── train_with_crazyflie_online.py # 在线训练
 │   │   ├── train_with_hybrid.py     # 虚实融合训练
-│   │   ├── training_visualizer.py   # 训练可视化器 ✨
-│   │   ├── crazyflie_data_logger.py # Crazyflie 数据记录器 ✨
-│   │   ├── test_trained_model.py    # 模型测试
-│   │   ├── unified_train_config.json # 统一训练配置 ⭐
-│   │   ├── models/                  # 训练好的模型
-│   │   ├── crazyflie_logs/          # Crazyflie 训练日志 ✨
-│   │   ├── dqn_reward_config.json   # 奖励配置（仿真）
-│   │   └── crazyflie_reward_config.json # 奖励配置（实体机）
+│   │   ├── train_simple.py          # 基础训练脚本
+│   │   └── training_visualizer.py   # 训练实时可视化
 │   │
-│   ├── DQN_Movement/                 # DQN 移动控制模块
+│   ├── DQN_Movement/                 # DQN 移动控制模块 (实验性)
 │   │   ├── movement_env.py          # 移动环境定义
-│   │   ├── train_movement_dqn.py    # 训练脚本
-│   │   ├── models/                  # 训练好的模型
-│   │   └── movement_dqn_config.json # 配置文件
+│   │   └── train_movement_dqn.py    # 训练脚本
 │   │
-│   ├── DDPG与DQN介绍.md              # 强化学习模块说明
-│   ├── DDPG_Weight/                 # DDPG 权重预测模块
-│   │   ├── airsim_training_logs/    # 虚拟训练数据日志 ✨
-│   │   ├── crazyflie_logs/          # Crazyflie 训练日志 ✨
-│   │   └── ...
-│   └── DQN_Movement/                 # DQN 移动控制模块
+│   ├── setup_path.py                # 路径设置工具
+│   └── DDPG与DQN介绍.md              # 强化学习模块说明
 │
 ├── scripts/                          # 批处理脚本
 │   ├── 运行系统-固定权重.bat
@@ -184,7 +169,7 @@ AirsimAlgorithmPython/
 │   ├── 训练权重DDPG-实体机在线.bat
 │   ├── 训练权重DDPG-虚实融合.bat
 │   ├── 训练移动DQN-真实环境.bat
-│   └── 数据可视化分析.bat          # ⭐新增！
+│   └── 数据可视化分析.bat          # ⭐ 科学论证入口
 │
 ├── requirements.txt                  # Python 依赖
 ├── setup.py                          # 安装脚本
@@ -232,26 +217,22 @@ AirsimAlgorithmPython/
 4. 控制无人机移动
 ```
 
-### 3. DataCollector（数据采集）
+### 3. DataCollector（数据采集系统）
 
-**功能**：自动采集扫描数据、权重值和电量信息
+**功能**：全自动多维度数据实时采集与落盘，打通“执行-决策-训练”数据全链路。
 
 **采集内容**：
-- 时间戳和运行时间
-- AOI 区域内栅格状态（已侦察/未侦察）
-- 扫描比例
-- 5 个权重系数值
-- 无人机位置信息（x, y, z）
-- 电池电压信息（每架无人机）
+- **物理扫描数据**：AOI 区域内栅格状态（已侦察/未侦察）、实时扫描比例（Scan Ratio）。
+- **飞行遥测数据**：多机实时 3D 位置（x, y, z）、电池电压（Battery Voltage）。
+- **算法决策数据**：APF 算法的 5 个实时权重系数。
+- **强化学习元数据**：Episode 编号、Step 步数、单步奖励（Step Reward）、累计总奖励（Total Reward）。
 
-**输出格式**：CSV 文件
-- 位置：`multirotor/DDPG_Weight/airsim_training_logs/scan_data_YYYYMMDD_HHMMSS.csv`
-- 频率：每秒一次
+**数据落盘**：
+- **存储路径**：`multirotor/DDPG_Weight/airsim_training_logs/scan_data_YYYYMMDD_HHMMSS.csv`
+- **对齐特性**：采用线程安全注入技术，将异步的强化学习奖励数据与同步的扫描详志完美对齐。
 
 **数据可视化**：
-- 使用 `visualize_scan_csv.py` 分析扫描数据
-- 使用 `visualize_training_data.py` 分析训练数据
-- 通过 `start.bat` 选项 [A] 快速启动
+- 通过 `start.bat` -> `[A]` 或运行 `scripts/数据可视化分析.bat` 进行深度量化分析。
 
 ### 4. SimpleVisualizer（可视化）
 
@@ -306,18 +287,20 @@ AirsimAlgorithmPython/
 }
 ```
 
-### DDPG 奖励配置（DDPG_Weight/dqn_reward_config.json）
+### DDPG 奖励配置
 
+系统使用 JSON 文件定义强化学习的奖励函数：
+- **仿真环境**：`multirotor/DDPG_Weight/configs/dqn_reward_config.json`
+- **实体环境**：`multirotor/DDPG_Weight/configs/crazyflie_reward_config.json`
+
+**核心配置项**：
 ```json
 {
     "rewards": {
-        "exploration_reward": 10.0,        // 探索奖励
+        "exploration_reward": 10.0,        // 探索奖励（发现新栅格）
         "collision_penalty": -50.0,       // 碰撞惩罚
-        "out_of_range_penalty": -20.0,    // 超出范围惩罚
-        "time_penalty": -0.1              // 时间惩罚
-    },
-    "thresholds": {
-        "scanned_entropy_threshold": 30   // 已扫描熵值阈值
+        "out_of_range_penalty": -20.0,    // 超出领机范围惩罚
+        "battery_low_penalty": -10.0      // 低电量惩罚
     }
 }
 ```
@@ -371,166 +354,65 @@ timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repu
 
 ---
 
-## 📊 数据可视化分析 ✨
+## 📊 数据可视化分析 (Scientific Proof of Concept) ✨
 
 ### 功能简介
 
-系统提供强大的数据可视化工具，支持对训练数据和扫描数据进行深度分析。
+系统提供了一套严谨的科学分析工具，不仅用于显示图表，更用于为算法效能、系统稳定性和工程可行性提供量化证明。
 
-### 支持的数据类型
+### 核心分析维度 (量化证明)
 
-#### 1. Crazyflie 实体无人机训练数据
+#### 1. 效能里程碑与覆盖分析 (Efficiency Analysis)
+- **任务完成证明**：自动标注 50%、80%、90% 及 95% 覆盖率的达成时间（达成秒数）。
+- **覆盖增长率**：分析覆盖率随时间的一阶导数，识别算法搜索效率的“爆发期”与“衰退期”。
 
-**数据格式**：
-- JSON 完整训练日志：`crazyflie_training_log_*.json`
-- CSV 飞行数据：`crazyflie_flight_*.csv`
-- CSV 权重历史：`crazyflie_weights_*.csv`
+#### 2. 系统活跃度与无死锁证明 (Liveness Analysis)
+- **活跃度监控**：通过 `liveness_analysis.png` 监控系统实时覆盖速率。
+- **死锁判定**：通过速率曲线是否长期归零科学判定系统是否存在死锁或搜索停滞点，证明算法在复杂环境下的持续推进能力。
 
-**可视化内容**：
-- 飞行轨迹（
-- 速度和加速度曲线
-- 权重变化历史
-- Episode 奖励曲线
-- 电池性能分析
+#### 3. 续航耐力与闭环证明 (Endurance Analysis)
+- **电压-进度双轴图**：在 `battery_endurance_analysis.png` 中对齐电压下降曲线（左轴）与扫描进度曲线（右轴）。
+- **任务闭环证明**：证明在电池电压下降到安全阈值之前，扫描任务已达到 90% 以上的完成度，验证工程落地的可行性。
 
-**示例图表**：
-- `UAV1_trajectory_2d.png` - 2D 飞行轨迹
-- `UAV1_trajectory_3d.png` - 3D 飞行轨迹
-- `UAV1_flight_stats.png` - 飞行状态（速度、高度、电池）
-- `weight_history.png` - APF 权重系数变化
-- `episode_stats.png` - Episode 统计信息
+#### 4. 学习速度与策略习得证明 (Learning Analysis)
+- **奖励增长斜率**：使用线性回归（Linear Regression）量化奖励曲线的上升斜率。
+- **习得效率证明**：通过 `compare_learning_speed.png` 对比不同实验的斜率，量化证明 DDPG 算法能快速从随机探索转向有效决策。
 
-#### 2. DataCollector 扫描数据
+#### 5. 多机协作加速比证明 (Collaboration Speedup)
+- **加速比 (Speedup)**：计算公式为 $S = T_{single} / T_{multi}$。
+- **协同证明**：通过对比 1 台、3 台、5 台无人机的任务达成耗时，量化证明多机系统相比单机系统的效能提升倍数。
 
-**数据格式**：
-- CSV 扫描数据：`scan_data_*.csv`
+### 跨格式兼容性支持
 
-**可视化内容**：
-- 扫描进度曲线
-- 熵值变化分析
-- 多无人机轨迹
-- 算法权重变化
+系统已实现对**虚拟仿真**与**实体飞行**数据格式的“透明对齐”：
+- **混合对比**：支持同时选取虚拟训练产出的 `training_stats_*.csv` 和实体训练产出的 `*.json` 进行奖励曲线对比。
+- **字段对齐**：自动将实体 JSON 中的 `length` 映射为虚拟 CSV 中的 `steps`，消除数据孤岛。
 
 ### 使用方法
 
-#### 方式一：使用主菜单（推荐）
-
-```bash
-# 启动主菜单
-start.bat
-
-# 选择选项 [A] 数据可视化分析
-```
-
-**子菜单选项**：
-- `[1]` 自动分析所有数据（推荐）- 自动扫描所有数据目录
-- `[2]` 分析 Crazyflie 训练日志 - 只分析实体机训练数据
-- `[3]` 分析扫描数据 - 只分析 DataCollector 数据
-- `[4]` 分析指定文件 - 拖拽文件到窗口
+#### 方式一：使用主菜单 (推荐)
+1. 启动 `start.bat`。
+2. 选择选项 `[A] 数据可视化分析`。
+3. 进入子菜单选择 `[5] 多个实验数据对比分析`（用于生成加速比和学习速度对比）。
 
 #### 方式二：直接运行批处理
+- 运行 `scripts/数据可视化分析.bat`。
 
+#### 方式三：命令行
 ```bash
-# Windows 中文版
-scripts\数据可视化分析.bat
+# 生成单个实验的详尽分析图表（含活跃度、续航、同步奖励）
+python multirotor/Algorithm/visualize_training_data.py --csv scan_data_XYZ.csv --show
 
-# Windows 英文版
-scripts\Data_Visualization_Analysis.bat
-```
-
-#### 方式三：命令行使用
-
-```bash
-# 自动扫描所有数据
-python multirotor/Algorithm/visualize_training_data.py --auto
-
-# 分析单个 JSON 文件
-python multirotor/Algorithm/visualize_training_data.py --json path/to/file.json
-
-# 分析单个 CSV 文件
-python multirotor/Algorithm/visualize_training_data.py --csv path/to/file.csv
-
-# 分析指定目录
-python multirotor/Algorithm/visualize_training_data.py --dir path/to/logs
-
-# 指定输出目录
-python multirotor/Algorithm/visualize_training_data.py --auto --out my_analysis
+# 进行多个实验的量化对比分析（生成加速比、学习速率对比）
+python multirotor/Algorithm/visualize_training_data.py --auto --compare
 ```
 
 ### 输出结果
 
-**默认输出目录**：`analysis_results/`
-
-**文件结构**：
-```
-analysis_results/
-├── crazyflie_20260126_153022/     # Crazyflie 训练会话
-│   ├── UAV1_trajectory_2d.png      # 2D 轨迹
-│   ├── UAV1_trajectory_3d.png      # 3D 轨迹
-│   ├── UAV1_flight_stats.png       # 飞行状态
-│   ├── weight_history.png          # 权重历史
-│   └── episode_stats.png           # Episode 统计
-│
-└── scan_data_20260126_150000/  # 扫描数据会话
-    ├── scan_progress.png           # 扫描进度
-    ├── trajectories_xy.png         # 水平轨迹
-    ├── trajectories_3d.png         # 3D 轨迹
-    └── algorithm_weights.png       # 算法权重
-```
-
-### 数据分析建议
-
-#### Crazyflie 训练数据分析
-
-1. **飞行轨迹分析**：
-   - 检查飞行路径是否平滑
-   - 分析速度变化是否合理
-   - 检查是否有异常的加速度
-
-2. **权重变化分析**：
-   - 观察权重是否收敛
-   - 分析不同权重系数的变化趋势
-   - 检查权重变化与奖励的关系
-
-3. **Episode 表现分析**：
-   - 绘制奖励曲线
-   - 分析 Episode 长度的变化
-   - 评估训练效果和收敛速度
-
-4. **电池性能分析**：
-   - 监控电池电压变化
-   - 评估飞行时间与电量的关系
-   - 检查是否有电量过低的情况
-
-#### 扫描数据分析
-
-1. **扫描效率分析**：
-   - 分析扫描完成度曲线
-   - 评估扫描速度
-
-2. **多机协同分析**：
-   - 观察无人机轨迹分布
-   - 检查是否有重叠区域
-
-3. **熵值变化分析**：
-   - 观察全局平均熵值变化
-   - 分析熵值分布的演变
-
-### 示例
-
-**分析所有训练数据**：
-```bash
-start.bat
-# 选择 [A] -> [1]
-# 系统自动扫描并分析所有数据
-# 结果保存在 analysis_results/ 目录
-```
-
-**分析特定训练会话**：
-```bash
-python multirotor/Algorithm/visualize_training_data.py \
-    --json multirotor/DDPG_Weight/crazyflie_logs/crazyflie_training_log_20260126_153022.json
-```
+分析结果统一保存至 `analysis_results/` 目录下：
+- `comparison_results/`：包含多机加速比、覆盖进度对比。
+- `comparison_training/`：包含奖励曲线叠加对比、学习速率斜率对比。
+- `scan_data_*/`：包含该次实验的活跃度、续航分析、实时同步奖励等 10+ 张专业图表。
 
 ---
 
@@ -541,7 +423,7 @@ python multirotor/Algorithm/visualize_training_data.py \
 **新特性**：从 v1.2.0 开始，所有训练模式统一使用 `unified_train_config.json` 配置文件。
 
 **配置文件位置**：
-- `multirotor/DDPG_Weight/unified_train_config.json`
+- `multirotor/DDPG_Weight/configs/unified_train_config.json`
 
 **配置结构**：
 ```json
@@ -824,7 +706,7 @@ cd multirotor/DQN_Movement
 python train_movement_with_airsim.py
 ```
 
-**状态**：开发中，存在一些问题
+**状态**：⚠️ **实验性功能**。目前由于动作空间映射和状态反馈延迟，该模块在复杂协同场景下表现尚不稳定，推荐优先使用 DDPG 权重预测配合 APF 算法。
 
 ---
 
@@ -969,7 +851,8 @@ python -c "from Algorithm.data_collector import DataCollector; print('OK')"
 
 ### 项目文档
 - **DDPG 与 DQN 介绍**：`multirotor/DDPG与DQN介绍.md`
-- **Episode 循环说明**：`multirotor/DDPG_Weight/Episode循环说明.md`
+- **Episode 循环说明**：`multirotor/DDPG_Weight/docs/Episode循环说明.md`
+- **图表预览与分析指南**：`multirotor/DDPG_Weight/docs/CHART_PREVIEW_USAGE.md`
 
 ---
 
@@ -1004,21 +887,19 @@ backports.ssl_match_hostname  # SSL 支持
 
 - **当前版本**：1.2.0
 - **Python 版本**：3.7+
-- **最后更新**：2026-01-26
+- **最后更新**：2026-01-26 (PoC 增强版)
 
 ### 更新日志
 
 - **v1.2.0**（2026-01-26）
-  - ✨ 新增统一配置文件系统（unified_train_config.json）
-  - ✨ 新增模型覆盖控制功能（--overwrite-model）
-  - ✨ 新增训练可视化器（Episode 奖励曲线、收敛分析）
-  - ✨ 数据采集新增电量信息（电池电压）
-  - ✨ 新增虚实融合训练模式
-  - ✨ 新增 Crazyflie 实体无人机数据记录器
-  - ✨ 新增训练数据可视化分析工具
-  - 🔧 所有批处理脚本更新为使用统一配置
-  - 🔧 训练脚本支持向后兼容旧配置文件
-  - 📝 更新所有配置文件说明和使用指南
+  - ✨ **科学论证 (PoC) 体系建立**：新增系统活跃度、多机加速比、学习速率斜率及续航闭环量化分析工具。
+  - ✨ **全链路数据打通**：实现 `DataCollector` 与强化学习环境的同步，将 Reward/Episode 注入扫描详志。
+  - ✨ **跨格式混合分析**：支持 JSON（实体）与 CSV（虚拟）数据的字段对齐与叠加对比分析。
+  - ✨ **统一配置文件系统**：所有训练模式迁移至 `unified_train_config.json`，支持虚实融合训练模式。
+  - ✨ **模型覆盖控制**：新增 `--overwrite-model` 参数，支持固定名称覆盖或时间戳版本控制。
+  - ✨ **训练实时可视化**：增强版 `training_visualizer` 支持平滑奖励曲线与收敛自动判定。
+  - 🔧 **目录布局重构**：优化 `DDPG_Weight` 结构，划分为 `configs/`, `envs/`, `docs/`, `tests/` 模块。
+  - 🔧 **故障自诊断**：更新分析脚本，支持自动识别异常数据点并标注任务里程碑。
 
 - **v1.1.0**（2026-01-21）
   - 增补 Crazyflie 实体机训练说明与配置
