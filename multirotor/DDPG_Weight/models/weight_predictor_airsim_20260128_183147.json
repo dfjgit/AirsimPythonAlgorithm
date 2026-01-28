@@ -1,0 +1,23 @@
+{
+  "UAV1": {
+    "repulsionCoefficient": 2.7204060554504395,
+    "entropyCoefficient": 2.616044282913208,
+    "distanceCoefficient": 2.206399440765381,
+    "leaderRangeCoefficient": 2.530161142349243,
+    "directionRetentionCoefficient": 3.6001908779144287
+  },
+  "UAV2": {
+    "repulsionCoefficient": 2.7204060554504395,
+    "entropyCoefficient": 2.616044282913208,
+    "distanceCoefficient": 2.206399440765381,
+    "leaderRangeCoefficient": 2.530161142349243,
+    "directionRetentionCoefficient": 3.6001908779144287
+  },
+  "UAV3": {
+    "repulsionCoefficient": 2.7204060554504395,
+    "entropyCoefficient": 2.616044282913208,
+    "distanceCoefficient": 2.206399440765381,
+    "leaderRangeCoefficient": 2.530161142349243,
+    "directionRetentionCoefficient": 3.6001908779144287
+  }
+}

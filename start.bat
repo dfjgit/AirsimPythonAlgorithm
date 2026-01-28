@@ -152,6 +152,7 @@ echo DDPG vs DQN 算法对比分析
 echo ============================================================
 echo.
 echo [提示] 此功能将对比 DDPG 和 DQN 两种算法的训练效果
+echo [提示] 包含：单独分析 + 基础对比 + 全方位对比
 echo.
 if not exist "myvenv\Scripts\activate.bat" (
     echo [错误] Python虚拟环境不存在
@@ -159,11 +160,24 @@ if not exist "myvenv\Scripts\activate.bat" (
     goto menu
 )
 call myvenv\Scripts\activate.bat
-python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --out analysis_results
+echo.
+echo [执行] 正在进行 DDPG 和 DQN 的完整对比分析...
+echo.
+python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --compare-algorithms-full --out analysis_results
 if %ERRORLEVEL% EQU 0 (
     echo.
+    echo ============================================================
     echo [成功] 算法对比分析完成！
-    echo [结果] 请查看 analysis_results\algorithm_comparison_ddpg_vs_dqn\ 目录
+    echo ============================================================
+    echo.
+    echo 输出目录结构：
+    echo   analysis_results\
+    echo   ├── DDPG_scan_data_XXXXXX\          [DDPG单独分析 - 11张图]
+    echo   ├── DQN_scan_data_XXXXXX\           [DQN单独分析 - 11张图]
+    echo   ├── dqn_movement_XXXXXX\            [DQN训练分析 - 4张图]
+    echo   ├── algorithm_comparison_ddpg_vs_dqn\     [基础对比 - 4图+报告]
+    echo   └── algorithm_comparison_ddpg_vs_dqn_full\ [全方位对比 - 6图+报告]
+    echo.
 ) else (
     echo.
     echo [失败] 算法对比分析失败，请检查是否有足够的训练数据

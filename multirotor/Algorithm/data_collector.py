@@ -30,14 +30,23 @@ class DataCollector:
         self.collection_thread: Optional[threading.Thread] = None
         self.csv_file = None
         self.csv_writer = None
+        self.training_csv_file = None  # 新增：训练数据 CSV 文件
+        self.training_csv_writer = None  # 新增：训练数据 CSV writer
         self.start_time = time.time()
         self.header_written = False  # 表头是否已写入
+        self.training_header_written = False  # 新增：训练数据表头是否已写入
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
         self.enable_debug_print = enable_debug_print  # 控制DEBUG打印开关
         
         # 外部数据记录
         self.external_data = {}
         self.external_data_lock = threading.Lock()
+        
+        # 训练数据统计
+        self.current_episode = 0
+        self.current_episode_reward = 0.0
+        self.current_episode_length = 0
+        self.last_episode = -1  # 用于检测 episode 切换
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -62,17 +71,32 @@ class DataCollector:
             # 生成CSV文件名（带时间戳）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_filename = data_path / f"scan_data_{timestamp}.csv"
+            training_csv_filename = data_path / f"ddpg_training_{timestamp}.csv"
             
-            # 打开CSV文件（表头将在第一次采集数据时写入）
+            # 打开 scan_data CSV 文件（表头将在第一次采集数据时写入）
             self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
             self.csv_writer = csv.writer(self.csv_file)
             self.csv_filename = csv_filename
             
-            logger.info(f"数据采集系统初始化完成，输出文件: {csv_filename}")
+            # 打开 training CSV 文件并写入表头
+            self.training_csv_file = open(training_csv_filename, 'w', newline='', encoding='utf-8')
+            self.training_csv_writer = csv.writer(self.training_csv_file)
+            self.training_csv_filename = training_csv_filename
+            
+            # 写入训练数据表头
+            self.training_csv_writer.writerow(['episode', 'reward', 'length', 'scanned_cells', 'timestep'])
+            self.training_csv_file.flush()
+            self.training_header_written = True
+            
+            logger.info(f"数据采集系统初始化完成")
+            logger.info(f"  - 扫描数据: {csv_filename}")
+            logger.info(f"  - 训练数据: {training_csv_filename}")
         except Exception as e:
             logger.error(f"数据采集系统初始化失败: {str(e)}")
             self.csv_file = None
             self.csv_writer = None
+            self.training_csv_file = None
+            self.training_csv_writer = None
 
     def _calc_entropy_distribution(self, entropies, bin_size: int = 5, max_entropy: int = 100):
         """计算熵值直方图和CDF（用于CSV输出）"""
@@ -155,21 +179,29 @@ class DataCollector:
         """停止数据采集线程并关闭文件"""
         if not self.running:
             return
-        
+            
         logger.info("停止数据采集线程...")
         self.running = False
-        
+            
         if self.collection_thread and self.collection_thread.is_alive():
             self.collection_thread.join(timeout=2.0)
             logger.info("数据采集线程已停止")
-        
-        # 关闭CSV文件
+            
+        # 关闭 CSV 文件
         if self.csv_file:
             try:
                 self.csv_file.close()
-                logger.info("数据采集文件已关闭")
+                logger.info(f"扫描数据文件已关闭: {self.csv_filename}")
             except Exception as e:
-                logger.error(f"关闭数据采集文件失败: {str(e)}")
+                logger.error(f"关闭扫描数据文件失败: {str(e)}")
+            
+        # 关闭训练数据 CSV 文件
+        if self.training_csv_file:
+            try:
+                self.training_csv_file.close()
+                logger.info(f"训练数据文件已关闭: {self.training_csv_filename}")
+            except Exception as e:
+                logger.error(f"关闭训练数据文件失败: {str(e)}")
     
     def _collection_thread(self,
                           get_grid_data_func,
@@ -339,11 +371,8 @@ class DataCollector:
                         'entropy_coefficient',
                         'distance_coefficient',
                         'leader_range_coefficient',
-                        'direction_retention_coefficient',
-                        'training_episode',   # 新增
-                        'training_step',      # 新增
-                        'step_reward',        # 新增
-                        'total_reward'        # 新增
+                        'direction_retention_coefficient'
+                        # 注意：已移除 training_episode, training_step, step_reward, total_reward
                     ]
                     # 为每个无人机添加坐标列
                     for drone_name in self.drone_names_list:
@@ -363,7 +392,7 @@ class DataCollector:
                     self.header_written = True
                     logger.info(f"CSV表头已写入，包含 {len(self.drone_names_list)} 个无人机的坐标列")
                 
-                # 记录到CSV文件
+                # 记录到 scan_data CSV 文件（不包含训练数据）
                 if self.csv_writer:
                     current_time = time.time()
                     elapsed_time = current_time - self.start_time
@@ -387,11 +416,8 @@ class DataCollector:
                         weights.get('entropyCoefficient', 0.0),
                         weights.get('distanceCoefficient', 0.0),
                         weights.get('leaderRangeCoefficient', 0.0),
-                        weights.get('directionRetentionCoefficient', 0.0),
-                        training_data.get('episode', 0),
-                        training_data.get('step', 0),
-                        f"{training_data.get('reward', 0.0):.4f}",
-                        f"{training_data.get('total_reward', 0.0):.4f}"
+                        weights.get('directionRetentionCoefficient', 0.0)
+                        # 注意：已移除训练数据
                     ]
                     
                     # 添加所有无人机的坐标和姿态
@@ -422,6 +448,34 @@ class DataCollector:
                             f"全局平均熵值={global_avg_entropy:.2f}, 全局采集比例={global_scan_ratio:.2f}%, "
                             f"权重={weights}, 无人机数={len(self.drone_names_list)}"
                         )
+                
+                # 写入训练数据（每个 episode 完成时）
+                if self.training_csv_writer and training_data:
+                    current_episode = training_data.get('episode', 0)
+                    step_reward = training_data.get('reward', 0.0)
+                    
+                    # 累计 episode 数据
+                    if current_episode != self.last_episode:
+                        # Episode 切换，写入上一个 episode 的数据
+                        if self.last_episode >= 0 and self.current_episode_length > 0:
+                            training_row = [
+                                self.last_episode,
+                                f"{self.current_episode_reward:.2f}",
+                                self.current_episode_length,
+                                scanned_count,  # 使用当前的扫描数据
+                                int(elapsed_time)  # timestep
+                            ]
+                            self.training_csv_writer.writerow(training_row)
+                            self.training_csv_file.flush()
+                        
+                        # 重置计数器
+                        self.last_episode = current_episode
+                        self.current_episode_reward = step_reward
+                        self.current_episode_length = 1
+                    else:
+                        # 同一 episode，累计
+                        self.current_episode_reward += step_reward
+                        self.current_episode_length += 1
                 
             except Exception as e:
                 logger.error(f"数据采集线程出错: {str(e)}")

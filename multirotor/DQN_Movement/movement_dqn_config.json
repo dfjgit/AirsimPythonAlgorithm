@@ -5,7 +5,7 @@
 
   "movement": {
     "step_size": 1.0,
-    "max_steps": 500,
+    "max_steps": 2400,
     "description": "移动参数：每步位移距离和最大步数"
   },
   
@@ -17,6 +17,8 @@
     "smooth_movement": 1.0,
     "step_penalty": -0.1,
     "success": 100.0,
+    "battery_low_penalty": 10.0,
+    "battery_optimal_reward": 2.0,
     "description": {
       "exploration": "发现新区域的奖励（每个新扫描单元格）",
       "entropy_reduction": "降低环境熵值的奖励",
@@ -24,7 +26,9 @@
       "out_of_range": "超出Leader范围的惩罚",
       "smooth_movement": "平滑移动的奖励",
       "step_penalty": "每步的小惩罚，鼓励快速完成",
-      "success": "成功完成扫描的大奖励"
+      "success": "成功完成扫描的大奖励",
+      "battery_low_penalty": "电量过低的惩罚",
+      "battery_optimal_reward": "电量在最优范围内的奖励"
     }
   },
   
@@ -33,19 +37,25 @@
     "scanned_entropy": 30.0,
     "nearby_entropy_distance": 10.0,
     "success_scan_ratio": 0.95,
+    "battery_low_threshold": 3.3,
+    "battery_optimal_min": 3.7,
+    "battery_optimal_max": 4.1,
     "description": {
       "collision_distance": "判定碰撞的距离阈值（米）",
       "scanned_entropy": "单元格被认为已扫描的熵值阈值",
       "nearby_entropy_distance": "局部熵值统计的范围（米）",
-      "success_scan_ratio": "认为任务成功的扫描完成比例"
+      "success_scan_ratio": "认为任务成功的扫描完成比例",
+      "battery_low_threshold": "电量过低阈值（伏）",
+      "battery_optimal_min": "电量最优范围下限（伏）",
+      "battery_optimal_max": "电量最优范围上限（伏）"
     }
   },
   
   "training": {
-    "total_timesteps": 100000,
+    "total_timesteps": 50000,
     "learning_rate": 0.0001,
     "buffer_size": 50000,
-    "learning_starts": 1000,
+    "learning_starts": 500,
     "batch_size": 32,
     "tau": 0.005,
     "gamma": 0.99,

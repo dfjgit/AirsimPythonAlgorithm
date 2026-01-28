@@ -44,11 +44,12 @@ class MovementEnv(gym.Env):
         # - Leader范围信息(2): 距离, 是否越界
         # - 扫描进度(3): 已扫描比例, 已扫描数量, 未扫描数量
         # - 其他无人机最近距离(1)
-        # 总计: 21维
+        # - 电量信息(2): 当前电压, 剩余电量百分比
+        # 总计: 23维
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(21,),
+            shape=(23,),
             dtype=np.float32
         )
         
@@ -121,6 +122,9 @@ class MovementEnv(gym.Env):
         if self.server:
             print(f"[DQN环境] 发送重置命令到Unity...")
             self.server.reset_environment()
+            # 重置电量
+            if hasattr(self.server, 'reset_battery_voltage'):
+                self.server.reset_battery_voltage(self.drone_name)
             import time
             time.sleep(1.0)  # 等待Unity完成重置
             print(f"[DQN环境] Unity重置完成")
@@ -205,10 +209,10 @@ class MovementEnv(gym.Env):
         return next_state, reward, terminated, truncated, info
     
     def _get_state(self):
-        """获取当前观察状态（21维）"""
+        """获取当前观察状态（23维：包含电量信息）"""
         if not self.server:
             # 测试模式：返回随机状态
-            return np.random.randn(21).astype(np.float32)
+            return np.random.randn(23).astype(np.float32)
             
         try:
             # 分离锁的获取，避免死锁
@@ -217,7 +221,7 @@ class MovementEnv(gym.Env):
                 runtime_data = self.server.unity_runtime_data.get(self.drone_name)
                 if not runtime_data:
                     print(f"[DQN环境] 警告: 无人机 {self.drone_name} 的runtime_data不存在，返回零状态")
-                    return np.zeros(21, dtype=np.float32)
+                    return np.zeros(23, dtype=np.float32)
                     
                 # 1. 位置 (3)
                 pos = runtime_data.position
@@ -279,6 +283,9 @@ class MovementEnv(gym.Env):
                     min_dist = self._get_min_distance_to_others(runtime_data)
                     min_dist_array = np.array([min_dist], dtype=np.float32)
                 
+            # 获取电量信息 (2)
+            battery_info = self._get_battery_info()
+            
             # 组合状态向量
             state = np.concatenate([
                 position,           # 3
@@ -288,7 +295,8 @@ class MovementEnv(gym.Env):
                 leader_rel,         # 3
                 leader_range,       # 2
                 scan_info,          # 3
-                min_dist_array      # 1
+                min_dist_array,     # 1
+                battery_info        # 2
             ])
                 
             return state
@@ -297,7 +305,7 @@ class MovementEnv(gym.Env):
             print(f"获取状态失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            return np.zeros(21, dtype=np.float32)
+            return np.zeros(23, dtype=np.float32)
     
     def _calculate_reward(self, action, prev_state, next_state):
         """计算奖励"""
@@ -365,6 +373,29 @@ class MovementEnv(gym.Env):
                 scan_ratio = self._get_scan_ratio()
                 if scan_ratio >= cfg_thresh['success_scan_ratio']:
                     reward += cfg_reward['success']
+                
+                # 8. 电量奖励与惩罚
+                if hasattr(self.server, 'get_battery_voltage'):
+                    current_voltage = self.server.get_battery_voltage(self.drone_name)
+                    battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+                    if battery_info:
+                        remaining_pct = battery_info.get_remaining_percentage()
+                        
+                        # 电量过低惩罚
+                        if 'battery_low_threshold' in cfg_thresh and current_voltage < cfg_thresh['battery_low_threshold']:
+                            penalty = cfg_reward.get('battery_low_penalty', 10.0)
+                            reward -= penalty
+                        
+                        # 电量最优范围奖励
+                        if 'battery_optimal_min' in cfg_thresh and 'battery_optimal_max' in cfg_thresh:
+                            if cfg_thresh['battery_optimal_min'] <= current_voltage <= cfg_thresh['battery_optimal_max']:
+                                bonus = cfg_reward.get('battery_optimal_reward', 2.0)
+                                reward += bonus
+                
+                # 每个动作都更新电量消耗
+                if hasattr(self.server, 'update_battery_voltage'):
+                    action_intensity = 0.5  # 动作强度，可根据实际动作调整
+                    self.server.update_battery_voltage(self.drone_name, action_intensity)
                 
         except Exception as e:
             print(f"计算奖励失败: {str(e)}")
@@ -526,6 +557,22 @@ class MovementEnv(gym.Env):
         ]
         return min(distances) if distances else 999.0
     
+    def _get_battery_info(self):
+        """获取电量信息：[电压, 剩余百分比]"""
+        if not self.server or not hasattr(self.server, 'get_battery_voltage'):
+            return np.array([4.2, 100.0], dtype=np.float32)  # 默认值：满电
+        
+        try:
+            voltage = self.server.get_battery_voltage(self.drone_name)
+            battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+            if battery_info:
+                percentage = battery_info.get_remaining_percentage()
+                return np.array([voltage, percentage], dtype=np.float32)
+            else:
+                return np.array([voltage, 100.0], dtype=np.float32)
+        except:
+            return np.array([4.2, 100.0], dtype=np.float32)
+    
     def render(self, mode='human'):
         """可视化（可选）"""
         pass
@@ -604,11 +651,11 @@ class MultiDroneMovementEnv(gym.Env):
         # 动作空间: 6个离散动作（所有无人机共享）
         self.action_space = spaces.Discrete(6)
         
-        # 观察空间: 21维（所有无人机共享相同结构）
+        # 观察空间: 23维（所有无人机共享相同结构）
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(21,),
+            shape=(23,),
             dtype=np.float32
         )
         
@@ -638,6 +685,7 @@ class MultiDroneMovementEnv(gym.Env):
         # 全局状态
         self.step_count = 0
         self.total_episode_reward = 0
+        self.episode_index = 0  # Episode 计数器（用于 DataCollector）
         
     def _load_config(self, config_path):
         """加载配置文件"""
@@ -685,6 +733,10 @@ class MultiDroneMovementEnv(gym.Env):
         if self.server:
             print(f"[DQN多机环境] 发送重置命令到Unity...")
             self.server.reset_environment()
+            # 重置所有无人机的电量
+            if hasattr(self.server, 'reset_battery_voltage'):
+                for drone_name in self.drone_names:
+                    self.server.reset_battery_voltage(drone_name)
             import time
             time.sleep(1.0)
             print(f"[DQN多机环境] Unity重置完成")
@@ -704,6 +756,9 @@ class MultiDroneMovementEnv(gym.Env):
         self.step_count = 0
         self.total_episode_reward = 0
         self.current_drone_idx = 0
+        
+        # Episode 计数器递增
+        self.episode_index += 1
         
         # 返回第一个无人机的状态
         print(f"[DQN多机环境] 获取初始状态...")
@@ -758,6 +813,15 @@ class MultiDroneMovementEnv(gym.Env):
         
         # 更新计数器
         self.step_count += 1
+        
+        # 将训练统计信息传递给服务器（用于 DataCollector）
+        if self.server and hasattr(self.server, 'set_training_stats'):
+            self.server.set_training_stats(
+                episode=self.episode_index,
+                step=self.step_count,
+                reward=float(reward),
+                total_reward=float(self.total_episode_reward)
+            )
         
         # 轮流到下一个无人机
         self.current_drone_idx = (self.current_drone_idx + 1) % self.num_drones
@@ -866,6 +930,9 @@ class MultiDroneMovementEnv(gym.Env):
             min_distance = self._get_min_distance_to_others(drone_name)
             min_dist_info = np.array([min_distance], dtype=np.float32)
             
+            # 第四步：获取电量信息
+            battery_info = self._get_battery_info_for_drone(drone_name)
+            
             # 拼接所有特征
             state = np.concatenate([
                 position,
@@ -875,7 +942,8 @@ class MultiDroneMovementEnv(gym.Env):
                 leader_rel,
                 leader_info,
                 scan_info,
-                min_dist_info
+                min_dist_info,
+                battery_info
             ])
             
             return state.astype(np.float32)
@@ -884,7 +952,7 @@ class MultiDroneMovementEnv(gym.Env):
             logger.error(f"获取状态失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            return np.zeros(21, dtype=np.float32)
+            return np.zeros(23, dtype=np.float32)
     
     def _get_min_distance_to_others(self, drone_name):
         """获取到其他无人机的最小距离"""
@@ -902,6 +970,22 @@ class MultiDroneMovementEnv(gym.Env):
                 return min_distance if min_distance != float('inf') else 100.0
         except:
             return 100.0
+    
+    def _get_battery_info_for_drone(self, drone_name):
+        """获取指定无人机的电量信息：[电压, 剩余百分比]"""
+        if not self.server or not hasattr(self.server, 'get_battery_voltage'):
+            return np.array([4.2, 100.0], dtype=np.float32)  # 默认值：满电
+        
+        try:
+            voltage = self.server.get_battery_voltage(drone_name)
+            battery_info = self.server.battery_manager.get_battery_info(drone_name)
+            if battery_info:
+                percentage = battery_info.get_remaining_percentage()
+                return np.array([voltage, percentage], dtype=np.float32)
+            else:
+                return np.array([voltage, 100.0], dtype=np.float32)
+        except:
+            return np.array([4.2, 100.0], dtype=np.float32)
     
     def _apply_movement(self, drone_name, displacement):
         """应用移动到无人机（通过AlgorithmServer的DQN控制模式）"""
@@ -958,6 +1042,33 @@ class MultiDroneMovementEnv(gym.Env):
         
         # 5. 步骤惩罚
         reward += self.config['rewards']['step_penalty']
+        
+        # 6. 电量奖励与惩罚
+        if self.server and hasattr(self.server, 'get_battery_voltage'):
+            try:
+                current_voltage = self.server.get_battery_voltage(drone_name)
+                battery_info = self.server.battery_manager.get_battery_info(drone_name)
+                if battery_info:
+                    # 电量过低惩罚
+                    if 'battery_low_threshold' in self.config['thresholds']:
+                        if current_voltage < self.config['thresholds']['battery_low_threshold']:
+                            penalty = self.config['rewards'].get('battery_low_penalty', 10.0)
+                            reward -= penalty
+                    
+                    # 电量最优范围奖励
+                    if 'battery_optimal_min' in self.config['thresholds'] and 'battery_optimal_max' in self.config['thresholds']:
+                        opt_min = self.config['thresholds']['battery_optimal_min']
+                        opt_max = self.config['thresholds']['battery_optimal_max']
+                        if opt_min <= current_voltage <= opt_max:
+                            bonus = self.config['rewards'].get('battery_optimal_reward', 2.0)
+                            reward += bonus
+                
+                # 更新电量消耗
+                if hasattr(self.server, 'update_battery_voltage'):
+                    action_intensity = 0.5
+                    self.server.update_battery_voltage(drone_name, action_intensity)
+            except Exception as e:
+                logger.debug(f"电量奖励计算失败: {str(e)}")
         
         return reward
     

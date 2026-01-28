@@ -26,6 +26,8 @@
     python visualize_training_data.py --json file.json    # 分析单个JSON文件
     python visualize_training_data.py --csv file.csv      # 分析单个CSV文件
     python visualize_training_data.py --dir path/to/logs  # 分析指定目录
+    python visualize_training_data.py --compare-algorithms        # DDPG vs DQN Episode奖励对比
+    python visualize_training_data.py --compare-algorithms-full   # DDPG vs DQN 全方位对比
 
 日期：2026-01-26
 """
@@ -75,6 +77,38 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 LOGGER = logging.getLogger(__name__)
+
+
+def normalize_percentage_column(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
+    """
+    处理百分号格式的列，将字符串百分比转换为数值
+    
+    Args:
+        df: DataFrame
+        column_name: 列名
+    
+    Returns:
+        处理后的 DataFrame
+    
+    Examples:
+        '2.34%' -> 2.34
+        '95.5%' -> 95.5
+        2.34 -> 2.34 (保持不变)
+    """
+    if column_name not in df.columns:
+        return df
+    
+    def convert_value(val):
+        if isinstance(val, str) and val.endswith('%'):
+            return float(val.rstrip('%'))
+        return float(val)
+    
+    try:
+        df[column_name] = df[column_name].apply(convert_value)
+    except Exception as e:
+        LOGGER.warning(f"⚠️  无法转换列 '{column_name}' 的百分比格式: {e}")
+    
+    return df
 
 
 class CrazyflieDataVisualizer:
@@ -479,6 +513,468 @@ class ScanDataVisualizer:
         self.output_dir = output_dir
         self.show_plots = show_plots
         self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def visualize_csv(self, csv_path: Path) -> bool:
+        """分析扫描数据 CSV（完整版，包含10+张图表）"""
+        run_name = csv_path.stem
+        LOGGER.info(f"📊 正在分析扫描数据: {csv_path.name}")
+        
+        # 检查文件大小
+        if csv_path.stat().st_size == 0:
+            LOGGER.warning(f"⚠️  文件 {csv_path.name} 是空文件，跳过。")
+            return False
+        
+        # 智能识别算法类型（根据文件路径）
+        algo_prefix = ""
+        csv_path_str = str(csv_path).replace("\\", "/")
+        if "DDPG_Weight" in csv_path_str or "airsim_training_logs" in csv_path_str:
+            algo_prefix = "DDPG_"
+        elif "DQN_Movement" in csv_path_str or "dqn_scan_data" in csv_path_str:
+            algo_prefix = "DQN_"
+        
+        # 创建输出子目录（添加算法前缀）
+        run_dir = self.output_dir / f"{algo_prefix}{run_name}"
+        run_dir.mkdir(exist_ok=True)
+
+        try:
+            # 加载数据
+            df, e_bins, e_hist, e_cdf = load_and_prepare(csv_path)
+            if df.empty:
+                LOGGER.warning(f"⚠️  文件 {csv_path.name} 没有有效数据，跳过。")
+                return False
+                
+            drones = _detect_drones(df.columns.tolist())
+
+            # 图表1: 扫描进度与覆盖效能分析
+            if "elapsed_time" in df.columns and "scan_ratio" in df.columns:
+                try:
+                    fig1, ax1 = plt.subplots(figsize=(10, 6))
+                    ax1.plot(df["elapsed_time"], df["scan_ratio"], label="AOI 区域覆盖率 (任务进度)", linewidth=3, color='#1f77b4')
+                    
+                    if "global_scan_ratio" in df.columns:
+                        ax1.plot(df["elapsed_time"], df["global_scan_ratio"], label="全局环境覆盖率", linestyle='--', color='gray', alpha=0.7)
+                    
+                    # 寻找关键里程碑
+                    milestones = [50, 80, 90, 95]
+                    for ms in milestones:
+                        ms_idx = df[df["scan_ratio"] >= ms].index
+                        if not ms_idx.empty:
+                            idx = ms_idx[0]
+                            t = df["elapsed_time"].iloc[idx]
+                            ax1.annotate(f'{ms}% @ {t:.1f}s', 
+                                        xy=(t, ms), xytext=(t + 5, ms - 10),
+                                        arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5),
+                                        fontsize=9)
+                            ax1.scatter(t, ms, color='red', s=30, zorder=5)
+
+                    ax1.set_xlabel("时间 (s)", fontsize=12)
+                    ax1.set_ylabel("覆盖百分比 (%)", fontsize=12)
+                    ax1.set_title("目标区域覆盖效能分析 (任务完成证明)", fontsize=14, fontweight='bold')
+                    ax1.set_ylim(0, 105)
+                    ax1.grid(True, alpha=0.3)
+                    ax1.legend(loc='lower right')
+                    
+                    # 绘制覆盖速率
+                    ax1_v = ax1.twinx()
+                    if len(df) > 5:
+                        dt = df["elapsed_time"].diff().fillna(1)
+                        dr = df["scan_ratio"].diff().fillna(0)
+                        velocity = (dr / dt).rolling(window=5).mean()
+                        ax1_v.fill_between(df["elapsed_time"], velocity, 0, alpha=0.1, color='green', label='覆盖速率')
+                        ax1_v.set_ylabel("覆盖速率 (%/s)", color='green', alpha=0.6)
+                        ax1_v.tick_params(axis='y', labelcolor='green')
+                    
+                    fig1.tight_layout()
+                    fig1.savefig(run_dir / "scan_progress.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 扫描进度与效能里程碑")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig1)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '扫描进度': {e}", exc_info=True)
+            
+            # 图表2: 熵值趋势与不确定性消除分析
+            if "global_avg_entropy" in df.columns:
+                try:
+                    fig2, ax2_1 = plt.subplots(figsize=(10, 6))
+                    ax2_1.plot(df["elapsed_time"], df["global_avg_entropy"], linewidth=2, color='green', label='平均熵 (H)')
+                    ax2_1.set_title("环境平均熵随时间变化 (不确定性消除趋势)", fontsize=14, fontweight='bold')
+                    ax2_1.set_xlabel("时间 (s)")
+                    ax2_1.set_ylabel("平均熵")
+                    ax2_1.grid(True, alpha=0.3)
+                    
+                    # 计算并绘制不确定性消除率 (UER)
+                    ax2_2 = ax2_1.twinx()
+                    initial_entropy = df["global_avg_entropy"].iloc[0]
+                    uer = (1 - df["global_avg_entropy"] / initial_entropy) * 100
+                    ax2_2.plot(df["elapsed_time"], uer, linewidth=2, color='blue', linestyle='--', label='不确定性消除率 (UER)')
+                    ax2_2.set_ylabel("消除率 (%)", color='blue')
+                    ax2_2.tick_params(axis='y', labelcolor='blue')
+                    ax2_2.set_ylim(0, 105)
+                    
+                    lines1, labels1 = ax2_1.get_legend_handles_labels()
+                    lines2, labels2 = ax2_2.get_legend_handles_labels()
+                    ax2_1.legend(lines1 + lines2, labels1 + labels2, loc='center right')
+                    
+                    fig2.tight_layout()
+                    fig2.savefig(run_dir / "entropy_trend.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 熵值趋势与消除率")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig2)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '熵值趋势': {e}", exc_info=True)
+
+                # 图表3: 不确定性消除效率分析
+                if "scan_ratio" in df.columns:
+                    try:
+                        fig_eff, ax_eff = plt.subplots(figsize=(10, 6))
+                        initial_entropy = df["global_avg_entropy"].iloc[0]
+                        uer_data = (1 - df["global_avg_entropy"] / initial_entropy) * 100
+                        
+                        ax_eff.plot(df["scan_ratio"], uer_data, linewidth=2, color='darkorange', label='实际消除路径')
+                        ax_eff.plot([0, 100], [0, 100], linestyle=':', color='gray', label='线性消除基准 (随机)')
+                        
+                        ax_eff.set_title("不确定性消除效率分析 (UEE)", fontsize=14, fontweight='bold')
+                        ax_eff.set_xlabel("扫描覆盖率 (%)")
+                        ax_eff.set_ylabel("不确定性消除率 (%)")
+                        ax_eff.grid(True, alpha=0.3)
+                        
+                        ax_eff.fill_between(df["scan_ratio"], df["scan_ratio"], uer_data, 
+                                       where=(uer_data >= df["scan_ratio"]), color='green', alpha=0.1, label='智能增益区')
+                        
+                        ax_eff.legend()
+                        fig_eff.tight_layout()
+                        fig_eff.savefig(run_dir / "uncertainty_elimination_efficiency.png", dpi=150)
+                        LOGGER.info(f"  [成功] 生成图表: 不确定性消除效率")
+                        if self.show_plots:
+                            plt.show()
+                        plt.close(fig_eff)
+                    except Exception as e:
+                        LOGGER.error(f"  [失败] 生成图表 '消除效率分析': {e}", exc_info=True)
+
+            # 图表4: 飞行轨迹 2D
+            if drones:
+                try:
+                    fig3, ax3 = plt.subplots(figsize=(8, 8))
+                    for drone in drones:
+                        x_col, y_col = f"{drone}_x", f"{drone}_y"
+                        if x_col in df.columns and y_col in df.columns:
+                            ax3.plot(df[x_col], df[y_col], label=f"无人机: {drone}", linewidth=1)
+                    ax3.set_xlabel("X (m)")
+                    ax3.set_ylabel("Y (m)")
+                    ax3.set_title("水平面飞行轨迹 (X-Y)")
+                    ax3.grid(True, alpha=0.3)
+                    ax3.legend()
+                    fig3.tight_layout()
+                    fig3.savefig(run_dir / "trajectories_xy.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 2D轨迹")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig3)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '2D轨迹': {e}", exc_info=True)
+
+            # 图表5: 飞行轨迹 3D
+            if drones:
+                try:
+                    fig4 = plt.figure(figsize=(10, 8))
+                    ax4 = fig4.add_subplot(111, projection="3d")
+                    valid_3d = False
+                    for drone in drones:
+                        x, y, z = f"{drone}_x", f"{drone}_y", f"{drone}_z"
+                        if all(c in df.columns for c in [x, y, z]):
+                            ax4.plot(df[x], df[y], df[z], label=drone)
+                            valid_3d = True
+                    if valid_3d:
+                        ax4.set_xlabel("X")
+                        ax4.set_ylabel("Y")
+                        ax4.set_zlabel("Z")
+                        ax4.set_title("3D 空间轨迹")
+                        ax4.legend()
+                        fig4.tight_layout()
+                        fig4.savefig(run_dir / "trajectories_3d.png", dpi=150)
+                        LOGGER.info(f"  [成功] 生成图表: 3D轨迹")
+                        if self.show_plots:
+                            plt.show()
+                    plt.close(fig4)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '3D轨迹': {e}", exc_info=True)
+
+            # 图表6: 熵值分布快照
+            if e_bins and e_hist:
+                try:
+                    fig5, ax5 = plt.subplots(figsize=(10, 6))
+                    indices = _pick_snapshot_indices(len(df), 4)
+                    for idx in indices:
+                        if idx >= len(e_bins) or idx >= len(e_hist):
+                            continue
+                        bins = e_bins[idx]
+                        hist = e_hist[idx]
+                        if not bins or not hist:
+                            continue
+                        if len(bins) == len(hist) + 1:
+                            x_pos = bins[:-1]
+                            width = bins[1] - bins[0]
+                        else:
+                            x_pos = np.arange(len(hist))
+                            width = 0.8
+                        time_val = df["elapsed_time"].iloc[idx]
+                        ax5.bar(x_pos, hist, width=width, alpha=0.4, label=f"时间={time_val:.1f}s", align="edge")
+                    ax5.set_xlabel("信息熵区间")
+                    ax5.set_ylabel("网格数量")
+                    ax5.set_title("不同阶段的信息熵分布快照")
+                    ax5.legend()
+                    ax5.grid(True, alpha=0.2)
+                    fig5.tight_layout()
+                    fig5.savefig(run_dir / "entropy_hist_snapshots.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 熵值快照")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig5)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '熵值快照': {e}", exc_info=True)
+
+            # 图表7: 算法权重与策略稳定性分析
+            weight_cols = ["repulsion_coefficient", "entropy_coefficient", "distance_coefficient", 
+                           "leader_range_coefficient", "direction_retention_coefficient"]
+            if any(c in df.columns for c in weight_cols):
+                try:
+                    fig6, (ax6_1, ax6_2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [2, 1]})
+                    
+                    for c in weight_cols:
+                        if c in df.columns:
+                            ax6_1.plot(df["elapsed_time"], df[c], label=c.replace('_', ' '), linewidth=1.5)
+                    ax6_1.set_title("算法权重动态响应 (策略执行详志)", fontsize=14, fontweight='bold')
+                    ax6_1.set_ylabel("系数值")
+                    ax6_1.legend(loc='best', fontsize=8)
+                    ax6_1.grid(True, alpha=0.3)
+                    
+                    # 策略震荡分析
+                    window = max(5, len(df) // 10)
+                    var_df = pd.DataFrame()
+                    for c in weight_cols:
+                        if c in df.columns:
+                            var_df[c] = df[c].rolling(window=window).var()
+                    
+                    if not var_df.empty:
+                        total_var = var_df.mean(axis=1).fillna(0)
+                        ax6_2.fill_between(df["elapsed_time"], total_var, 0, color='darkorange', alpha=0.2, label='策略波动强度')
+                        ax6_2.plot(df["elapsed_time"], total_var, color='darkorange', linewidth=1)
+                        
+                        late_var = total_var.tail(len(df)//4).mean()
+                        ax6_2.axhline(y=late_var, color='red', linestyle='--', alpha=0.5, label=f'后期平均波动: {late_var:.6f}')
+                        
+                        if late_var < 0.001:
+                            ax6_2.text(0.05, 0.8, "[OK] 权重已收敛，参数输出稳定", transform=ax6_2.transAxes, 
+                                    color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
+                        else:
+                            ax6_2.text(0.05, 0.8, "[WARN] 权重仍在动态调整中", transform=ax6_2.transAxes, 
+                                    color='blue', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
+                    
+                    ax6_2.set_xlabel("时间 (s)")
+                    ax6_2.set_ylabel("方差 (Stability)")
+                    ax6_2.set_title("策略收敛性证明", fontsize=12, fontweight='bold')
+                    ax6_2.grid(True, alpha=0.3)
+                    ax6_2.legend(loc='upper right', fontsize=8)
+                    
+                    fig6.tight_layout()
+                    fig6.savefig(run_dir / "algorithm_weights.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 权重变化")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig6)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成图表 '权重变化': {e}", exc_info=True)
+
+            # 图表8: 系统活跃度与无死锁证明
+            try:
+                if "elapsed_time" in df.columns and "scan_ratio" in df.columns:
+                    fig7, ax7 = plt.subplots(figsize=(10, 6))
+                    
+                    dt = df["elapsed_time"].diff().fillna(1)
+                    dr = df["scan_ratio"].diff().fillna(0)
+                    velocity = (dr / dt).rolling(window=10).mean().fillna(0)
+                    
+                    ax7.plot(df["elapsed_time"], velocity, color='purple', linewidth=2, label='实时覆盖增量 (Liveness)')
+                    ax7.fill_between(df["elapsed_time"], velocity, 0, alpha=0.2, color='purple')
+                    
+                    deadlock_risk = velocity[velocity < 0.001].index
+                    if not deadlock_risk.empty and df["scan_ratio"].iloc[-1] < 95:
+                        ax7.scatter(df["elapsed_time"].iloc[deadlock_risk], [0]*len(deadlock_risk), 
+                                   color='red', marker='|', label='疑似停滞点')
+                    
+                    ax7.set_title("系统活跃度分析 (无死锁证明)", fontsize=14, fontweight='bold')
+                    ax7.set_xlabel("时间 (s)")
+                    ax7.set_ylabel("覆盖速率 (%/s)")
+                    ax7.grid(True, alpha=0.3)
+                    
+                    if df["scan_ratio"].iloc[-1] > 90:
+                        ax7.text(0.05, 0.95, "[OK] 系统持续活跃，任务顺利完成，无死锁发生", 
+                                transform=ax7.transAxes, color='green', fontweight='bold',
+                                bbox=dict(facecolor='white', alpha=0.8))
+                    
+                    ax7.legend()
+                    fig7.tight_layout()
+                    fig7.savefig(run_dir / "liveness_analysis.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 系统活跃度与无死锁证明")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig7)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '活跃度分析': {e}")
+
+            # 图表9: 电压下降与任务耐力分析
+            try:
+                battery_cols = [c for c in df.columns if 'battery_voltage' in c]
+                if battery_cols and "elapsed_time" in df.columns:
+                    fig8, ax8_1 = plt.subplots(figsize=(10, 6))
+                    
+                    for col in battery_cols:
+                        uav_name = col.split('_')[0]
+                        ax8_1.plot(df["elapsed_time"], df[col], linewidth=2, label=f'{uav_name} 电压')
+                    
+                    ax8_1.set_xlabel("时间 (s)")
+                    ax8_1.set_ylabel("电池电压 (V)")
+                    ax8_1.set_title("续航效能分析 (证明在电量耗尽前完成任务)", fontsize=14, fontweight='bold')
+                    ax8_1.grid(True, alpha=0.3)
+                    
+                    ax8_2 = ax8_1.twinx()
+                    if "scan_ratio" in df.columns:
+                        ax8_2.plot(df["elapsed_time"], df["scan_ratio"], color='red', linestyle=':', linewidth=3, label='任务进度')
+                        ax8_2.set_ylabel("任务完成度 (%)", color='red')
+                        ax8_2.tick_params(axis='y', labelcolor='red')
+                        ax8_2.set_ylim(0, 105)
+                        
+                        completion_idx = df[df["scan_ratio"] >= 90].index
+                        if not completion_idx.empty:
+                            idx = completion_idx[0]
+                            time_done = df["elapsed_time"].iloc[idx]
+                            ax8_1.axvline(x=time_done, color='green', linestyle='--', alpha=0.5)
+                            ax8_1.text(time_done, df[battery_cols[0]].min(), f' 90% 完成 @ {time_done:.1f}s', 
+                                      color='green', rotation=90, verticalalignment='bottom')
+                    
+                    lines1, labels1 = ax8_1.get_legend_handles_labels()
+                    lines2, labels2 = ax8_2.get_legend_handles_labels()
+                    ax8_1.legend(lines1 + lines2, labels1 + labels2, loc='lower left', fontsize=9)
+                    
+                    fig8.tight_layout()
+                    fig8.savefig(run_dir / "battery_endurance_analysis.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 电压下降与续航分析")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig8)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
+
+            # 图表10: 飞行姿态稳定性分析
+            try:
+                attitude_drones = []
+                for drone in drones:
+                    if f"{drone}_roll" in df.columns and f"{drone}_pitch" in df.columns:
+                        attitude_drones.append(drone)
+                
+                if attitude_drones:
+                    fig_att, (ax_att1, ax_att2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+                    
+                    for drone in attitude_drones:
+                        roll_data = df[f"{drone}_roll"]
+                        ax_att1.plot(df["elapsed_time"], roll_data, label=f'{drone} Roll', alpha=0.7)
+                        
+                        pitch_data = df[f"{drone}_pitch"]
+                        ax_att2.plot(df["elapsed_time"], pitch_data, label=f'{drone} Pitch', alpha=0.7)
+                        
+                        roll_jitter = roll_data.std()
+                        pitch_jitter = pitch_data.std()
+                        LOGGER.info(f"  [分析] {drone} 姿态抖动: Roll={roll_jitter:.2f}°, Pitch={pitch_jitter:.2f}°")
+                    
+                    ax_att1.set_ylabel("横滚角 Roll (deg)")
+                    ax_att1.set_title("飞行姿态稳定性分析 (证明无失控风险)", fontsize=14, fontweight='bold')
+                    ax_att1.grid(True, alpha=0.3)
+                    ax_att1.legend(loc='upper right', fontsize=8)
+                    
+                    ax_att2.set_ylabel("俯仰角 Pitch (deg)")
+                    ax_att2.set_xlabel("时间 (s)")
+                    ax_att2.grid(True, alpha=0.3)
+                    ax_att2.legend(loc='upper right', fontsize=8)
+                    
+                    all_roll = pd.concat([df[f"{d}_roll"] for d in attitude_drones])
+                    all_pitch = pd.concat([df[f"{d}_pitch"] for d in attitude_drones])
+                    
+                    max_abs_roll = all_roll.abs().max()
+                    max_abs_pitch = all_pitch.abs().max()
+                    avg_jitter = (all_roll.std() + all_pitch.std()) / 2
+                    
+                    if max_abs_roll < 30 and max_abs_pitch < 30 and avg_jitter < 5:
+                        ax_att1.text(0.02, 0.9, "[OK] 飞行姿态极度平稳", transform=ax_att1.transAxes, 
+                                 color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    elif max_abs_roll < 45 and max_abs_pitch < 45:
+                        ax_att1.text(0.02, 0.9, "[WARN] 飞行存在波动但受控", transform=ax_att1.transAxes, 
+                                 color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    else:
+                        ax_att1.text(0.02, 0.9, "[FAIL] 姿态剧烈震荡/失控风险", transform=ax_att1.transAxes, 
+                                 color='red', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    
+                    fig_att.tight_layout()
+                    fig_att.savefig(run_dir / "flight_attitude_stability.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 飞行姿态稳定性")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig_att)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '姿态稳定性': {e}")
+
+            # 图表11: 实时训练奖励与策略同步分析
+            try:
+                if "step_reward" in df.columns and "elapsed_time" in df.columns:
+                    fig9, ax9_1 = plt.subplots(figsize=(10, 6))
+                    
+                    ax9_1.plot(df["elapsed_time"], df["step_reward"], color='#1f77b4', alpha=0.4, label='实时步奖励')
+                    if len(df) > 10:
+                        reward_ma = df["step_reward"].rolling(window=10).mean()
+                        ax9_1.plot(df["elapsed_time"], reward_ma, color='#1f77b4', linewidth=2, label='步奖励趋势')
+                    
+                    ax9_1.set_xlabel("时间 (s)")
+                    ax9_1.set_ylabel("奖励值", color='#1f77b4')
+                    ax9_1.tick_params(axis='y', labelcolor='#1f77b4')
+                    
+                    ax9_2 = ax9_1.twinx()
+                    if "total_reward" in df.columns:
+                        ax9_2.plot(df["elapsed_time"], df["total_reward"], color='darkred', linewidth=2.5, label='累计奖励')
+                        ax9_2.set_ylabel("累计奖励", color='darkred')
+                        ax9_2.tick_params(axis='y', labelcolor='darkred')
+                    
+                    if "training_episode" in df.columns:
+                        ep_changes = df[df["training_episode"].diff() != 0].index
+                        for idx in ep_changes:
+                            if idx == 0: continue
+                            t = df["elapsed_time"].iloc[idx]
+                            ax9_1.axvline(x=t, color='gray', linestyle='--', alpha=0.5)
+                            ax9_1.text(t, ax9_1.get_ylim()[1], f' Ep.{int(df["training_episode"].iloc[idx])}', 
+                                      rotation=90, verticalalignment='top', fontsize=8)
+
+                    ax9_1.set_title("训练过程实时分析 (奖励与环境同步)", fontsize=14, fontweight='bold')
+                    
+                    h1, l1 = ax9_1.get_legend_handles_labels()
+                    h2, l2 = ax9_2.get_legend_handles_labels()
+                    ax9_1.legend(h1+h2, l1+l2, loc='upper left', fontsize=9)
+                    
+                    ax9_1.grid(True, alpha=0.3)
+                    fig9.tight_layout()
+                    fig9.savefig(run_dir / "training_realtime_sync.png", dpi=150)
+                    LOGGER.info(f"  [成功] 生成图表: 训练实时同步分析")
+                    if self.show_plots:
+                        plt.show()
+                    plt.close(fig9)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '训练实时同步': {e}")
+            
+            LOGGER.info(f"✅ 扫描数据分析完成，结果保存在: {run_dir}")
+            return True
+            
+        except Exception as e:
+            LOGGER.error(f"❌ 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
+            return False
 
 
 class DQNDataVisualizer:
@@ -1240,18 +1736,32 @@ def auto_discover_data() -> Tuple[List[Path], List[Path], List[Path]]:
         crazyflie_files.extend(list(crazyflie_logs_dir.glob("crazyflie_flight_*.csv")))
         crazyflie_files.extend(list(crazyflie_logs_dir.glob("crazyflie_weights_*.csv")))
     
-    # 搜索 DataCollector 扫描数据
-    scan_data_dir = Path("multirotor/DDPG_Weight/airsim_training_logs")
-    if scan_data_dir.exists():
-        scan_files.extend(list(scan_data_dir.glob("scan_data_*.csv")))
+    # 搜索 DDPG 扫描数据 (DataCollector)
+    ddpg_scan_dir = Path("multirotor/DDPG_Weight/airsim_training_logs")
+    if ddpg_scan_dir.exists():
+        scan_files.extend(list(ddpg_scan_dir.glob("scan_data_*.csv")))
     
-    # 搜索 DQN 训练日志
+    # 搜索 DQN 扫描数据 (DataCollector)
+    dqn_scan_dir = Path("multirotor/DQN_Movement/logs/dqn_scan_data")
+    if dqn_scan_dir.exists():
+        scan_files.extend(list(dqn_scan_dir.glob("scan_data_*.csv")))
+    
+    # 搜索 DQN 训练日志 - 支持 metadata.json 和直接的 CSV 文件
     dqn_logs_dir = Path("multirotor/DQN_Movement/logs")
     if dqn_logs_dir.exists():
         for subdir in dqn_logs_dir.glob("*"):
             if subdir.is_dir():
+                # 优先查找 metadata 文件
                 metadata_files = list(subdir.glob("dqn_training_metadata.json"))
                 dqn_files.extend(metadata_files)
+                
+                # 如果没有 metadata，直接查找 CSV 文件
+                if not metadata_files:
+                    csv_files = list(subdir.glob("dqn_training_*.csv"))
+                    # 过滤掉空文件（只有表头）
+                    for csv_file in csv_files:
+                        if csv_file.stat().st_size > 100:  # 至少100字节
+                            dqn_files.append(csv_file)
     
     return crazyflie_files, scan_files, dqn_files
 
@@ -1511,19 +2021,28 @@ class DataComparer:
         # 自动发现文件
         if not ddpg_files:
             ddpg_files = []
-            ddpg_logs = Path("multirotor/DDPG_Weight/crazyflie_logs")
-            if ddpg_logs.exists():
-                ddpg_files.extend(list(ddpg_logs.glob("crazyflie_training_log_*.json")))
-                ddpg_files.extend(list(ddpg_logs.glob("training_stats*.csv")))
+            # DDPG 数据位置：
+            # 1. airsim_training_logs (AirSim 训练数据)
+            # 2. crazyflie_logs (Crazyflie 训练数据)
+            ddpg_airsim_logs = Path("multirotor/DDPG_Weight/airsim_training_logs")
+            if ddpg_airsim_logs.exists():
+                ddpg_files.extend(list(ddpg_airsim_logs.glob("training_history*.json")))
+                ddpg_files.extend(list(ddpg_airsim_logs.glob("training_stats*.csv")))
+            
+            ddpg_crazyflie_logs = Path("multirotor/DDPG_Weight/crazyflie_logs")
+            if ddpg_crazyflie_logs.exists():
+                ddpg_files.extend(list(ddpg_crazyflie_logs.glob("crazyflie_training_log_*.json")))
+                ddpg_files.extend(list(ddpg_crazyflie_logs.glob("training_stats*.csv")))
         
         if not dqn_files:
             dqn_files = []
-            dqn_logs = Path("multirotor/DQN_Movement/logs")
-            if dqn_logs.exists():
-                for subdir in dqn_logs.glob("*"):
-                    if subdir.is_dir():
-                        metadata_files = list(subdir.glob("dqn_training_metadata.json"))
-                        dqn_files.extend(metadata_files)
+            # DQN 数据位置：
+            # 1. DQN_Movement/logs/movement_dqn_airsim/dqn_training_*.csv (训练奖励数据)
+            # 2. DQN_Movement/logs/dqn_scan_data/scan_data_*.csv (扫描数据)
+            dqn_training_logs = Path("multirotor/DQN_Movement/logs/movement_dqn_airsim")
+            if dqn_training_logs.exists():
+                dqn_csv_files = list(dqn_training_logs.glob("dqn_training_*.csv"))
+                dqn_files.extend(dqn_csv_files)
         
         if not ddpg_files and not dqn_files:
             LOGGER.warning("⚠️ 未找到任何 DDPG 或 DQN 训练数据文件")
@@ -1555,14 +2074,20 @@ class DataComparer:
         dqn_data = []
         for f in dqn_files:
             try:
-                # 读取元数据获取 CSV 路径
-                with open(f, 'r', encoding='utf-8') as jf:
-                    metadata = json.load(jf)
-                    csv_path = metadata.get('training_stats_path')
-                    if csv_path and Path(csv_path).exists():
-                        df = pd.read_csv(csv_path)
-                        if not df.empty and 'reward' in df.columns:
-                            dqn_data.append((f"DQN-{f.parent.name}", df, 'DQN'))
+                # DQN 训练数据是 CSV 格式
+                if f.suffix == '.csv':
+                    df = pd.read_csv(f)
+                    if not df.empty and 'reward' in df.columns:
+                        dqn_data.append((f"DQN-{f.stem}", df, 'DQN'))
+                # 如果是 JSON metadata，读取其中的 CSV 路径
+                elif f.suffix == '.json':
+                    with open(f, 'r', encoding='utf-8') as jf:
+                        metadata = json.load(jf)
+                        csv_path = metadata.get('training_stats_path')
+                        if csv_path and Path(csv_path).exists():
+                            df = pd.read_csv(csv_path)
+                            if not df.empty and 'reward' in df.columns:
+                                dqn_data.append((f"DQN-{f.parent.name}", df, 'DQN'))
             except Exception as e:
                 LOGGER.error(f"❌ 读取 DQN 文件失败 {f.name}: {e}")
         
@@ -1767,7 +2292,311 @@ class DataComparer:
         
         return True
 
-    def compare_crazyflie_data(self, csv_files: List[Path]) -> bool:
+    def compare_ddpg_vs_dqn_full(self, ddpg_scan_files: List[Path] = None, dqn_scan_files: List[Path] = None) -> bool:
+        """
+        DDPG vs DQN 全方位对比分析（环境数据 + 电量 + 扫描进度）
+        使用 DataCollector 生成的 scan_data CSV 进行时间序列对比
+        
+        Args:
+            ddpg_scan_files: DDPG 扫描数据文件列表
+            dqn_scan_files: DQN 扫描数据文件列表
+        
+        Returns:
+            bool: 对比分析是否成功
+        """
+        LOGGER.info("📊 开始 DDPG vs DQN 全方位对比分析（环境、电量、扫描）...")
+        
+        # 自动发现文件
+        if not ddpg_scan_files:
+            ddpg_scan_files = []
+            ddpg_scan_dir = Path("multirotor/DDPG_Weight/airsim_training_logs")
+            if ddpg_scan_dir.exists():
+                ddpg_scan_files.extend(list(ddpg_scan_dir.glob("scan_data_*.csv")))
+        
+        if not dqn_scan_files:
+            dqn_scan_files = []
+            dqn_scan_dir = Path("multirotor/DQN_Movement/logs/dqn_scan_data")
+            if dqn_scan_dir.exists():
+                dqn_scan_files.extend(list(dqn_scan_dir.glob("scan_data_*.csv")))
+        
+        if not ddpg_scan_files and not dqn_scan_files:
+            LOGGER.warning("⚠️  未找到任何 DDPG 或 DQN 的扫描数据文件")
+            return False
+        
+        LOGGER.info(f"  发现 {len(ddpg_scan_files)} 个 DDPG 扫描数据，{len(dqn_scan_files)} 个 DQN 扫描数据")
+        
+        # 加载 DDPG 扫描数据
+        ddpg_data = []
+        for f in ddpg_scan_files:
+            try:
+                df = pd.read_csv(f)
+                if not df.empty and 'elapsed_time' in df.columns:
+                    # 处理百分号格式的 scan_ratio 列
+                    df = normalize_percentage_column(df, 'scan_ratio')
+                    ddpg_data.append((f"DDPG-{f.stem}", df, 'DDPG'))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取 DDPG 扫描数据失败 {f.name}: {e}")
+        
+        # 加载 DQN 扫描数据
+        dqn_data = []
+        for f in dqn_scan_files:
+            try:
+                df = pd.read_csv(f)
+                if not df.empty and 'elapsed_time' in df.columns:
+                    # 处理百分号格式的 scan_ratio 列
+                    df = normalize_percentage_column(df, 'scan_ratio')
+                    dqn_data.append((f"DQN-{f.stem}", df, 'DQN'))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取 DQN 扫描数据失败 {f.name}: {e}")
+        
+        all_data = ddpg_data + dqn_data
+        if len(all_data) < 2:
+            LOGGER.warning("⚠️  全方位对比至少需要 2 份有效数据（1份DDPG + 1份DQN）")
+            return False
+        
+        # 创建对比结果目录
+        compare_dir = self.output_dir / "algorithm_comparison_ddpg_vs_dqn_full"
+        compare_dir.mkdir(exist_ok=True)
+        
+        color_map = {'DDPG': '#FF6B6B', 'DQN': '#4ECDC4'}
+        
+        # 1. 扫描覆盖率 vs 时间
+        fig1, ax1 = plt.subplots(figsize=(14, 8))
+        for label, df, algo_type in all_data:
+            if 'scan_ratio' in df.columns and 'elapsed_time' in df.columns:
+                ax1.plot(df['elapsed_time'], df['scan_ratio'], 
+                        label=label, linewidth=2.5, color=color_map[algo_type], alpha=0.7)
+        
+        ax1.set_xlabel("时间 (s)", fontsize=13)
+        ax1.set_ylabel("扫描覆盖率 (%)", fontsize=13)
+        ax1.set_title("DDPG vs DQN - 扫描覆盖率随时间变化", fontsize=15, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='best', fontsize=10)
+        plt.tight_layout()
+        plt.savefig(compare_dir / "ddpg_vs_dqn_scan_coverage_vs_time.png", dpi=150)
+        
+        # 2. 平均熵值 vs 时间
+        fig2, ax2 = plt.subplots(figsize=(14, 8))
+        has_entropy = False
+        for label, df, algo_type in all_data:
+            if 'global_avg_entropy' in df.columns and 'elapsed_time' in df.columns:
+                ax2.plot(df['elapsed_time'], df['global_avg_entropy'], 
+                        label=label, linewidth=2.5, color=color_map[algo_type], alpha=0.7)
+                has_entropy = True
+        
+        if has_entropy:
+            ax2.set_xlabel("时间 (s)", fontsize=13)
+            ax2.set_ylabel("平均熵值", fontsize=13)
+            ax2.set_title("DDPG vs DQN - 熵值下降曲线（不确定性消除）", fontsize=15, fontweight='bold')
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(loc='best', fontsize=10)
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_entropy_reduction.png", dpi=150)
+        else:
+            plt.close(fig2)
+        
+        # 3. 电压 vs 时间（多机平均）
+        fig3, ax3 = plt.subplots(figsize=(14, 8))
+        has_battery = False
+        for label, df, algo_type in all_data:
+            # 检测电量列
+            battery_cols = [col for col in df.columns if '_battery_voltage' in col]
+            if battery_cols and 'elapsed_time' in df.columns:
+                # 计算所有无人机的平均电压
+                avg_voltage = df[battery_cols].mean(axis=1)
+                ax3.plot(df['elapsed_time'], avg_voltage, 
+                        label=label, linewidth=2.5, color=color_map[algo_type], alpha=0.7)
+                has_battery = True
+        
+        if has_battery:
+            ax3.set_xlabel("时间 (s)", fontsize=13)
+            ax3.set_ylabel("平均电压 (V)", fontsize=13)
+            ax3.set_title("DDPG vs DQN - 电量消耗对比（多机平均）", fontsize=15, fontweight='bold')
+            ax3.grid(True, alpha=0.3)
+            ax3.legend(loc='best', fontsize=10)
+            # 添加低电量阈值线
+            ax3.axhline(y=3.3, color='red', linestyle='--', alpha=0.5, label='低电量阈值')
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_battery_consumption.png", dpi=150)
+        else:
+            plt.close(fig3)
+        
+        # 4. 单位时间覆盖率对比（效率指标）
+        fig4, ax4 = plt.subplots(figsize=(12, 7))
+        efficiency_stats = []
+        
+        for label, df, algo_type in all_data:
+            if 'scan_ratio' in df.columns and 'elapsed_time' in df.columns and len(df) > 10:
+                # 取最后的扫描比例和时间，确保转换为标量
+                # 处理百分号字符串格式（如 '2.34%'）
+                scan_ratio_val = df['scan_ratio'].iloc[-1]
+                if isinstance(scan_ratio_val, str):
+                    scan_ratio_val = scan_ratio_val.rstrip('%')
+                final_ratio = float(scan_ratio_val)
+                
+                elapsed_time_val = df['elapsed_time'].iloc[-1]
+                total_time = float(elapsed_time_val)
+                
+                if total_time > 0:
+                    efficiency = final_ratio / total_time  # %/s
+                    efficiency_stats.append({
+                        'label': label,
+                        'algo': algo_type,
+                        'efficiency': efficiency,
+                        'final_ratio': final_ratio,
+                        'time': total_time
+                    })
+        
+        if efficiency_stats:
+            df_eff = pd.DataFrame(efficiency_stats)
+            colors = [color_map[algo] for algo in df_eff['algo']]
+            bars = ax4.bar(df_eff['label'], df_eff['efficiency'], color=colors, alpha=0.7, edgecolor='black')
+            ax4.set_ylabel("单位时间覆盖率 (%/s)", fontsize=12)
+            ax4.set_title("DDPG vs DQN - 扫描效率对比", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值
+            for bar in bars:
+                height = bar.get_height()
+                ax4.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_scan_efficiency.png", dpi=150)
+        else:
+            plt.close(fig4)
+        
+        # 5. 单位能耗覆盖率（省电性对比）
+        fig5, ax5 = plt.subplots(figsize=(12, 7))
+        energy_eff_stats = []
+        
+        for label, df, algo_type in all_data:
+            battery_cols = [col for col in df.columns if '_battery_voltage' in col]
+            if 'scan_ratio' in df.columns and battery_cols and len(df) > 10:
+                # 处理百分号字符串格式
+                scan_ratio_val = df['scan_ratio'].iloc[-1]
+                if isinstance(scan_ratio_val, str):
+                    scan_ratio_val = scan_ratio_val.rstrip('%')
+                final_ratio = float(scan_ratio_val)
+                
+                initial_voltage = float(df[battery_cols].iloc[0].mean())
+                final_voltage = float(df[battery_cols].iloc[-1].mean())
+                energy_consumed = initial_voltage - final_voltage
+                
+                if energy_consumed > 0.01:  # 避免除以零
+                    energy_efficiency = final_ratio / energy_consumed  # %/V
+                    energy_eff_stats.append({
+                        'label': label,
+                        'algo': algo_type,
+                        'energy_efficiency': energy_efficiency,
+                        'energy_consumed': energy_consumed
+                    })
+        
+        if energy_eff_stats:
+            df_e_eff = pd.DataFrame(energy_eff_stats)
+            colors = [color_map[algo] for algo in df_e_eff['algo']]
+            bars = ax5.bar(df_e_eff['label'], df_e_eff['energy_efficiency'], color=colors, alpha=0.7, edgecolor='black')
+            ax5.set_ylabel("单位能耗覆盖率 (%/V)", fontsize=12)
+            ax5.set_title("DDPG vs DQN - 能效对比（省电性）", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值
+            for bar in bars:
+                height = bar.get_height()
+                ax5.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.1f}', ha='center', va='bottom', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_energy_efficiency.png", dpi=150)
+        else:
+            plt.close(fig5)
+        
+        # 6. 任务完成时间对比（达到90%覆盖率的时间）
+        fig6, ax6 = plt.subplots(figsize=(12, 7))
+        completion_time_stats = []
+        
+        for label, df, algo_type in all_data:
+            if 'scan_ratio' in df.columns and 'elapsed_time' in df.columns and len(df) > 10:
+                # 找到首次达到 90% 覆盖率的时间
+                df_filtered = df[df['scan_ratio'] >= 90]
+                if not df_filtered.empty:
+                    completion_time = float(df_filtered['elapsed_time'].iloc[0])
+                    completion_time_stats.append({
+                        'label': label,
+                        'algo': algo_type,
+                        'completion_time': completion_time
+                    })
+        
+        if completion_time_stats:
+            df_time = pd.DataFrame(completion_time_stats)
+            colors = [color_map[algo] for algo in df_time['algo']]
+            bars = ax6.bar(df_time['label'], df_time['completion_time'], color=colors, alpha=0.7, edgecolor='black')
+            ax6.set_ylabel("完成时间 (s)", fontsize=12)
+            ax6.set_title("DDPG vs DQN - 任务完成时间对比（达到90%覆盖率）", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值
+            for bar in bars:
+                height = bar.get_height()
+                ax6.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.1f}s', ha='center', va='bottom', fontsize=9)
+            
+            # 添加图例
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=color_map['DDPG'], label='DDPG (权重预测)'),
+                             Patch(facecolor=color_map['DQN'], label='DQN (移动控制)')]
+            ax6.legend(handles=legend_elements, loc='upper left', fontsize=10)
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_completion_time.png", dpi=150)
+        else:
+            plt.close(fig6)
+        
+        # 7. 生成全方位对比报告
+        report_path = compare_dir / "full_comparison_report.txt"
+        with open(report_path, 'w', encoding='utf-8') as report:
+            report.write("="*80 + "\n")
+            report.write("DDPG vs DQN 全方位对比分析报告\n")
+            report.write("（环境数据 + 电量消耗 + 扫描进度）\n")
+            report.write("="*80 + "\n\n")
+            
+            report.write("1. 扫描效率对比\n")
+            report.write("-" * 80 + "\n")
+            if efficiency_stats:
+                for stat in efficiency_stats:
+                    report.write(f"  {stat['label']:40s}: {stat['efficiency']:8.4f} %/s ")
+                    report.write(f"(最终覆盖率={stat['final_ratio']:.1f}%, 耗时={stat['time']:.1f}s)\n")
+            else:
+                report.write("  无法计算扫描效率统计\n")
+            report.write("\n")
+            
+            report.write("2. 能效对比（省电性）\n")
+            report.write("-" * 80 + "\n")
+            if energy_eff_stats:
+                for stat in energy_eff_stats:
+                    report.write(f"  {stat['label']:40s}: {stat['energy_efficiency']:8.2f} %/V ")
+                    report.write(f"(能耗={stat['energy_consumed']:.3f}V)\n")
+            else:
+                report.write("  无法计算能效统计\n")
+            report.write("\n")
+            
+            report.write("3. 总结\n")
+            report.write("-" * 80 + "\n")
+            report.write("  - DDPG: APF 权重优化，适合连续参数调节\n")
+            report.write("  - DQN: 直接移动控制，适合离散动作决策\n")
+            report.write("  - 建议根据具体场景选择或结合使用\n")
+            report.write("\n" + "="*80 + "\n")
+        
+        LOGGER.info(f"✅ DDPG vs DQN 全方位对比完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"  📈 生成图表: scan_coverage, entropy_reduction, battery_consumption, scan_efficiency, energy_efficiency, completion_time")
+        LOGGER.info(f"  📄 生成报告: {report_path.name}")
+        
+        if self.show_plots:
+            plt.show()
+        else:
+            plt.close('all')
+        
+        return True
         """对比多份 Crazyflie 飞行数据"""
         if len(csv_files) < 2:
             return False
@@ -1827,7 +2656,8 @@ def main():
     parser.add_argument("--out", type=str, default="analysis_results", help="输出目录")
     parser.add_argument("--show", action="store_true", help="完成后显示图表窗口")
     parser.add_argument("--compare", action="store_true", help="对同类型数据进行对比分析")
-    parser.add_argument("--compare-algorithms", action="store_true", help="对比 DDPG vs DQN 算法性能")
+    parser.add_argument("--compare-algorithms", action="store_true", help="对比 DDPG vs DQN 算法性能（Episode奖励曲线）")
+    parser.add_argument("--compare-algorithms-full", action="store_true", help="全方位对比 DDPG vs DQN（包含环境数据、电量、效率等）")
     args = parser.parse_args()
     
     output_dir = Path(args.out)
@@ -1882,8 +2712,29 @@ def main():
     
     # DDPG vs DQN 算法对比分析
     if args.compare_algorithms:
+        LOGGER.info("\n" + "="*60)
+        LOGGER.info("🔎 准备执行 DDPG vs DQN 基础对比分析...")
+        LOGGER.info("="*60)
         comparer = DataComparer(output_dir, show_plots=args.show)
-        comparer.compare_ddpg_vs_dqn()
+        result = comparer.compare_ddpg_vs_dqn()
+        if result:
+            LOGGER.info("✅ 基础对比分析完成")
+        else:
+            LOGGER.warning("⚠️  基础对比分析未生成结果（可能是缺少训练奖励数据文件）")
+        LOGGER.info("="*60 + "\n")
+    
+    # DDPG vs DQN 全方位对比分析（包含环境数据、电量、效率等）
+    if args.compare_algorithms_full:
+        LOGGER.info("\n" + "="*60)
+        LOGGER.info("🔎 准备执行 DDPG vs DQN 全方位对比分析...")
+        LOGGER.info("="*60)
+        comparer = DataComparer(output_dir, show_plots=args.show)
+        result = comparer.compare_ddpg_vs_dqn_full()
+        if result:
+            LOGGER.info("✅ 全方位对比分析完成")
+        else:
+            LOGGER.warning("⚠️  全方位对比分析未生成结果（可能是缺少 scan_data 文件）")
+        LOGGER.info("="*60 + "\n")
     
     # 对比分析
     if args.compare:
@@ -1907,7 +2758,16 @@ def main():
     success_count = 0
     fail_count = 0
     
+    # 分组统计
+    scan_success = 0
+    dqn_success = 0
+    other_success = 0
+    
     # 处理 DDPG/Crazyflie/Scan 数据
+    LOGGER.info("\n" + "="*60)
+    LOGGER.info("📋 开始处理单独数据分析...")
+    LOGGER.info("="*60)
+    
     for file_path in files_to_process:
         if not file_path.exists():
             LOGGER.warning(f"⚠️  文件不存在: {file_path}")
@@ -1918,6 +2778,7 @@ def main():
             if file_path.suffix == '.json':
                 if crazyflie_viz.visualize_json(file_path):
                     success_count += 1
+                    other_success += 1
                 else:
                     fail_count += 1
             elif file_path.suffix == '.csv':
@@ -1925,11 +2786,13 @@ def main():
                 if 'crazyflie' in file_path.name:
                     if crazyflie_viz.visualize_csv(file_path):
                         success_count += 1
+                        other_success += 1
                     else:
                         fail_count += 1
                 elif 'scan_data' in file_path.name:
                     if scan_viz.visualize_csv(file_path):
                         success_count += 1
+                        scan_success += 1
                     else:
                         fail_count += 1
                 else:
@@ -1940,6 +2803,11 @@ def main():
             fail_count += 1
     
     # 处理 DQN 数据
+    if dqn_files:
+        LOGGER.info("\n" + "-"*60)
+        LOGGER.info("🤖 开始处理 DQN 训练数据分析...")
+        LOGGER.info("-"*60)
+    
     for dqn_meta_path in dqn_files:
         if not dqn_meta_path.exists():
             LOGGER.warning(f"⚠️  文件不存在: {dqn_meta_path}")
@@ -1947,17 +2815,27 @@ def main():
             continue
         
         try:
-            # 从元数据中获取 CSV 路径
-            with open(dqn_meta_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-                csv_path = metadata.get('training_stats_path')
-                if csv_path and Path(csv_path).exists():
-                    if dqn_viz.visualize_training(dqn_meta_path, Path(csv_path)):
-                        success_count += 1
+            # 判断是 JSON metadata 还是直接的 CSV 文件
+            if dqn_meta_path.suffix == '.json':
+                # 从元数据中获取 CSV 路径
+                with open(dqn_meta_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                    csv_path = metadata.get('training_stats_path')
+                    if csv_path and Path(csv_path).exists():
+                        if dqn_viz.visualize_training(dqn_meta_path, Path(csv_path)):
+                            success_count += 1
+                            dqn_success += 1
+                        else:
+                            fail_count += 1
                     else:
+                        LOGGER.warning(f"⚠️  DQN 训练统计 CSV 不存在: {csv_path}")
                         fail_count += 1
+            elif dqn_meta_path.suffix == '.csv':
+                # 直接处理 CSV 文件
+                if dqn_viz.visualize_training(None, dqn_meta_path):
+                    success_count += 1
+                    dqn_success += 1
                 else:
-                    LOGGER.warning(f"⚠️  DQN 训练统计 CSV 不存在: {csv_path}")
                     fail_count += 1
         except Exception as e:
             LOGGER.error(f"❌ 处理 DQN 文件失败 {dqn_meta_path.name}: {e}")
@@ -1965,7 +2843,14 @@ def main():
     
     LOGGER.info(f"\n{'='*60}")
     LOGGER.info(f"处理完成!")
+    LOGGER.info(f"{'='*60}")
     LOGGER.info(f"  ✅ 成功: {success_count} 个")
+    if scan_success > 0:
+        LOGGER.info(f"     - 扫描数据分析 (DDPG/DQN): {scan_success} 个")
+    if dqn_success > 0:
+        LOGGER.info(f"     - DQN 训练分析: {dqn_success} 个")
+    if other_success > 0:
+        LOGGER.info(f"     - 其他数据分析: {other_success} 个")
     LOGGER.info(f"  ❌ 失败: {fail_count} 个")
     LOGGER.info(f"  📁 结果目录: {output_dir.absolute()}")
     LOGGER.info(f"{'='*60}\n")

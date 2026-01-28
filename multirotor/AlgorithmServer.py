@@ -119,8 +119,21 @@ class MultiDroneAlgorithmServer:
         self.visualizer = None
         self.enable_visualization = enable_visualization
 
-        # 数据采集系统（传递enable_debug_print参数控制DEBUG打印）
-        self.data_collector = DataCollector(collection_interval=1.0, enable_debug_print=enable_data_collection_print)
+        # 数据采集系统（根据控制模式选择不同的数据目录）
+        if control_mode.lower() == 'dqn':
+            # DQN 模式：保存到 DQN_Movement/logs/dqn_scan_data
+            dqn_data_dir = os.path.join(os.path.dirname(__file__), 'DQN_Movement', 'logs', 'dqn_scan_data')
+            self.data_collector = DataCollector(
+                data_dir=dqn_data_dir,
+                collection_interval=1.0,
+                enable_debug_print=enable_data_collection_print
+            )
+        else:
+            # APF/DDPG 模式：保存到 DDPG_Weight/airsim_training_logs（默认）
+            self.data_collector = DataCollector(
+                collection_interval=1.0,
+                enable_debug_print=enable_data_collection_print
+            )
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)

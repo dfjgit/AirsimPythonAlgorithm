@@ -334,7 +334,7 @@ class ImprovedTrainingCallback(BaseCallback):
     """
     
     def __init__(self, total_timesteps, check_freq=1000, save_path='./models/', 
-                 training_visualizer=None, overwrite_model=False, model_name="weight_predictor_airsim", verbose=1):
+                 training_visualizer=None, server=None, overwrite_model=False, model_name="weight_predictor_airsim", verbose=1):
         """
         初始化训练回调
             
@@ -343,6 +343,7 @@ class ImprovedTrainingCallback(BaseCallback):
             check_freq: 检查点保存频率（每N步保存一次）
             save_path: 模型保存目录路径
             training_visualizer: 训练可视化器实例（可选）
+            server: AlgorithmServer 实例（用于访问 DataCollector）
             overwrite_model: 是否覆盖现有模型（不生成新时间戳）
             model_name: 模型名称（不含.zip）
             verbose: 详细程度（0=静默，1=显示信息）
@@ -352,6 +353,7 @@ class ImprovedTrainingCallback(BaseCallback):
         self.check_freq = check_freq  # 检查点保存频率
         self.save_path = save_path  # 模型保存路径
         self.training_visualizer = training_visualizer  # 训练可视化器引用
+        self.server = server  # AlgorithmServer 实例
         self.overwrite_model = overwrite_model  # 是否覆盖模型
         self.model_name = model_name  # 模型名称
         self.best_mean_reward = -np.inf  # 最佳平均奖励（用于保存最佳模型）
@@ -399,6 +401,13 @@ class ImprovedTrainingCallback(BaseCallback):
                     episode_length=ep_length,
                     is_episode_done=True
                 )
+            
+            # 通知 DataCollector 记录训练数据
+            if hasattr(self, 'server') and hasattr(self.server, 'data_collector'):
+                self.server.data_collector.set_external_data('episode', self.episode_count)
+                self.server.data_collector.set_external_data('step', self.num_timesteps)
+                self.server.data_collector.set_external_data('reward', ep_reward)
+                self.server.data_collector.set_external_data('total_reward', sum(self.episode_rewards))
             
             # ========== 美观的Episode完成信息显示 ==========
             print(f"\n{'╔'+'═'*58+'╗'}")
@@ -795,6 +804,7 @@ def main():
             check_freq=checkpoint_freq,
             save_path=model_dir,
             training_visualizer=training_visualizer,  # 传入可视化器
+            server=server,  # 传入 server 实例，用于访问 DataCollector
             overwrite_model=overwrite_model,  # 传入覆盖模式标志
             model_name=model_name,  # 传入模型名称
             verbose=1

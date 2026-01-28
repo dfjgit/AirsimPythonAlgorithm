@@ -9,7 +9,7 @@
 
   "common": {
     "_comment": "所有训练模式共用的配置",
-    "total_timesteps": 100,
+    "total_timesteps": 10000,
     "enable_visualization": true,
     "checkpoint_freq": 1000,
     "progress_interval": 10,
@@ -23,7 +23,7 @@
   "airsim_virtual": {
     "_comment": "虚拟训练（AirSim仿真）专用配置",
     "drone_names": ["UAV1", "UAV2", "UAV3"],
-    "step_duration": 5.0,
+    "step_duration": 2.0,
     "use_initial_weights": true,
     "initial_model_path": null,
     "safety_limit": true,

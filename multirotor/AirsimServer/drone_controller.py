@@ -32,15 +32,40 @@ class DroneController:
         # API调用锁（保护多线程并发调用）
         import threading
         self.api_lock = threading.Lock()
+        self.state_lock = threading.Lock()  # 专门保护vehicle_states的锁
         
-        # 无人机状态跟踪（仅保留可获取的状态）
-        self.vehicle_states = defaultdict(lambda: {
-            "armed": False,  # 无法直接获取，通过操作记录
-            "flying": False,
-            "api_enabled": False,
-            "position": (0.0, 0.0, 0.0),
-            "orientation": (0.0, 0.0, 0.0)  # roll, pitch, yaw
-        })
+        # 无人机状态跟踪（使用普通字典，避免defaultdict引发的numpy视图冲突）
+        self.vehicle_states = {}
+    
+    def _get_or_create_state(self, vehicle_name: str) -> Dict[str, Any]:
+        """安全地获取或创建无人机状态（线程安全）"""
+        with self.state_lock:
+            if vehicle_name not in self.vehicle_states:
+                self.vehicle_states[vehicle_name] = {
+                    "armed": False,
+                    "flying": False,
+                    "api_enabled": False,
+                    "position": (0.0, 0.0, 0.0),
+                    "orientation": (0.0, 0.0, 0.0)
+                }
+            # 返回状态的深拷贝，避免外部修改
+            return dict(self.vehicle_states[vehicle_name])
+    
+    def _update_state_field(self, vehicle_name: str, field: str, value: Any) -> None:
+        """安全地更新单个状态字段（线程安全，避免numpy视图冲突）"""
+        with self.state_lock:
+            if vehicle_name not in self.vehicle_states:
+                self.vehicle_states[vehicle_name] = {
+                    "armed": False,
+                    "flying": False,
+                    "api_enabled": False,
+                    "position": (0.0, 0.0, 0.0),
+                    "orientation": (0.0, 0.0, 0.0)
+                }
+            # 创建新字典替换旧字典，完全避免修改现有对象
+            new_state = dict(self.vehicle_states[vehicle_name])
+            new_state[field] = value
+            self.vehicle_states[vehicle_name] = new_state
 
     def connect(self) -> bool:
         """连接到AirSim模拟器"""
@@ -73,7 +98,7 @@ class DroneController:
             with self.api_lock:
                 self.client.enableApiControl(enable, vehicle_name)
             # 无法直接获取API状态，通过操作结果记录
-            self.vehicle_states[vehicle_name]["api_enabled"] = enable
+            self._update_state_field(vehicle_name, "api_enabled", enable)
             logger.info(f"无人机{vehicle_name}API控制已{'启用' if enable else '禁用'}")
             return True
         except Exception as e:
@@ -84,14 +109,15 @@ class DroneController:
         """无人机解锁/上锁"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
-            if not self.vehicle_states[vehicle_name]["api_enabled"]:
+            state = self._get_or_create_state(vehicle_name)
+            if not state["api_enabled"]:
                 logger.error(f"无人机{vehicle_name}API控制未启用，无法执行解锁/上锁操作")
                 return False
             
             with self.api_lock:
                 self.client.armDisarm(arm, vehicle_name)
             # 无法直接获取解锁状态，通过操作结果记录
-            self.vehicle_states[vehicle_name]["armed"] = arm
+            self._update_state_field(vehicle_name, "armed", arm)
             logger.info(f"无人机{vehicle_name}已{'解锁' if arm else '上锁'}")
             return True
         except Exception as e:
@@ -102,12 +128,13 @@ class DroneController:
         """无人机起飞（适配API）"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
+            state = self._get_or_create_state(vehicle_name)
             # 仅检查API是否启用
-            if not self.vehicle_states[vehicle_name]["api_enabled"]:
+            if not state["api_enabled"]:
                 logger.error(f"无人机{vehicle_name}API控制未启用，无法起飞")
                 return False
                 
-            if self.vehicle_states[vehicle_name]["flying"]:
+            if state["flying"]:
                 logger.warning(f"无人机{vehicle_name}已处于飞行状态")
                 return True
 
@@ -115,7 +142,7 @@ class DroneController:
             with self.api_lock:
                 self.client.takeoffAsync(vehicle_name=vehicle_name).join()
             # 假设起飞成功
-            self.vehicle_states[vehicle_name]["flying"] = True
+            self._update_state_field(vehicle_name, "flying", True)
             self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}起飞完成")
             return True
@@ -127,14 +154,15 @@ class DroneController:
         """无人机降落"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
-            if not self.vehicle_states[vehicle_name]["flying"]:
+            state = self._get_or_create_state(vehicle_name)
+            if not state["flying"]:
                 logger.warning(f"无人机{vehicle_name}未处于飞行状态，无需降落")
                 return True
 
             # 执行降落
             with self.api_lock:
                 self.client.landAsync(vehicle_name=vehicle_name).join()
-            self.vehicle_states[vehicle_name]["flying"] = False
+            self._update_state_field(vehicle_name, "flying", False)
             self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}降落完成")
             return True
@@ -147,7 +175,8 @@ class DroneController:
         """移动到指定位置"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
-            if not self.vehicle_states[vehicle_name]["flying"]:
+            state = self._get_or_create_state(vehicle_name)
+            if not state["flying"]:
                 logger.error(f"无人机{vehicle_name}未处于飞行状态，无法移动")
                 return False
 
@@ -171,7 +200,8 @@ class DroneController:
         """根据速度移动"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
-            if not self.vehicle_states[vehicle_name]["flying"]:
+            state = self._get_or_create_state(vehicle_name)
+            if not state["flying"]:
                 logger.error(f"无人机{vehicle_name}未处于飞行状态，无法移动")
                 return False
 
@@ -231,7 +261,7 @@ class DroneController:
         """获取无人机当前状态"""
         vehicle_name = vehicle_name or self.default_vehicle
         self._update_vehicle_state(vehicle_name)
-        return self.vehicle_states[vehicle_name].copy()
+        return self._get_or_create_state(vehicle_name)
     
     def _update_vehicle_state(self, vehicle_name: str) -> None:
         """更新无人机状态（完全适配示例API）"""
@@ -239,9 +269,8 @@ class DroneController:
             # 更新飞行状态（使用正确的LandedState属性名）
             state = self.client.getMultirotorState(vehicle_name=vehicle_name)
             # 修正LandedState属性名（移除前缀）
-            self.vehicle_states[vehicle_name]["flying"] = (
-                state.landed_state == airsim.LandedState.Flying
-            )
+            flying_status = (state.landed_state == airsim.LandedState.Flying)
+            self._update_state_field(vehicle_name, "flying", flying_status)
             
             # 更新位置
             self._update_vehicle_position(vehicle_name)
@@ -256,7 +285,8 @@ class DroneController:
         """更新无人机位置信息"""
         try:
             position = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.position
-            self.vehicle_states[vehicle_name]["position"] = (position.x_val, position.y_val, position.z_val)
+            # 使用安全更新方法，避免numpy视图冲突
+            self._update_state_field(vehicle_name, "position", (position.x_val, position.y_val, position.z_val))
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}位置失败: {str(e)}")
 
@@ -266,11 +296,11 @@ class DroneController:
             orientation_q = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.orientation
             from airsim.utils import to_eularian_angles
             pitch, roll, yaw = to_eularian_angles(orientation_q)
-            # 转换为角度
-            self.vehicle_states[vehicle_name]["orientation"] = (
-                math.degrees(roll), 
-                math.degrees(pitch), 
-                math.degrees(yaw)
+            # 使用安全更新方法，避免numpy视图冲突
+            self._update_state_field(
+                vehicle_name, 
+                "orientation", 
+                (math.degrees(roll), math.degrees(pitch), math.degrees(yaw))
             )
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}姿态失败: {str(e)}")

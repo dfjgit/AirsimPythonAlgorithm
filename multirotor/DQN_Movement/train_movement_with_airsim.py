@@ -215,11 +215,55 @@ class AirSimProgressCallback(BaseCallback):
         self.current_episode_reward += self.locals['rewards'][0]
         self.current_episode_length += 1
         
-        # episode结束
-        if self.locals['dones'][0]:
+        # [DEBUG] 打印 self.locals 的键，帮助诊断
+        if self.num_timesteps == 1:
+            print(f"\n[DEBUG] 回调函数首次调用，self.locals 的键: {list(self.locals.keys())}")
+            print(f"[DEBUG] 检查 episode 结束标志:")
+            print(f"  - 'dones' in locals: {'dones' in self.locals}")
+            print(f"  - 'terminations' in locals: {'terminations' in self.locals}")
+            if 'dones' in self.locals:
+                print(f"  - dones 类型: {type(self.locals['dones'])}, 值: {self.locals['dones']}")
+            if 'terminations' in self.locals:
+                print(f"  - terminations 类型: {type(self.locals['terminations'])}, 值: {self.locals['terminations']}")
+            if 'infos' in self.locals:
+                print(f"  - infos[0] 的键: {list(self.locals['infos'][0].keys()) if len(self.locals['infos']) > 0 else 'empty'}")
+        
+        # episode结束检测 - 多种方法
+        is_done = False
+        done_method = None
+        
+        # 方法1: 检查 'dones' (旧版 Gym API)
+        if 'dones' in self.locals and len(self.locals['dones']) > 0:
+            is_done = bool(self.locals['dones'][0])
+            if is_done:
+                done_method = 'dones'
+        
+        # 方法2: 检查 'terminations' 和 'truncations' (新版 Gymnasium API)
+        if not is_done and 'terminations' in self.locals:
+            terminated = bool(self.locals['terminations'][0]) if len(self.locals['terminations']) > 0 else False
+            truncated = bool(self.locals.get('truncations', [False])[0]) if 'truncations' in self.locals and len(self.locals.get('truncations', [])) > 0 else False
+            is_done = terminated or truncated
+            if is_done:
+                done_method = f'terminations({terminated})/truncations({truncated})'
+        
+        # 方法3: 从 infos 中检测 (最可靠的方法)
+        if not is_done and 'infos' in self.locals and len(self.locals['infos']) > 0:
+            info = self.locals['infos'][0]
+            # 检查多种可能的 episode 结束标志
+            if 'TimeLimit.truncated' in info or '_final_observation' in info or 'terminal_observation' in info:
+                is_done = True
+                done_method = 'infos'
+        
+        if is_done:
             self.episode_count += 1
             self.episode_rewards.append(self.current_episode_reward)
             self.episode_lengths.append(self.current_episode_length)
+            
+            print(f"\n[DEBUG] 检测到 episode 结束 (通过 {done_method})")
+            print(f"[DEBUG] Episode {self.episode_count} 完成:")
+            print(f"  - Reward: {self.current_episode_reward:.2f}")
+            print(f"  - Length: {self.current_episode_length}")
+            print(f"  - Timestep: {self.num_timesteps}")
             
             # 获取扫描信息
             scanned_cells = 0
@@ -227,12 +271,23 @@ class AirSimProgressCallback(BaseCallback):
                 info = self.locals['infos'][0]
                 scanned_cells = info.get('scanned_cells', 0)
                 self.episode_scanned.append(scanned_cells)
+                print(f"  - Scanned cells: {scanned_cells}")
             
             # 写入 CSV 日志
             if self.log_dir:
-                with open(self.csv_path, 'a', encoding='utf-8') as f:
-                    f.write(f'{self.episode_count},{self.current_episode_reward:.2f},'
-                           f'{self.current_episode_length},{scanned_cells},{self.num_timesteps}\n')
+                try:
+                    print(f"[DEBUG] 准备写入 CSV: {self.csv_path}")
+                    with open(self.csv_path, 'a', encoding='utf-8') as f:
+                        line = f'{self.episode_count},{self.current_episode_reward:.2f},{self.current_episode_length},{scanned_cells},{self.num_timesteps}\n'
+                        f.write(line)
+                        f.flush()  # 确保立即写入磁盘
+                        print(f"  [✅] 成功写入 CSV: {line.strip()}")
+                except Exception as e:
+                    print(f"  [❌] 写入 CSV 失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"[DEBUG] log_dir 为空，跳过 CSV 写入")
             
             self.current_episode_reward = 0
             self.current_episode_length = 0
