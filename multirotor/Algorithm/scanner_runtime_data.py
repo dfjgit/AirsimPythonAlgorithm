@@ -16,6 +16,7 @@ class ScannerRuntimeData:
     # 当前位置和方向信息（Unity提供）
     position: Vector3
     forward: Vector3
+    orientation: Vector3  # 新增：欧拉角 (roll, pitch, yaw)
 
     # Leader信息（Unity提供）
     leader_position: Vector3
@@ -32,6 +33,7 @@ class ScannerRuntimeData:
         # 初始化向量默认值
         self.position = position if position is not None else Vector3()
         self.forward = Vector3(0, 0, 1)
+        self.orientation = Vector3()  # 初始化欧拉角
         self.scoreDir = Vector3()
         self.collideDir = Vector3()
         self.pathDir = Vector3()
@@ -65,6 +67,7 @@ class ScannerRuntimeData:
             # 当前位置和方向
             'position': self.position.to_dict(),
             'forward': self.forward.to_dict(),
+            'orientation': self.orientation.to_dict(),
 
             # Leader信息
             'leaderPosition': self.leader_position.to_dict(),
@@ -84,6 +87,7 @@ class ScannerRuntimeData:
         vector_keys = [
             ('position', 'position'),
             ('forward', 'forward'),
+            ('orientation', 'orientation'),
             ('scoreDir', 'scoreDir'),
             ('collideDir', 'collideDir'),
             ('pathDir', 'pathDir'),

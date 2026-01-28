@@ -242,6 +242,42 @@ class CrazyflieDataVisualizer:
             if self.show_plots:
                 plt.show()
             plt.close()
+            
+        # 4. 飞行姿态稳定性分析 (Attitude Stability)
+        if any(c in df.columns for c in ['xeulerangle', 'yeulerangle']):
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+            
+            if 'xeulerangle' in df.columns:
+                ax1.plot(df['elapsed_time'], df['xeulerangle'], color='blue', label='Roll (X)')
+                ax1.set_ylabel('角度 (deg)')
+                ax1.set_title('横滚角 (Roll)')
+                ax1.grid(True, alpha=0.3)
+                ax1.legend()
+                
+                # 标注稳定性
+                jitter = df['xeulerangle'].std()
+                ax1.text(0.02, 0.9, f'Jitter: {jitter:.2f}°', transform=ax1.transAxes, 
+                        bbox=dict(facecolor='white', alpha=0.8))
+
+            if 'yeulerangle' in df.columns:
+                ax2.plot(df['elapsed_time'], df['yeulerangle'], color='green', label='Pitch (Y)')
+                ax2.set_ylabel('角度 (deg)')
+                ax2.set_title('俯仰角 (Pitch)')
+                ax2.set_xlabel('时间 (s)')
+                ax2.grid(True, alpha=0.3)
+                ax2.legend()
+                
+                # 标注稳定性
+                jitter = df['yeulerangle'].std()
+                ax2.text(0.02, 0.9, f'Jitter: {jitter:.2f}°', transform=ax2.transAxes, 
+                        bbox=dict(facecolor='white', alpha=0.8))
+            
+            plt.suptitle(f'{drone_name} - 飞行姿态稳定性分析', fontsize=16, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig(output_dir / f"{drone_name}_attitude_stability.png", dpi=150)
+            if self.show_plots:
+                plt.show()
+            plt.close()
     
     def _plot_weight_history(self, weight_history: List[Dict], output_dir: Path):
         """绘制权重变化历史"""
@@ -296,10 +332,10 @@ class CrazyflieDataVisualizer:
                        label=f'后期平均波动: {late_std:.4f}')
             
             if late_std < 0.05:
-                ax2.text(0.05, 0.85, "✅ 策略已趋于稳定 (收敛)", transform=ax2.transAxes, 
+                ax2.text(0.05, 0.85, "[OK] 策略已趋于稳定 (收敛)", transform=ax2.transAxes, 
                         color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
             else:
-                ax2.text(0.05, 0.85, "⚠️ 策略仍在震荡 (未完全收敛)", transform=ax2.transAxes, 
+                ax2.text(0.05, 0.85, "[WARN] 策略仍在震荡 (未完全收敛)", transform=ax2.transAxes, 
                         color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
 
         ax2.set_xlabel('训练步数', fontsize=12)
@@ -437,6 +473,234 @@ class CrazyflieDataVisualizer:
 
 
 class ScanDataVisualizer:
+    """DataCollector 扫描数据可视化器（集成 visualize_scan_csv.py 逻辑）"""
+    
+    def __init__(self, output_dir: Path, show_plots: bool = False):
+        self.output_dir = output_dir
+        self.show_plots = show_plots
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+
+class DQNDataVisualizer:
+    """DQN 移动控制训练数据可视化器"""
+    
+    def __init__(self, output_dir: Path, show_plots: bool = False):
+        self.output_dir = output_dir
+        self.show_plots = show_plots
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def visualize_training(self, metadata_path: Path = None, stats_csv_path: Path = None) -> bool:
+        """分析 DQN 训练数据
+        
+        Args:
+            metadata_path: 训练元数据 JSON 文件路径
+            stats_csv_path: 训练统计 CSV 文件路径
+        """
+        try:
+            # 加载元数据
+            metadata = {}
+            if metadata_path and metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                LOGGER.info(f"[LOG] 分析 DQN 训练数据: {metadata_path.name}")
+            
+            # 加载训练统计
+            if not stats_csv_path or not stats_csv_path.exists():
+                # 尝试从元数据中获取
+                if 'training_stats_path' in metadata:
+                    stats_csv_path = Path(metadata['training_stats_path'])
+            
+            if not stats_csv_path or not stats_csv_path.exists():
+                LOGGER.error(f"[FAIL] 找不到 DQN 训练统计文件")
+                return False
+            
+            df = pd.read_csv(stats_csv_path)
+            if df.empty:
+                LOGGER.warning(f"[WARN] DQN 训练统计文件为空")
+                return False
+            
+            # 创建输出目录
+            session_id = metadata.get('start_time', 'unknown').replace(':', '-').replace(' ', '_')
+            run_dir = self.output_dir / f"dqn_movement_{session_id}"
+            run_dir.mkdir(exist_ok=True)
+            
+            LOGGER.info(f"   训练时长: {metadata.get('duration_seconds', 0):.2f} 秒")
+            LOGGER.info(f"   总 episode: {metadata.get('total_episodes', 0)}")
+            LOGGER.info(f"   总步数: {metadata.get('total_timesteps', 0)}")
+            
+            # 1. Episode 奖励曲线
+            self._plot_reward_curve(df, run_dir)
+            
+            # 2. Episode 长度分析
+            self._plot_episode_length(df, run_dir)
+            
+            # 3. 学习速度分析
+            self._plot_learning_speed(df, run_dir)
+            
+            # 4. 总结统计
+            self._plot_summary_stats(df, metadata, run_dir)
+            
+            LOGGER.info(f"[OK] DQN 分析完成，结果保存在: {run_dir}")
+            return True
+            
+        except Exception as e:
+            LOGGER.error(f"[FAIL] 分析 DQN 训练数据失败: {e}", exc_info=True)
+            return False
+    
+    def _plot_reward_curve(self, df: pd.DataFrame, output_dir: Path):
+        """绘制奖励曲线"""
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # 原始奖励
+        ax.plot(df['episode'], df['reward'], alpha=0.3, color='blue', label='原始奖励')
+        
+        # 移动平均
+        if len(df) > 10:
+            window = max(5, min(20, len(df) // 10))
+            moving_avg = df['reward'].rolling(window=window).mean()
+            ax.plot(df['episode'], moving_avg, linewidth=3, color='red', 
+                   label=f'{window}-Episode 移动平均')
+        
+        ax.set_xlabel('Episode', fontsize=12)
+        ax.set_ylabel('总奖励', fontsize=12)
+        ax.set_title('DQN 训练 - Episode 奖励曲线 (收敛性分析)', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "dqn_reward_curve.png", dpi=150)
+        if self.show_plots:
+            plt.show()
+        plt.close()
+    
+    def _plot_episode_length(self, df: pd.DataFrame, output_dir: Path):
+        """绘制 episode 长度分析"""
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        ax.plot(df['episode'], df['length'], marker='o', markersize=3, 
+               linewidth=1.5, color='orange', label='Episode 步数')
+        
+        # 添加平均线
+        if len(df) > 10:
+            avg_length = df['length'].rolling(window=10).mean()
+            ax.plot(df['episode'], avg_length, linewidth=2.5, color='darkred', 
+                   linestyle='--', label='10-Episode 平均')
+        
+        ax.set_xlabel('Episode', fontsize=12)
+        ax.set_ylabel('Episode 长度 (步数)', fontsize=12)
+        ax.set_title('DQN 训练 - Episode 长度变化', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "dqn_episode_length.png", dpi=150)
+        if self.show_plots:
+            plt.show()
+        plt.close()
+    
+    def _plot_learning_speed(self, df: pd.DataFrame, output_dir: Path):
+        """绘制学习速度分析（奖励增长旜率）"""
+        if len(df) < 5:
+            return
+        
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # 计算奖励旜率
+        window = max(5, min(10, len(df) // 5))
+        smooth_reward = df['reward'].rolling(window=window).mean()
+        slope = smooth_reward.diff().fillna(0)
+        
+        # 绘制填充区域
+        ax.fill_between(df['episode'], slope, 0, where=(slope >= 0), 
+                       color='green', alpha=0.3, label='正向学习')
+        ax.fill_between(df['episode'], slope, 0, where=(slope < 0), 
+                       color='red', alpha=0.2, label='策略波动')
+        
+        ax.plot(df['episode'], slope, color='darkgreen', linewidth=1.5)
+        
+        # 平均学习速率
+        avg_slope = slope.mean()
+        ax.axhline(y=avg_slope, color='blue', linestyle='--', alpha=0.5, 
+                  label=f'平均学习速率: {avg_slope:.2f}/ep')
+        
+        ax.set_xlabel('Episode', fontsize=12)
+        ax.set_ylabel('奖励增长率', fontsize=12)
+        ax.set_title('DQN 训练 - 学习速度分析', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "dqn_learning_speed.png", dpi=150)
+        if self.show_plots:
+            plt.show()
+        plt.close()
+    
+    def _plot_summary_stats(self, df: pd.DataFrame, metadata: dict, output_dir: Path):
+        """绘制总结统计信息"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # 1. 奖励分布直方图
+        ax1.hist(df['reward'], bins=30, color='skyblue', edgecolor='black', alpha=0.7)
+        ax1.axvline(df['reward'].mean(), color='red', linestyle='--', 
+                   label=f'平均: {df["reward"].mean():.2f}')
+        ax1.set_xlabel('奖励值')
+        ax1.set_ylabel('频次')
+        ax1.set_title('奖励分布')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. 长度分布直方图
+        ax2.hist(df['length'], bins=30, color='lightgreen', edgecolor='black', alpha=0.7)
+        ax2.axvline(df['length'].mean(), color='red', linestyle='--', 
+                   label=f'平均: {df["length"].mean():.2f}')
+        ax2.set_xlabel('Episode 长度')
+        ax2.set_ylabel('频次')
+        ax2.set_title('Episode 长度分布')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. 奖励 vs 长度散点图
+        ax3.scatter(df['length'], df['reward'], alpha=0.5, c=df['episode'], 
+                   cmap='viridis', s=20)
+        ax3.set_xlabel('Episode 长度')
+        ax3.set_ylabel('奖励')
+        ax3.set_title('奖励 vs 长度 (颜色=Episode)')
+        ax3.grid(True, alpha=0.3)
+        
+        # 4. 元数据信息
+        ax4.axis('off')
+        info_text = f"""DQN 训练总结
+        
+算法: {metadata.get('algorithm', 'DQN')}
+任务: {metadata.get('task', 'movement_control')}
+
+训练时间:
+  开始: {metadata.get('start_time', 'N/A')}
+  结束: {metadata.get('end_time', 'N/A')}
+  总时长: {metadata.get('duration_seconds', 0):.2f} 秒
+
+统计指标:
+  总 Episode: {len(df)}
+  总步数: {metadata.get('total_timesteps', 0)}
+  平均奖励: {df['reward'].mean():.2f}
+  最大奖励: {df['reward'].max():.2f}
+  最小奖励: {df['reward'].min():.2f}
+  平均长度: {df['length'].mean():.2f} 步
+
+动作空间: {metadata.get('action_space', {}).get('n', 6)} 个离散动作
+观察空间: {metadata.get('observation_space', {}).get('shape', [21])}
+"""
+        ax4.text(0.1, 0.5, info_text, fontsize=10, verticalalignment='center', 
+                family='monospace')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "dqn_summary_stats.png", dpi=150)
+        if self.show_plots:
+            plt.show()
+        plt.close()
+
+
+class ScanDataVisualizer_ORIGINAL:
     """DataCollector 扫描数据可视化器（集成 visualize_scan_csv.py 逻辑）"""
     
     def __init__(self, output_dir: Path, show_plots: bool = False):
@@ -709,10 +973,10 @@ class ScanDataVisualizer:
                         ax6_2.axhline(y=late_var, color='red', linestyle='--', alpha=0.5, label=f'后期平均波动: {late_var:.6f}')
                         
                         if late_var < 0.001:
-                            ax6_2.text(0.05, 0.8, "✅ 权重已收敛，参数输出稳定", transform=ax6_2.transAxes, 
+                            ax6_2.text(0.05, 0.8, "[OK] 权重已收敛，参数输出稳定", transform=ax6_2.transAxes, 
                                     color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
                         else:
-                            ax6_2.text(0.05, 0.8, "⚠️ 权重仍在动态调整中", transform=ax6_2.transAxes, 
+                            ax6_2.text(0.05, 0.8, "[WARN] 权重仍在动态调整中", transform=ax6_2.transAxes, 
                                     color='blue', fontweight='bold', bbox=dict(facecolor='white', alpha=0.7))
                     
                     ax6_2.set_xlabel("时间 (s)")
@@ -757,7 +1021,7 @@ class ScanDataVisualizer:
                     
                     # 标注：只要最终完成度达标且曲线未长期归零，即证明无死锁
                     if df["scan_ratio"].iloc[-1] > 90:
-                        ax7.text(0.05, 0.95, "✅ 系统持续活跃，任务顺利完成，无死锁发生", 
+                        ax7.text(0.05, 0.95, "[OK] 系统持续活跃，任务顺利完成，无死锁发生", 
                                 transform=ax7.transAxes, color='green', fontweight='bold',
                                 bbox=dict(facecolor='white', alpha=0.8))
                     
@@ -818,7 +1082,69 @@ class ScanDataVisualizer:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
 
-            # 7. 实时训练奖励与策略同步分析 (Training Sync Analysis)
+            # 7. 飞行姿态稳定性分析 (Attitude Stability Analysis)
+            try:
+                # 检查是否存在姿态数据
+                attitude_drones = []
+                for drone in drones:
+                    if f"{drone}_roll" in df.columns and f"{drone}_pitch" in df.columns:
+                        attitude_drones.append(drone)
+                
+                if attitude_drones:
+                    fig_att, (ax_att1, ax_att2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+                    
+                    for drone in attitude_drones:
+                        # Roll 波动
+                        roll_data = df[f"{drone}_roll"]
+                        ax_att1.plot(df["elapsed_time"], roll_data, label=f'{drone} Roll', alpha=0.7)
+                        
+                        # Pitch 波动
+                        pitch_data = df[f"{drone}_pitch"]
+                        ax_att2.plot(df["elapsed_time"], pitch_data, label=f'{drone} Pitch', alpha=0.7)
+                        
+                        # 计算抖动 (Jitter) - 标准差
+                        roll_jitter = roll_data.std()
+                        pitch_jitter = pitch_data.std()
+                        LOGGER.info(f"  [分析] {drone} 姿态抖动: Roll={roll_jitter:.2f}°, Pitch={pitch_jitter:.2f}°")
+                    
+                    ax_att1.set_ylabel("横滚角 Roll (deg)")
+                    ax_att1.set_title("飞行姿态稳定性分析 (证明无失控风险)", fontsize=14, fontweight='bold')
+                    ax_att1.grid(True, alpha=0.3)
+                    ax_att1.legend(loc='upper right', fontsize=8)
+                    
+                    ax_att2.set_ylabel("俯仰角 Pitch (deg)")
+                    ax_att2.set_xlabel("时间 (s)")
+                    ax_att2.grid(True, alpha=0.3)
+                    ax_att2.legend(loc='upper right', fontsize=8)
+                    
+                    # 稳定性判定标准
+                    all_roll = pd.concat([df[f"{d}_roll"] for d in attitude_drones])
+                    all_pitch = pd.concat([df[f"{d}_pitch"] for d in attitude_drones])
+                    
+                    max_abs_roll = all_roll.abs().max()
+                    max_abs_pitch = all_pitch.abs().max()
+                    avg_jitter = (all_roll.std() + all_pitch.std()) / 2
+                    
+                    if max_abs_roll < 30 and max_abs_pitch < 30 and avg_jitter < 5:
+                        ax_att1.text(0.02, 0.9, "[OK] 飞行姿态极度平稳", transform=ax_att1.transAxes, 
+                                 color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    elif max_abs_roll < 45 and max_abs_pitch < 45:
+                        ax_att1.text(0.02, 0.9, "[WARN] 飞行存在波动但受控", transform=ax_att1.transAxes, 
+                                 color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    else:
+                        ax_att1.text(0.02, 0.9, "[FAIL] 姿态剧烈震荡/失控风险", transform=ax_att1.transAxes, 
+                                 color='red', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
+                    
+                    fig_att.tight_layout()
+                    figures.append((fig_att, "flight_attitude_stability.png"))
+                    LOGGER.info(f"  [成功] 生成图表: 飞行姿态稳定性")
+                    if self.show_plots:
+                        plt.show()
+                        plt.pause(0.1)
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成图表 '姿态稳定性': {e}")
+
+            # 8. 实时训练奖励与策略同步分析 (Training Sync Analysis)
             try:
                 if "step_reward" in df.columns and "elapsed_time" in df.columns:
                     fig9, ax9_1 = plt.subplots(figsize=(10, 6))
@@ -901,10 +1227,11 @@ class ScanDataVisualizer:
             return False
 
 
-def auto_discover_data() -> Tuple[List[Path], List[Path]]:
+def auto_discover_data() -> Tuple[List[Path], List[Path], List[Path]]:
     """自动发现所有可分析的数据文件"""
     crazyflie_files = []
     scan_files = []
+    dqn_files = []
     
     # 搜索 Crazyflie 训练日志
     crazyflie_logs_dir = Path("multirotor/DDPG_Weight/crazyflie_logs")
@@ -918,7 +1245,15 @@ def auto_discover_data() -> Tuple[List[Path], List[Path]]:
     if scan_data_dir.exists():
         scan_files.extend(list(scan_data_dir.glob("scan_data_*.csv")))
     
-    return crazyflie_files, scan_files
+    # 搜索 DQN 训练日志
+    dqn_logs_dir = Path("multirotor/DQN_Movement/logs")
+    if dqn_logs_dir.exists():
+        for subdir in dqn_logs_dir.glob("*"):
+            if subdir.is_dir():
+                metadata_files = list(subdir.glob("dqn_training_metadata.json"))
+                dqn_files.extend(metadata_files)
+    
+    return crazyflie_files, scan_files, dqn_files
 
 
 class DataComparer:
@@ -1161,6 +1496,277 @@ class DataComparer:
             
         return True
 
+    def compare_ddpg_vs_dqn(self, ddpg_files: List[Path] = None, dqn_files: List[Path] = None) -> bool:
+        """对比 DDPG 权重预测算法 vs DQN 移动控制算法的训练效果
+        
+        Args:
+            ddpg_files: DDPG 训练数据文件列表（支持 JSON/CSV）
+            dqn_files: DQN 训练数据文件列表（JSON metadata 路径）
+        
+        Returns:
+            bool: 对比分析是否成功
+        """
+        LOGGER.info("📊 开始 DDPG vs DQN 算法对比分析...")
+        
+        # 自动发现文件
+        if not ddpg_files:
+            ddpg_files = []
+            ddpg_logs = Path("multirotor/DDPG_Weight/crazyflie_logs")
+            if ddpg_logs.exists():
+                ddpg_files.extend(list(ddpg_logs.glob("crazyflie_training_log_*.json")))
+                ddpg_files.extend(list(ddpg_logs.glob("training_stats*.csv")))
+        
+        if not dqn_files:
+            dqn_files = []
+            dqn_logs = Path("multirotor/DQN_Movement/logs")
+            if dqn_logs.exists():
+                for subdir in dqn_logs.glob("*"):
+                    if subdir.is_dir():
+                        metadata_files = list(subdir.glob("dqn_training_metadata.json"))
+                        dqn_files.extend(metadata_files)
+        
+        if not ddpg_files and not dqn_files:
+            LOGGER.warning("⚠️ 未找到任何 DDPG 或 DQN 训练数据文件")
+            return False
+        
+        LOGGER.info(f"  发现 {len(ddpg_files)} 个 DDPG 训练数据，{len(dqn_files)} 个 DQN 训练数据")
+        
+        # 加载 DDPG 数据
+        ddpg_data = []
+        for f in ddpg_files:
+            try:
+                if f.suffix == '.json':
+                    with open(f, 'r', encoding='utf-8') as jf:
+                        data = json.load(jf)
+                        stats = data.get('episode_stats', [])
+                        if stats:
+                            df = pd.DataFrame(stats)
+                            if 'length' in df.columns:
+                                df = df.rename(columns={'length': 'steps'})
+                            ddpg_data.append((f"DDPG-{f.stem}", df, 'DDPG'))
+                elif f.suffix == '.csv':
+                    df = pd.read_csv(f)
+                    if not df.empty and 'reward' in df.columns:
+                        ddpg_data.append((f"DDPG-{f.stem}", df, 'DDPG'))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取 DDPG 文件失败 {f.name}: {e}")
+        
+        # 加载 DQN 数据
+        dqn_data = []
+        for f in dqn_files:
+            try:
+                # 读取元数据获取 CSV 路径
+                with open(f, 'r', encoding='utf-8') as jf:
+                    metadata = json.load(jf)
+                    csv_path = metadata.get('training_stats_path')
+                    if csv_path and Path(csv_path).exists():
+                        df = pd.read_csv(csv_path)
+                        if not df.empty and 'reward' in df.columns:
+                            dqn_data.append((f"DQN-{f.parent.name}", df, 'DQN'))
+            except Exception as e:
+                LOGGER.error(f"❌ 读取 DQN 文件失败 {f.name}: {e}")
+        
+        all_data = ddpg_data + dqn_data
+        if len(all_data) < 2:
+            LOGGER.warning("⚠️ 对比分析至少需要 2 份有效数据（1份DDPG + 1份DQN）")
+            return False
+        
+        # 创建对比结果目录
+        compare_dir = self.output_dir / "algorithm_comparison_ddpg_vs_dqn"
+        compare_dir.mkdir(exist_ok=True)
+        
+        # 1. 奖励曲线对比 (按算法类型分色)
+        fig1, ax1 = plt.subplots(figsize=(14, 8))
+        color_map = {'DDPG': '#FF6B6B', 'DQN': '#4ECDC4'}  # DDPG 红色系，DQN 蓝绿色系
+        
+        for label, df, algo_type in all_data:
+            if 'reward' in df.columns and 'episode' in df.columns:
+                window = max(2, min(10, len(df) // 10))
+                smooth_reward = df['reward'].rolling(window=window, min_periods=1).mean()
+                ax1.plot(df['episode'], smooth_reward, label=label, 
+                        linewidth=2.5, color=color_map[algo_type], alpha=0.7)
+                # 添加原始数据的阴影区域
+                ax1.fill_between(df['episode'], 
+                               df['reward'].rolling(window=window, min_periods=1).quantile(0.25),
+                               df['reward'].rolling(window=window, min_periods=1).quantile(0.75),
+                               color=color_map[algo_type], alpha=0.1)
+        
+        ax1.set_xlabel("Episode", fontsize=13)
+        ax1.set_ylabel("总奖励 (Cumulative Reward)", fontsize=13)
+        ax1.set_title("DDPG vs DQN 算法对比 - 学习曲线", fontsize=15, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='best', fontsize=10)
+        ax1.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(compare_dir / "ddpg_vs_dqn_reward_curves.png", dpi=150)
+        
+        # 2. 收敛速度对比 (奖励增长斜率)
+        fig2, ax2 = plt.subplots(figsize=(12, 7))
+        convergence_stats = []
+        
+        for label, df, algo_type in all_data:
+            if 'reward' in df.columns and 'episode' in df.columns and len(df) > 10:
+                try:
+                    from scipy import stats as scipy_stats
+                    # 取后 80% 数据计算学习速度
+                    learn_df = df.tail(int(len(df) * 0.8))
+                    if len(learn_df) > 2:
+                        slope, intercept, r_value, _, _ = scipy_stats.linregress(
+                            learn_df['episode'], learn_df['reward']
+                        )
+                        convergence_stats.append({
+                            'label': label,
+                            'algo': algo_type,
+                            'slope': slope,
+                            'r_squared': r_value ** 2
+                        })
+                except Exception as e:
+                    LOGGER.warning(f"  计算 {label} 的收敛速度失败: {e}")
+        
+        if convergence_stats:
+            df_conv = pd.DataFrame(convergence_stats)
+            colors = [color_map[algo] for algo in df_conv['algo']]
+            bars = ax2.bar(df_conv['label'], df_conv['slope'], color=colors, alpha=0.7, edgecolor='black')
+            ax2.set_ylabel("奖励增长斜率 (Reward Growth Rate)", fontsize=12)
+            ax2.set_title("DDPG vs DQN - 收敛速度对比", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值和 R²
+            for i, bar in enumerate(bars):
+                height = bar.get_height()
+                r2 = df_conv['r_squared'].iloc[i]
+                ax2.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}\n(R²={r2:.3f})', 
+                        ha='center', va='bottom' if height > 0 else 'top', fontsize=9)
+            
+            # 添加图例说明算法颜色
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=color_map['DDPG'], label='DDPG (权重预测)'),
+                             Patch(facecolor=color_map['DQN'], label='DQN (移动控制)')]
+            ax2.legend(handles=legend_elements, loc='upper left', fontsize=10)
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_convergence_speed.png", dpi=150)
+        else:
+            plt.close(fig2)
+        
+        # 3. 最终性能对比（最后10个episode的平均奖励）
+        fig3, ax3 = plt.subplots(figsize=(12, 7))
+        final_performance = []
+        
+        for label, df, algo_type in all_data:
+            if 'reward' in df.columns and len(df) > 0:
+                # 取最后10个episode的平均奖励
+                final_avg = df['reward'].tail(10).mean()
+                final_std = df['reward'].tail(10).std()
+                final_performance.append({
+                    'label': label,
+                    'algo': algo_type,
+                    'final_reward': final_avg,
+                    'std': final_std
+                })
+        
+        if final_performance:
+            df_perf = pd.DataFrame(final_performance)
+            colors = [color_map[algo] for algo in df_perf['algo']]
+            bars = ax3.bar(df_perf['label'], df_perf['final_reward'], 
+                          yerr=df_perf['std'], color=colors, alpha=0.7, 
+                          edgecolor='black', capsize=5)
+            ax3.set_ylabel("最终平均奖励 (最后10个Episode)", fontsize=12)
+            ax3.set_title("DDPG vs DQN - 最终性能对比", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45, ha='right')
+            
+            # 标注数值
+            for bar in bars:
+                height = bar.get_height()
+                ax3.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{height:.2f}', ha='center', 
+                        va='bottom' if height > 0 else 'top', fontsize=10)
+            
+            # 添加图例
+            legend_elements = [Patch(facecolor=color_map['DDPG'], label='DDPG (权重预测)'),
+                             Patch(facecolor=color_map['DQN'], label='DQN (移动控制)')]
+            ax3.legend(handles=legend_elements, loc='upper left', fontsize=10)
+            
+            plt.tight_layout()
+            plt.savefig(compare_dir / "ddpg_vs_dqn_final_performance.png", dpi=150)
+        else:
+            plt.close(fig3)
+        
+        # 4. 学习稳定性对比（奖励方差分析）
+        fig4, ax4 = plt.subplots(figsize=(14, 7))
+        
+        for label, df, algo_type in all_data:
+            if 'reward' in df.columns and 'episode' in df.columns and len(df) > 20:
+                # 计算滚动标准差（窗口大小为10）
+                rolling_std = df['reward'].rolling(window=10, min_periods=1).std()
+                ax4.plot(df['episode'], rolling_std, label=label, 
+                        linewidth=2, color=color_map[algo_type], alpha=0.7)
+        
+        ax4.set_xlabel("Episode", fontsize=13)
+        ax4.set_ylabel("奖励标准差 (10-Episode 滚动窗口)", fontsize=12)
+        ax4.set_title("DDPG vs DQN - 学习稳定性对比 (波动程度)", fontsize=14, fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        ax4.legend(loc='best', fontsize=10)
+        plt.tight_layout()
+        plt.savefig(compare_dir / "ddpg_vs_dqn_stability.png", dpi=150)
+        
+        # 5. 生成对比报告文本
+        report_path = compare_dir / "comparison_report.txt"
+        with open(report_path, 'w', encoding='utf-8') as report:
+            report.write("="*80 + "\n")
+            report.write("DDPG vs DQN 算法对比分析报告\n")
+            report.write("="*80 + "\n\n")
+            
+            report.write("1. 算法简介\n")
+            report.write("-" * 80 + "\n")
+            report.write("  DDPG (Deep Deterministic Policy Gradient):\n")
+            report.write("    - 用途: APF 权重参数预测 (连续动作空间)\n")
+            report.write("    - 输出: 6个连续权重值 (wg, wo, wd, wl, wf, wn)\n")
+            report.write("    - 观察空间: 环境熵值、位置、速度等\n\n")
+            
+            report.write("  DQN (Deep Q-Network):\n")
+            report.write("    - 用途: 无人机移动控制 (离散动作空间)\n")
+            report.write("    - 动作: 6个方向 (上/下/左/右/前/后)\n")
+            report.write("    - 观察空间: 位置、速度、熵值、Leader信息等 (21维)\n\n")
+            
+            report.write("2. 收敛速度对比\n")
+            report.write("-" * 80 + "\n")
+            if convergence_stats:
+                for stat in convergence_stats:
+                    report.write(f"  {stat['label']:40s}: 斜率={stat['slope']:8.4f}, R²={stat['r_squared']:.4f}\n")
+            else:
+                report.write("  无法计算收敛速度统计\n")
+            report.write("\n")
+            
+            report.write("3. 最终性能对比\n")
+            report.write("-" * 80 + "\n")
+            if final_performance:
+                for perf in final_performance:
+                    report.write(f"  {perf['label']:40s}: 平均奖励={perf['final_reward']:8.2f} ± {perf['std']:.2f}\n")
+            else:
+                report.write("  无法计算最终性能统计\n")
+            report.write("\n")
+            
+            report.write("4. 结论与建议\n")
+            report.write("-" * 80 + "\n")
+            report.write("  - DDPG 和 DQN 解决不同类型的强化学习问题\n")
+            report.write("  - DDPG 适合连续参数优化，DQN 适合离散决策\n")
+            report.write("  - 建议根据具体任务选择合适的算法\n")
+            report.write("  - 可结合使用：DQN控制移动 + DDPG优化APF权重\n")
+            report.write("\n" + "="*80 + "\n")
+        
+        LOGGER.info(f"✅ DDPG vs DQN 对比分析完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"  📈 生成图表: reward_curves, convergence_speed, final_performance, stability")
+        LOGGER.info(f"  📄 生成报告: {report_path.name}")
+        
+        if self.show_plots:
+            plt.show()
+        else:
+            plt.close('all')
+        
+        return True
+
     def compare_crazyflie_data(self, csv_files: List[Path]) -> bool:
         """对比多份 Crazyflie 飞行数据"""
         if len(csv_files) < 2:
@@ -1221,6 +1827,7 @@ def main():
     parser.add_argument("--out", type=str, default="analysis_results", help="输出目录")
     parser.add_argument("--show", action="store_true", help="完成后显示图表窗口")
     parser.add_argument("--compare", action="store_true", help="对同类型数据进行对比分析")
+    parser.add_argument("--compare-algorithms", action="store_true", help="对比 DDPG vs DQN 算法性能")
     args = parser.parse_args()
     
     output_dir = Path(args.out)
@@ -1228,17 +1835,21 @@ def main():
     # 创建可视化器
     crazyflie_viz = CrazyflieDataVisualizer(output_dir, show_plots=args.show)
     scan_viz = ScanDataVisualizer(output_dir, show_plots=args.show)
+    dqn_viz = DQNDataVisualizer(output_dir, show_plots=args.show)
     
     files_to_process = []
+    dqn_files = []
     
     # 处理输入参数
     if args.auto:
         LOGGER.info("🔍 自动扫描数据文件...")
-        crazyflie_files, scan_files = auto_discover_data()
+        crazyflie_files, scan_files, dqn_data_files = auto_discover_data()
         files_to_process.extend(crazyflie_files)
         files_to_process.extend(scan_files)
+        dqn_files.extend(dqn_data_files)
         LOGGER.info(f"   发现 {len(crazyflie_files)} 个 Crazyflie 文件")
         LOGGER.info(f"   发现 {len(scan_files)} 个扫描数据文件")
+        LOGGER.info(f"   发现 {len(dqn_data_files)} 个 DQN 训练数据")
     
     if args.json:
         files_to_process.append(Path(args.json))
@@ -1249,17 +1860,30 @@ def main():
     if args.dir:
         dir_path = Path(args.dir)
         if dir_path.exists():
-            files_to_process.extend(list(dir_path.glob("*.json")))
-            files_to_process.extend(list(dir_path.glob("*.csv")))
+            # 检查是否是 DQN 目录
+            if 'DQN' in str(dir_path).upper():
+                # 搜索 DQN 元数据文件
+                for subdir in dir_path.glob("*"):
+                    if subdir.is_dir():
+                        metadata_files = list(subdir.glob("dqn_training_metadata.json"))
+                        dqn_files.extend(metadata_files)
+            else:
+                files_to_process.extend(list(dir_path.glob("*.json")))
+                files_to_process.extend(list(dir_path.glob("*.csv")))
     
-    if not files_to_process:
+    if not files_to_process and not dqn_files:
         LOGGER.error("❌ 未找到任何数据文件")
         LOGGER.info("提示: 使用 --auto 自动扫描，或使用 --json/--csv/--dir 指定文件")
         return 1
     
     LOGGER.info(f"\n{'='*60}")
-    LOGGER.info(f"开始处理 {len(files_to_process)} 个文件")
+    LOGGER.info(f"开始处理 {len(files_to_process) + len(dqn_files)} 个文件")
     LOGGER.info(f"{'='*60}\n")
+    
+    # DDPG vs DQN 算法对比分析
+    if args.compare_algorithms:
+        comparer = DataComparer(output_dir, show_plots=args.show)
+        comparer.compare_ddpg_vs_dqn()
     
     # 对比分析
     if args.compare:
@@ -1279,10 +1903,11 @@ def main():
 
         if training_to_compare:
             comparer.compare_training_results(training_to_compare)
-            
+    
     success_count = 0
     fail_count = 0
     
+    # 处理 DDPG/Crazyflie/Scan 数据
     for file_path in files_to_process:
         if not file_path.exists():
             LOGGER.warning(f"⚠️  文件不存在: {file_path}")
@@ -1312,6 +1937,30 @@ def main():
                     fail_count += 1
         except Exception as e:
             LOGGER.error(f"❌ 处理文件失败 {file_path.name}: {e}")
+            fail_count += 1
+    
+    # 处理 DQN 数据
+    for dqn_meta_path in dqn_files:
+        if not dqn_meta_path.exists():
+            LOGGER.warning(f"⚠️  文件不存在: {dqn_meta_path}")
+            fail_count += 1
+            continue
+        
+        try:
+            # 从元数据中获取 CSV 路径
+            with open(dqn_meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+                csv_path = metadata.get('training_stats_path')
+                if csv_path and Path(csv_path).exists():
+                    if dqn_viz.visualize_training(dqn_meta_path, Path(csv_path)):
+                        success_count += 1
+                    else:
+                        fail_count += 1
+                else:
+                    LOGGER.warning(f"⚠️  DQN 训练统计 CSV 不存在: {csv_path}")
+                    fail_count += 1
+        except Exception as e:
+            LOGGER.error(f"❌ 处理 DQN 文件失败 {dqn_meta_path.name}: {e}")
             fail_count += 1
     
     LOGGER.info(f"\n{'='*60}")

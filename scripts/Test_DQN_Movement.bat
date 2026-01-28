@@ -3,21 +3,17 @@ chcp 65001 >nul
 cls
 
 echo ============================================================
-echo DQN Movement Control Training (Real AirSim Environment)
+echo Test DQN Movement Model
 echo ============================================================
 echo.
-echo This script will train the DQN movement control model using the real Unity AirSim simulation environment
+echo This script will test the trained DQN movement control model
 echo.
 echo Important Notes:
-echo   1. Please start the Unity AirSim simulation scene first
-echo   2. Ensure the Unity environment is started and running
-echo   3. DQN will control drone movement through AlgorithmServer
-echo   4. After training, the model will be saved to multirotor\DQN_Movement\models\
+echo   1. Ensure the DQN model has been trained
+echo   2. Model file location: multirotor\DQN_Movement\models\
+echo   3. If testing in Unity environment, start Unity AirSim first
 echo.
 echo ============================================================
-echo.
-echo Press any key to start training...
-pause >nul
 echo.
 
 REM Activate virtual environment
@@ -34,29 +30,42 @@ if exist "%~dp0..\myvenv\Scripts\activate.bat" (
 )
 echo.
 
-REM Check training script
-echo [2/3] Checking training script...
-if exist "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py" (
-    echo [OK] Training script found
+REM Check model file
+echo [2/3] Checking DQN model...
+if exist "%~dp0..\multirotor\DQN_Movement\models\movement_dqn_final.zip" (
+    echo [OK] Trained DQN model found
 ) else (
-    echo [!] Error: Training script does not exist
+    echo [!] Warning: Trained model not found, please train the model first
+    echo     You can use main menu option [8] to train DQN movement
+    echo.
     pause
     exit /b 1
 )
 echo.
 
-REM Run training
-echo [3/3] Starting training (connecting to AirSim)...
+REM Check test script
+echo [3/3] Checking test script...
+if exist "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py" (
+    echo [OK] Test script found
+) else (
+    echo [!] Error: Test script does not exist
+    pause
+    exit /b 1
+)
 echo.
+
 echo ============================================================
-echo Tip: Press Ctrl+C to interrupt training at any time
+echo Starting DQN model testing...
 echo ============================================================
 echo.
-python "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py"
+echo Tip: Press Ctrl+C to interrupt testing at any time
+echo.
+
+python "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py"
 
 echo.
 echo ============================================================
-echo Training completed
+echo Testing completed
 echo ============================================================
 echo.
 echo Press any key to exit...

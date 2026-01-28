@@ -15,10 +15,12 @@ echo === DDPG Weight APF Training ===
 echo   [4] Train DDPG Weights (Real AirSim Environment) [⭐Available!]
 echo.
 echo === DQN Movement Control Training ===
-echo   [5] Train DQN Movement (Real AirSim Environment)[Has some issues]
+echo   [5] Train DQN Movement (Real AirSim Environment)[⭐Available!]
+echo   [D] Test DQN Movement Model [⭐Available!]
 echo.
 echo === Data Analysis ===
 echo   [A] Data Visualization Analysis [⭐Available!]
+echo   [B] DDPG vs DQN Algorithm Comparison [⭐Available!]
 echo.
 echo === System Information ===
 echo   [6] View System Information
@@ -27,14 +29,16 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=Please enter an option (0-6,A): 
+set /p choice=Please enter an option (0-6,A-D): 
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
 if /i "%choice%"=="3" goto run_dqn_movement
 if /i "%choice%"=="4" goto train_weight_airsim
 if /i "%choice%"=="5" goto train_movement_airsim
+if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
+if /i "%choice%"=="b" goto compare_algorithms
 if /i "%choice%"=="6" goto info
 if /i "%choice%"=="0" goto end
 
@@ -90,6 +94,15 @@ echo.
 call scripts\Train_DQN_Movement_Real_Environment.bat
 goto menu
 
+:test_movement_dqn
+cls
+echo ============================================================
+echo Test DQN Movement Model
+echo ============================================================
+echo.
+call scripts\Test_DQN_Movement.bat
+goto menu
+
 :data_visualization
 cls
 echo ============================================================
@@ -97,6 +110,33 @@ echo Data Visualization Analysis
 echo ============================================================
 echo.
 call scripts\Data_Visualization_Analysis.bat
+goto menu
+
+:compare_algorithms
+cls
+echo ============================================================
+echo DDPG vs DQN Algorithm Comparison Analysis
+echo ============================================================
+echo.
+echo [Tip] This feature will compare the training effects of DDPG and DQN algorithms
+echo.
+if not exist "myvenv\Scripts\activate.bat" (
+    echo [Error] Python virtual environment does not exist
+    pause
+    goto menu
+)
+call myvenv\Scripts\activate.bat
+python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --out analysis_results
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo [Success] Algorithm comparison analysis completed!
+    echo [Results] Please check analysis_results\algorithm_comparison_ddpg_vs_dqn\ directory
+) else (
+    echo.
+    echo [Failed] Algorithm comparison analysis failed, please check if there is enough training data
+)
+echo.
+pause
 goto menu
 
 :info

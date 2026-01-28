@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 
 from Algorithm.scanner_config_data import ScannerConfigData
+from Algorithm.drones_config import DronesConfig
 
 
 class BatteryStatus(Enum):
@@ -21,7 +22,7 @@ class BatteryInfo:
     """无人机电池信息数据类"""
     voltage: float = 4.2                    # 当前电压 (V)
     initial_voltage: float = 4.2           # 初始电压 (V)
-    consumption_rate: float = 0.01         # 基础消耗率 (V/步)
+    consumption_rate: float = 0.0020       # 基础消耗率 (V/秒) - 基于Crazyflie实际续航
     last_update_time: float = None         # 最后更新时间戳
     status: BatteryStatus = BatteryStatus.NORMAL  # 电池状态
     crazyflieMirror: bool = False            # Crazyflie镜像标志
@@ -97,16 +98,24 @@ class BatteryInfo:
 class BatteryManager:
     """电池管理器类，管理多无人机的电池数据"""
     
-    def __init__(self, configData: ScannerConfigData):
-        """初始化电池管理器"""
+    def __init__(self, configData: ScannerConfigData, drones_config: Optional[DronesConfig] = None):
+        """初始化电池管理器
+        :param configData: APF算法配置（兼容参数）
+        :param drones_config: 无人机配置，如果为None则自动创建
+        """
         self.battery_data: Dict[str, BatteryInfo] = {}
         self.lock = threading.Lock()  # 线程安全锁
         
-        for drone_name in configData.droneSettings.keys():
-            self.add_drone(drone_name, 4.2, 0.01, configData.droneSettings[drone_name].get("isCrazyflieMirror", False))
+        # 使用新的DronesConfig加载无人机配置
+        if drones_config is None:
+            drones_config = DronesConfig()
+        
+        for drone_name in drones_config.get_all_drones():
+            is_crazyflie = drones_config.is_crazyflie_mirror(drone_name)
+            self.add_drone(drone_name, 4.2, 0.0020, is_crazyflie)
     
     def add_drone(self, drone_name: str, initial_voltage: float = 4.2, 
-                  consumption_rate: float = 0.01, crazyflie_mirror: bool = False) -> BatteryInfo:
+                  consumption_rate: float = 0.0020, crazyflie_mirror: bool = False) -> BatteryInfo:
         """添加无人机电池数据"""
         with self.lock:
             battery_info = BatteryInfo(
@@ -148,25 +157,29 @@ class BatteryManager:
                              f"(来自实体无人机数据, 状态: {battery_info.status.value})")
                 return new_voltage
             
-            # 虚拟无人机：使用模拟电量消耗
+            # 虚拟无人机：使用模拟电量消耗（优化为匹配Crazyflie真实耗电特性）
             current_time = time.time()
             time_elapsed = current_time - battery_info.last_update_time
             
-            # 基础消耗（每秒0.01V，基于时间间隔计算）
+            # 基础消耗（悬停状态）
+            # Crazyflie 2.x: 240mAh电池，悬停功耗约1A，全电压差1.2V，理论续航约10分钟
+            # 优化公式：0.0020V/秒 = 1.2V / (10分钟 * 60秒) = 0.002V/s
             base_consumption = battery_info.consumption_rate * time_elapsed
             
-            # 动作强度影响（动作越强，消耗越多）
-            action_consumption = action_intensity * 0.005 * time_elapsed  # 最大额外消耗0.005V/秒
+            # 动作强度影响（高速飞行、急转等会增加功耗，最多增加50%）
+            # 全速飞行时功耗约1.5A，相当于悬停的1.5倍
+            action_consumption = action_intensity * 0.0010 * time_elapsed  # 最大额外50%消耗
             
-            # 总消耗
+            # 总消耗（悬停10分钟，激烈飞行约6-7分钟）
             total_consumption = base_consumption + action_consumption
             
             # 更新电压（不低于3.0V）
             new_voltage = max(3.0, battery_info.voltage - total_consumption)
             battery_info.update_voltage(new_voltage)
             
-            logging.debug(f"虚拟无人机 {drone_name} 电量更新: {battery_info.voltage:.2f}V "
-                         f"(消耗: {total_consumption:.3f}V, 时间间隔: {time_elapsed:.2f}s, 状态: {battery_info.status.value})")
+            logging.debug(f"虚拟无人机 {drone_name} 电量更新: {battery_info.voltage:.3f}V "
+                         f"(消耗: {total_consumption:.4f}V, 时间: {time_elapsed:.2f}s, "
+                         f"动作强度: {action_intensity:.2f}, 状态: {battery_info.status.value})")
             return new_voltage
     
     def reset_voltage(self, drone_name: str) -> float:
@@ -194,7 +207,7 @@ class BatteryManager:
         with self.lock:
             if drone_name in self.battery_data:
                 self.battery_data[drone_name].consumption_rate = rate
-                logging.info(f"无人机 {drone_name} 电量消耗率设置为: {rate:.3f}V/步")
+                logging.info(f"无人机 {drone_name} 电量消耗率设置为: {rate:.4f}V/秒")
             else:
                 logging.warning(f"无人机 {drone_name} 的电量数据不存在，初始化电量数据")
                 self.add_drone(drone_name, consumption_rate=rate)

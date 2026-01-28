@@ -20,7 +20,6 @@
     python train_with_hybrid.py --config hybrid_train_config.json
     python train_with_hybrid.py --mirror-drones UAV1 UAV2 --total-timesteps 1000
 
-作者：训练模块开发团队
 日期：2026-01-23
 """
 import os
@@ -160,12 +159,21 @@ def _setup_hybrid_config(config_file: str, mirror_drones: list) -> str:
     print(f"   原始配置文件: {config_file}")
     print(f"   实体镜像无人机: {', '.join(mirror_drones)}")
     
-    for drone_name in mirror_drones:
-        if drone_name in config_data.droneSettings:
-            config_data.set_uav_crazyflie_mirror(drone_name, True)
-            print(f"   ✅ {drone_name}: isCrazyflieMirror = True")
-        else:
-            print(f"   ⚠️  {drone_name}: 不在配置文件中，跳过")
+    # 使用DronesConfig加载无人机配置
+    from Algorithm.drones_config import DronesConfig
+    drones_config = DronesConfig()
+    
+    # 更新drones_config.json中的镜像设置
+    for drone_name in drones_config.get_all_drones():
+        is_mirror = drone_name in mirror_drones
+        drone_info = drones_config.get_drone_info(drone_name)
+        if drone_info:
+            drone_info['isCrazyflieMirror'] = is_mirror
+            print(f"   ✅ {drone_name}: isCrazyflieMirror = {is_mirror}")
+    
+    # 保存更新后的配置
+    drones_config.save_config()
+    print(f"   💾 无人机配置已更新: drones_config.json")
     
     # 创建临时配置文件
     temp_config_dir = os.path.join(os.path.dirname(__file__), "temp_configs")
@@ -174,7 +182,7 @@ def _setup_hybrid_config(config_file: str, mirror_drones: list) -> str:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     temp_config_file = os.path.join(temp_config_dir, f"hybrid_config_{timestamp}.json")
     
-    # 保存修改后的配置
+    # 保存修改后的配置（不再保存droneSettings）
     config_dict = {
         "repulsionCoefficient": config_data.repulsionCoefficient,
         "entropyCoefficient": config_data.entropyCoefficient,
@@ -192,7 +200,6 @@ def _setup_hybrid_config(config_file: str, mirror_drones: list) -> str:
         "targetSearchRange": config_data.targetSearchRange,
         "revisitCooldown": config_data.revisitCooldown,
         "altitude": config_data.altitude,
-        "droneSettings": config_data.droneSettings,
         "name": config_data.name,
         "hideFlags": config_data.hideFlags
     }

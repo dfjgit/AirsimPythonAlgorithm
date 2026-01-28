@@ -1,0 +1,46 @@
+{
+  "description": "无人机配置文件 - 统一管理所有无人机的基础配置",
+  "version": "1.0.0",
+  
+  "drones": {
+    "UAV1": {
+      "enabled": true,
+      "type": "virtual",
+      "isCrazyflieMirror": false,
+      "description": "虚拟无人机1（AirSim）"
+    },
+    "UAV2": {
+      "enabled": true,
+      "type": "virtual",
+      "isCrazyflieMirror": false,
+      "description": "虚拟无人机2（AirSim）"
+    },
+    "UAV3": {
+      "enabled": true,
+      "type": "virtual",
+      "isCrazyflieMirror": false,
+      "description": "虚拟无人机3（AirSim）"
+    }
+  },
+  
+  "training": {
+    "dqn": {
+      "use_all_drones": true,
+      "drone_list": ["UAV1"],
+      "description": "DQN训练使用的无人机配置"
+    },
+    "ddpg": {
+      "use_all_drones": true,
+      "drone_list": ["UAV1"],
+      "description": "DDPG训练使用的无人机配置"
+    }
+  },
+  
+  "notes": {
+    "type": "无人机类型：virtual=虚拟无人机(AirSim), physical=实体无人机(Crazyflie)",
+    "isCrazyflieMirror": "是否为Crazyflie实体无人机的镜像（用于虚实协同）",
+    "enabled": "是否启用该无人机",
+    "use_all_drones": "是否使用所有enabled=true的无人机进行训练",
+    "drone_list": "指定训练使用的无人机列表（仅当use_all_drones=false时生效）"
+  }
+}

@@ -109,16 +109,24 @@ os.makedirs(log_dir, exist_ok=True)
 
 # 自定义进度回调
 class ProgressCallback(BaseCallback):
-    """显示训练进度和统计信息"""
+    """显示训练进度和统计信息，并保存训练数据"""
     
-    def __init__(self, total_timesteps, print_freq=1000, verbose=0):
+    def __init__(self, total_timesteps, print_freq=1000, save_dir=None, verbose=0):
         super(ProgressCallback, self).__init__(verbose)
         self.total_timesteps = total_timesteps
         self.print_freq = print_freq
+        self.save_dir = save_dir
         self.episode_rewards = []
         self.episode_lengths = []
+        self.episode_times = []
         self.current_episode_reward = 0
         self.current_episode_length = 0
+        self.episode_count = 0
+        self.start_time = datetime.now()
+        
+        # 创建保存目录
+        if self.save_dir:
+            os.makedirs(self.save_dir, exist_ok=True)
         
     def _on_step(self) -> bool:
         # 累计episode统计
@@ -127,8 +135,15 @@ class ProgressCallback(BaseCallback):
         
         # episode结束
         if self.locals['dones'][0]:
+            self.episode_count += 1
             self.episode_rewards.append(self.current_episode_reward)
             self.episode_lengths.append(self.current_episode_length)
+            self.episode_times.append((datetime.now() - self.start_time).total_seconds())
+            
+            # 保存 episode 统计
+            if self.save_dir:
+                self._save_episode_stats()
+            
             self.current_episode_reward = 0
             self.current_episode_length = 0
         
@@ -145,6 +160,27 @@ class ProgressCallback(BaseCallback):
                 print(f"\n进度: {progress:.1f}% ({self.num_timesteps}/{self.total_timesteps})")
         
         return True
+    
+    def _save_episode_stats(self):
+        """保存 episode 统计数据为 CSV 格式"""
+        import csv
+        csv_path = os.path.join(self.save_dir, 'dqn_training_stats.csv')
+        
+        # 准备数据
+        stats = {
+            'episode': self.episode_count,
+            'reward': self.episode_rewards[-1],
+            'length': self.episode_lengths[-1],
+            'elapsed_time': self.episode_times[-1]
+        }
+        
+        # 写入 CSV
+        file_exists = os.path.exists(csv_path)
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['episode', 'reward', 'length', 'elapsed_time'])
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(stats)
 
 # 检查点回调
 checkpoint_callback = CheckpointCallback(
@@ -156,7 +192,8 @@ checkpoint_callback = CheckpointCallback(
 # 进度回调
 progress_callback = ProgressCallback(
     total_timesteps=config['training']['total_timesteps'],
-    print_freq=1000
+    print_freq=1000,
+    save_dir=log_dir  # 添加保存目录
 )
 
 print(f"  ✓ 回调设置完成")
@@ -193,13 +230,40 @@ except Exception as e:
     traceback.print_exc()
 
 print("\n" + "=" * 80)
-print("[步骤7] 保存最终模型")
+print("[步骤7] 保存最终模型和训练数据")
 print("=" * 80)
 
 # 保存最终模型
 final_model_path = os.path.join(model_dir, 'movement_dqn_final')
 model.save(final_model_path)
 print(f"  ✓ 最终模型已保存: {final_model_path}.zip")
+
+# 保存训练元数据为 JSON
+metadata = {
+    'algorithm': 'DQN',
+    'task': 'movement_control',
+    'start_time': progress_callback.start_time.strftime('%Y-%m-%d %H:%M:%S'),
+    'end_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    'duration_seconds': (datetime.now() - progress_callback.start_time).total_seconds(),
+    'total_timesteps': config['training']['total_timesteps'],
+    'total_episodes': progress_callback.episode_count,
+    'config': config,
+    'observation_space': {
+        'shape': list(env.observation_space.shape),
+        'dtype': str(env.observation_space.dtype)
+    },
+    'action_space': {
+        'n': env.action_space.n,
+        'actions': ['up', 'down', 'left', 'right', 'forward', 'backward']
+    },
+    'final_model_path': f"{final_model_path}.zip",
+    'training_stats_path': os.path.join(log_dir, 'dqn_training_stats.csv')
+}
+
+metadata_path = os.path.join(log_dir, 'dqn_training_metadata.json')
+with open(metadata_path, 'w', encoding='utf-8') as f:
+    json.dump(metadata, f, ensure_ascii=False, indent=2)
+print(f"  ✓ 训练元数据已保存: {metadata_path}")
 
 print("\n" + "=" * 80)
 print("[步骤8] 测试模型")

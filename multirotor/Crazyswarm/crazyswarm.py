@@ -9,6 +9,7 @@ from multirotor.Algorithm.battery_data import BatteryManager
 
 from AirsimServer.unity_socket_server import UnitySocketServer
 from Algorithm.scanner_config_data import ScannerConfigData
+from Algorithm.drones_config import DronesConfig
 from .crazyflie_operate import CrazyflieOperate
 from .crazyflie_operate import EnumCrazyflieOperate
 from .crazyflie_logging_data import CrazyflieLoggingData
@@ -18,16 +19,19 @@ logger = logging.getLogger("CrazyswarmManager")
 
 class CrazyswarmManager:
     
-    def __init__(self, unity_socket: UnitySocketServer, battery_manager: BatteryManager, configData: ScannerConfigData):
+    def __init__(self, unity_socket: UnitySocketServer, battery_manager: BatteryManager, configData: ScannerConfigData, drones_config: DronesConfig = None):
         self.unity_socket = unity_socket  # Unity通信Socket服务
         self.crazyflieLoggingDataById : Dict[int, CrazyflieLoggingData] = {}
         self.operateDatas: list[CrazyflieOperate] = []
         self.battery_manager = battery_manager
 
-        for drone_name in configData.droneSettings.keys():
-            isCrazyflieMirror = configData.droneSettings[drone_name]["isCrazyflieMirror"]
-
-            if isCrazyflieMirror:
+        # 使用新的DronesConfig加载无人机配置
+        if drones_config is None:
+            drones_config = DronesConfig()
+        
+        for drone_name in drones_config.get_all_drones():
+            is_crazyflie = drones_config.is_crazyflie_mirror(drone_name)
+            if is_crazyflie:
                 id = self.get_id_by_name(drone_name)
                 self.crazyflieLoggingDataById[id] = None
 

@@ -38,7 +38,8 @@ class DroneController:
             "armed": False,  # 无法直接获取，通过操作记录
             "flying": False,
             "api_enabled": False,
-            "position": (0.0, 0.0, 0.0)
+            "position": (0.0, 0.0, 0.0),
+            "orientation": (0.0, 0.0, 0.0)  # roll, pitch, yaw
         })
 
     def connect(self) -> bool:
@@ -245,6 +246,9 @@ class DroneController:
             # 更新位置
             self._update_vehicle_position(vehicle_name)
             
+            # 更新姿态
+            self._update_vehicle_orientation(vehicle_name)
+            
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}状态失败: {str(e)}")
     
@@ -255,3 +259,18 @@ class DroneController:
             self.vehicle_states[vehicle_name]["position"] = (position.x_val, position.y_val, position.z_val)
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}位置失败: {str(e)}")
+
+    def _update_vehicle_orientation(self, vehicle_name: str) -> None:
+        """更新无人机姿态信息（欧拉角）"""
+        try:
+            orientation_q = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.orientation
+            from airsim.utils import to_eularian_angles
+            pitch, roll, yaw = to_eularian_angles(orientation_q)
+            # 转换为角度
+            self.vehicle_states[vehicle_name]["orientation"] = (
+                math.degrees(roll), 
+                math.degrees(pitch), 
+                math.degrees(yaw)
+            )
+        except Exception as e:
+            logger.warning(f"更新无人机{vehicle_name}姿态失败: {str(e)}")

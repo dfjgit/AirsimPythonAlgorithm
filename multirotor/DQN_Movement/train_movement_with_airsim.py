@@ -31,53 +31,104 @@ except ImportError:
     sys.exit(1)
 
 # 导入环境和服务器
-from movement_env import MovementEnv
+from movement_env import MovementEnv, MultiDroneMovementEnv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from AlgorithmServer import MultiDroneAlgorithmServer
+from Algorithm.drones_config import DronesConfig
 
 print("\n" + "=" * 80)
-print("[步骤2] 启动AirSim服务器")
+print("[步骤2] 加载配置并确定训练无人机")
 print("=" * 80)
 
-# 配置文件路径
-config_file = os.path.join(os.path.dirname(__file__), "..", "scanner_config.json")
-if not os.path.exists(config_file):
-    print(f"  ✗ 配置文件不存在: {config_file}")
+# 加载无人机配置
+drones_config = DronesConfig()
+print(f"  ✓ 加载 drones_config.json")
+print(f"    - 所有无人机: {drones_config.get_all_drones()}")
+print(f"    - 启用的无人机: {drones_config.get_enabled_drones()}")
+
+# 获取 DQN 训练使用的无人机列表
+drone_names = drones_config.get_training_drones('dqn')
+print(f"  ✓ DQN训练使用的无人机: {drone_names}")
+
+if not drone_names:
+    print(f"  ✗ 错误: 没有可用的训练无人机，请检查 drones_config.json")
     sys.exit(1)
 
-# 创建算法服务器
-print(f"  正在启动服务器...")
-server = MultiDroneAlgorithmServer(
-    config_file=config_file,
-    drone_names=["UAV1"],
-    use_learned_weights=False
-)
+# 显示无人机类型（虚拟/实体）
+print(f"  \n  训练无人机详情:")
+for drone in drone_names:
+    drone_type_str = drones_config.get_drone_type(drone)
+    is_crazyflie = drones_config.is_crazyflie_mirror(drone)
+    type_display = "实体无人机(Crazyflie)" if is_crazyflie else "虚拟无人机(AirSim)"
+    print(f"    - {drone}: {type_display}")
 
-# 在后台线程中运行服务器
-server_thread = threading.Thread(target=server.start, daemon=True)
-server_thread.start()
+# 加载 DQN 训练配置
+dqn_config_path = os.path.join(os.path.dirname(__file__), "movement_dqn_config.json")
+with open(dqn_config_path, 'r', encoding='utf-8') as f:
+    dqn_config = json.load(f)
+print(f"  ✓ 加载 movement_dqn_config.json")
 
-# 等待服务器初始化
-print(f"  等待服务器初始化...")
-time.sleep(3)
-
-if server.running:
-    print(f"  ✓ AirSim服务器启动成功")
-else:
-    print(f"  ⚠ 服务器可能未完全启动，但将继续尝试")
+# scanner_config.json 路径（AlgorithmServer需要）
+config_file = os.path.join(os.path.dirname(__file__), "..", "scanner_config.json")
+if not os.path.exists(config_file):
+    print(f"  ✗ scanner_config.json 不存在: {config_file}")
+    sys.exit(1)
 
 print("\n" + "=" * 80)
-print("[步骤3] 创建训练环境")
+print("[步骤3] 启动AirSim服务器")
 print("=" * 80)
 
-# 加载配置
-config_path = os.path.join(os.path.dirname(__file__), "movement_dqn_config.json")
-with open(config_path, 'r', encoding='utf-8') as f:
-    config = json.load(f)
+# 创建算法服务器（使用DQN控制模式）
+print(f"  正在启动服务器 (DQN控制模式)...")
+server = MultiDroneAlgorithmServer(
+    config_file=config_file,
+    drone_names=drone_names,  # 使用从配置文件读取的无人机列表
+    use_learned_weights=False,
+    control_mode='dqn'  # 关键：使用DQN控制模式
+)
 
-# 创建环境（连接到server）
-env = MovementEnv(server=server, drone_name="UAV1", config_path=config_path)
-env = Monitor(env)
+# 启动服务器（连接Unity和AirSim）
+print(f"  连接Unity和AirSim...")
+if not server.start():
+    print(f"  ✗ 服务器启动失败")
+    sys.exit(1)
+
+print(f"  ✓ 服务器启动成功")
+
+# 关键：启动任务（让无人机起飞并启动算法线程）
+print(f"  启动无人机任务...")
+if not server.start_mission():
+    print(f"  ✗ 无人机任务启动失败")
+    sys.exit(1)
+
+print(f"  ✓ 无人机任务启动成功")
+
+print("\n" + "=" * 80)
+print("[步骤4] 创建训练环境")
+print("=" * 80)
+
+# 根据无人机数量选择环境类型
+if len(drone_names) == 1:
+    # 单机训练
+    training_drone = drone_names[0]
+    print(f"  模式: 单机训练")
+    print(f"  训练无人机: {training_drone}")
+    
+    env = MovementEnv(server=server, drone_name=training_drone, config_path=dqn_config_path)
+    env = Monitor(env)
+    
+else:
+    # 多机训练（参数共享）
+    print(f"  模式: 多机训练（参数共享）")
+    print(f"  训练无人机: {drone_names}")
+    print(f"  无人机数量: {len(drone_names)}")
+    print(f"  \n  多机训练详情:")
+    for drone in drone_names:
+        drone_type = "实体" if drones_config.is_crazyflie_mirror(drone) else "虚拟"
+        print(f"    - {drone}: {drone_type}无人机")
+    
+    env = MultiDroneMovementEnv(server=server, drone_names=drone_names, config_path=dqn_config_path)
+    env = Monitor(env)
 
 print(f"  ✓ 环境创建成功")
 print(f"    - 观察空间: {env.observation_space.shape}")
@@ -85,12 +136,16 @@ print(f"    - 动作空间: {env.action_space.n} (6方向)")
 print(f"    - 连接到服务器: {server.running}")
 
 print("\n" + "=" * 80)
-print("[步骤4] 创建或加载DQN模型")
+print("[步骤5] 创建或加载DQN模型")
 print("=" * 80)
 
 # 检查是否有预训练模型
 model_dir = os.path.join(os.path.dirname(__file__), 'models')
 os.makedirs(model_dir, exist_ok=True)
+
+# 日志目录（提前创建）
+log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
+os.makedirs(log_dir, exist_ok=True)
 
 pretrained_model = os.path.join(model_dir, 'movement_dqn_final.zip')
 use_pretrained = os.path.exists(pretrained_model)
@@ -99,42 +154,41 @@ if use_pretrained:
     print(f"  ✓ 找到预训练模型: {pretrained_model}")
     print(f"  加载预训练模型继续训练...")
     model = DQN.load(pretrained_model, env=env)
-    model.tensorboard_log = None  # 禁用tensorboard
+    # 启用 TensorBoard 日志
+    model.tensorboard_log = log_dir
     print(f"  ✓ 预训练模型加载成功")
+    print(f"  ✓ TensorBoard 日志: {log_dir}")
 else:
     print(f"  创建新模型...")
     model = DQN(
-        config['model']['policy'],
+        dqn_config['model']['policy'],
         env,
-        learning_rate=config['training']['learning_rate'],
-        buffer_size=config['training']['buffer_size'],
-        learning_starts=config['training']['learning_starts'],
-        batch_size=config['training']['batch_size'],
-        tau=config['training']['tau'],
-        gamma=config['training']['gamma'],
-        target_update_interval=config['training']['target_update_interval'],
-        exploration_fraction=config['training']['exploration_fraction'],
-        exploration_initial_eps=config['training']['exploration_initial_eps'],
-        exploration_final_eps=config['training']['exploration_final_eps'],
-        policy_kwargs=dict(net_arch=config['model']['net_arch']),
+        learning_rate=dqn_config['training']['learning_rate'],
+        buffer_size=dqn_config['training']['buffer_size'],
+        learning_starts=dqn_config['training']['learning_starts'],
+        batch_size=dqn_config['training']['batch_size'],
+        tau=dqn_config['training']['tau'],
+        gamma=dqn_config['training']['gamma'],
+        target_update_interval=dqn_config['training']['target_update_interval'],
+        exploration_fraction=dqn_config['training']['exploration_fraction'],
+        exploration_initial_eps=dqn_config['training']['exploration_initial_eps'],
+        exploration_final_eps=dqn_config['training']['exploration_final_eps'],
+        policy_kwargs=dict(net_arch=dqn_config['model']['net_arch']),
         verbose=1,
-        tensorboard_log=None
+        tensorboard_log=log_dir  # 启用 TensorBoard 日志
     )
     print(f"  ✓ 新模型创建成功")
+    print(f"  ✓ TensorBoard 日志: {log_dir}")
 
 print("\n" + "=" * 80)
-print("[步骤5] 设置训练回调")
+print("[步骤6] 设置训练回调")
 print("=" * 80)
-
-# 日志目录
-log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
-os.makedirs(log_dir, exist_ok=True)
 
 # 自定义回调
 class AirSimProgressCallback(BaseCallback):
-    """AirSim训练进度回调"""
+    """一步一步加载训练进度回调"""
     
-    def __init__(self, total_timesteps, print_freq=500, verbose=0):
+    def __init__(self, total_timesteps, print_freq=500, log_dir=None, verbose=0):
         super(AirSimProgressCallback, self).__init__(verbose)
         self.total_timesteps = total_timesteps
         self.print_freq = print_freq
@@ -143,6 +197,18 @@ class AirSimProgressCallback(BaseCallback):
         self.episode_scanned = []
         self.current_episode_reward = 0
         self.current_episode_length = 0
+        self.episode_count = 0
+        
+        # CSV 日志记录
+        self.log_dir = log_dir
+        if self.log_dir:
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.csv_path = os.path.join(self.log_dir, f'dqn_training_{timestamp}.csv')
+            # 创建 CSV 文件并写入表头
+            with open(self.csv_path, 'w', encoding='utf-8') as f:
+                f.write('episode,reward,length,scanned_cells,timestep\n')
+            print(f"  ✓ CSV 日志: {self.csv_path}")
         
     def _on_step(self) -> bool:
         # 累计统计
@@ -151,13 +217,22 @@ class AirSimProgressCallback(BaseCallback):
         
         # episode结束
         if self.locals['dones'][0]:
+            self.episode_count += 1
             self.episode_rewards.append(self.current_episode_reward)
             self.episode_lengths.append(self.current_episode_length)
             
             # 获取扫描信息
+            scanned_cells = 0
             if 'infos' in self.locals and len(self.locals['infos']) > 0:
                 info = self.locals['infos'][0]
-                self.episode_scanned.append(info.get('scanned_cells', 0))
+                scanned_cells = info.get('scanned_cells', 0)
+                self.episode_scanned.append(scanned_cells)
+            
+            # 写入 CSV 日志
+            if self.log_dir:
+                with open(self.csv_path, 'a', encoding='utf-8') as f:
+                    f.write(f'{self.episode_count},{self.current_episode_reward:.2f},'
+                           f'{self.current_episode_length},{scanned_cells},{self.num_timesteps}\n')
             
             self.current_episode_reward = 0
             self.current_episode_length = 0
@@ -195,17 +270,18 @@ checkpoint_callback = CheckpointCallback(
 
 # 进度回调
 progress_callback = AirSimProgressCallback(
-    total_timesteps=config['training']['total_timesteps'],
-    print_freq=500
+    total_timesteps=dqn_config['training']['total_timesteps'],
+    print_freq=500,
+    log_dir=log_dir  # 传入日志目录，启用 CSV 记录
 )
 
 print(f"  ✓ 回调设置完成")
 
 print("\n" + "=" * 80)
-print("[步骤6] 开始训练")
+print("[步骤7] 开始训练")
 print("=" * 80)
 
-total_timesteps = config['training']['total_timesteps']
+total_timesteps = dqn_config['training']['total_timesteps']
 print(f"训练步数: {total_timesteps}")
 print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"\n⚠ 请确保Unity客户端已连接到服务器")
@@ -213,6 +289,23 @@ print(f"按 Ctrl+C 可以随时中断训练并保存模型\n")
 
 try:
     # 开始训练
+    print(f"\n[DEBUG] 即将调用 model.learn()...")
+    print(f"[DEBUG] total_timesteps = {total_timesteps}")
+    print(f"[DEBUG] learning_starts = {dqn_config['training']['learning_starts']}")
+    
+    # 测试环境是否可以正常工作
+    print(f"\n[DEBUG] 测试环境...")
+    print(f"[DEBUG] 调用 env.reset()...")
+    test_obs, test_info = env.reset()
+    print(f"[DEBUG] env.reset() 完成，observation shape = {test_obs.shape}")
+    
+    print(f"[DEBUG] 调用 env.step(0)...")
+    test_obs2, test_reward, test_done, test_truncated, test_info2 = env.step(0)
+    print(f"[DEBUG] env.step(0) 完成，reward = {test_reward:.2f}, done = {test_done}")
+    print(f"[DEBUG] 环境测试通过！\n")
+    
+    print(f"[DEBUG] \n开始训练循环...\n")
+    
     model.learn(
         total_timesteps=total_timesteps,
         callback=[checkpoint_callback, progress_callback],
@@ -233,7 +326,7 @@ except Exception as e:
     print("正在保存当前模型...")
 
 print("\n" + "=" * 80)
-print("[步骤7] 保存最终模型")
+print("[步骤8] 保存最终模型")
 print("=" * 80)
 
 # 保存模型
@@ -242,7 +335,7 @@ model.save(final_model_path)
 print(f"  ✓ 模型已保存: {final_model_path}.zip")
 
 print("\n" + "=" * 80)
-print("[步骤8] 清理")
+print("[步骤9] 清理")
 print("=" * 80)
 
 # 停止服务器

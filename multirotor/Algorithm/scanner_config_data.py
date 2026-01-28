@@ -264,3 +264,10 @@ class ScannerConfigData:
         if uav_id not in self.droneSettings:
             self.droneSettings[uav_id] = {}
         self.droneSettings[uav_id]['isCrazyflieMirror'] = is_mirror
+    
+    def get_drone_list(self) -> list:
+        """
+        获取配置文件中所有无人机的名称列表
+        :return: 无人机名称列表（如['UAV1', 'UAV2', 'UAV3']）
+        """
+        return list(self.droneSettings.keys())

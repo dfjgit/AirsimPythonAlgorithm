@@ -18,10 +18,12 @@ echo   [6] 训练权重DDPG (实体训练 - Crazyflie日志) [⭐可以使用！
 echo   [7] 训练权重DDPG (虚实融合训练) [⭐可以使用！]
 echo.
 echo === DQN移动控制训练 ===
-echo   [8] 训练移动DQN (真实AirSim环境)[还有些问题]
+echo   [8] 训练移动DQN (真实AirSim环境)[⭐可以使用！]
+echo   [D] 测试移动DQN模型 [⭐可以使用！]
 echo.
 echo === 数据分析 ===
 echo   [A] 数据可视化分析 [⭐可以使用！]
+echo   [B] DDPG vs DQN 算法对比 [⭐可以使用！]
 echo.
 echo === 系统信息 ===
 echo   [9] 查看系统信息
@@ -30,7 +32,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A): 
+set /p choice=请输入选项 (0-9,A-D): 
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
@@ -40,7 +42,9 @@ if /i "%choice%"=="5" goto train_weight_crazyflie_online
 if /i "%choice%"=="6" goto train_weight_crazyflie_logs
 if /i "%choice%"=="7" goto train_weight_hybrid
 if /i "%choice%"=="8" goto train_movement_airsim
+if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
+if /i "%choice%"=="b" goto compare_algorithms
 if /i "%choice%"=="9" goto info
 if /i "%choice%"=="0" goto end
 
@@ -55,7 +59,7 @@ echo ============================================================
 echo 启动系统 - 固定权重模式
 echo ============================================================
 echo.
-call scripts\运行系统-固定权重.bat
+call scripts\Run_System_Fixed_Weights.bat
 goto menu
 
 :run_dqn
@@ -64,7 +68,7 @@ echo ============================================================
 echo 启动系统 - DDPG权重预测模式
 echo ============================================================
 echo.
-call scripts\运行系统-DDPG权重.bat
+call scripts\Run_System_DDPG_Weights.bat
 goto menu
 
 :run_dqn_movement
@@ -84,7 +88,7 @@ echo ============================================================
 echo DDPG权重APF训练 (虚拟训练 - AirSim环境)
 echo ============================================================
 echo.
-call scripts\训练权重DDPG-真实环境.bat
+call scripts\Train_DDPG_Weights_Real_Environment.bat
 goto menu
 
 :train_weight_crazyflie_online
@@ -93,7 +97,7 @@ echo ============================================================
 echo DDPG权重APF训练 (实体训练 - Crazyflie在线)
 echo ============================================================
 echo.
-call scripts\训练权重DDPG-实体机在线.bat
+call scripts\Train_DDPG_Weights_Crazyflie_Online.bat
 goto menu
 
 :train_weight_crazyflie_logs
@@ -102,7 +106,7 @@ echo ============================================================
 echo DDPG权重APF训练 (实体训练 - Crazyflie日志)
 echo ============================================================
 echo.
-call scripts\训练权重DDPG-实体机日志.bat
+call scripts\Train_DDPG_Weights_Crazyflie_Logs.bat
 goto menu
 
 :train_weight_hybrid
@@ -111,7 +115,7 @@ echo ============================================================
 echo DDPG权重APF训练 (虚实融合训练)
 echo ============================================================
 echo.
-call scripts\训练权重DDPG-虚实融合.bat
+call scripts\Train_DDPG_Weights_Hybrid.bat
 goto menu
 
 :train_movement_airsim
@@ -120,7 +124,16 @@ echo ============================================================
 echo DQN移动控制训练 (真实AirSim环境)
 echo ============================================================
 echo.
-call scripts\训练移动DQN-真实环境.bat
+call scripts\Train_DQN_Movement_Real_Environment.bat
+goto menu
+
+:test_movement_dqn
+cls
+echo ============================================================
+echo 测试移动DQN模型
+echo ============================================================
+echo.
+call scripts\Test_DQN_Movement.bat
 goto menu
 
 :data_visualization
@@ -129,7 +142,34 @@ echo ============================================================
 echo 数据可视化分析
 echo ============================================================
 echo.
-call scripts\数据可视化分析.bat
+call scripts\Data_Visualization_Analysis.bat
+goto menu
+
+:compare_algorithms
+cls
+echo ============================================================
+echo DDPG vs DQN 算法对比分析
+echo ============================================================
+echo.
+echo [提示] 此功能将对比 DDPG 和 DQN 两种算法的训练效果
+echo.
+if not exist "myvenv\Scripts\activate.bat" (
+    echo [错误] Python虚拟环境不存在
+    pause
+    goto menu
+)
+call myvenv\Scripts\activate.bat
+python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --out analysis_results
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo [成功] 算法对比分析完成！
+    echo [结果] 请查看 analysis_results\algorithm_comparison_ddpg_vs_dqn\ 目录
+) else (
+    echo.
+    echo [失败] 算法对比分析失败，请检查是否有足够的训练数据
+)
+echo.
+pause
 goto menu
 
 :info

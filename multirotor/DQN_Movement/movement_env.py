@@ -7,6 +7,10 @@ import gymnasium as gym
 from gymnasium import spaces
 import os
 import json
+import logging
+
+# 配置日志
+logger = logging.getLogger("MovementEnv")
 
 
 class MovementEnv(gym.Env):
@@ -109,15 +113,19 @@ class MovementEnv(gym.Env):
     
     def reset(self, seed=None, options=None):
         """重置环境"""
+        print(f"[DQN环境] reset() 被调用")
         if seed is not None:
             np.random.seed(seed)
         
         # 如果连接了server，发送重置命令到Unity
         if self.server:
+            print(f"[DQN环境] 发送重置命令到Unity...")
             self.server.reset_environment()
             import time
             time.sleep(1.0)  # 等待Unity完成重置
+            print(f"[DQN环境] Unity重置完成")
         
+        print(f"[DQN环境] 初始化状态...")
         self.prev_scanned_cells = self._count_scanned_cells()
         self.prev_entropy_sum = self._get_total_entropy()
         self.prev_position = None
@@ -126,7 +134,10 @@ class MovementEnv(gym.Env):
         self.collision_count = 0
         self.out_of_range_count = 0
         
-        return self._get_state(), {}
+        print(f"[DQN环境] 获取初始状态...")
+        state = self._get_state()
+        print(f"[DQN环境] reset() 完成，状态shape: {state.shape}")
+        return state, {}
     
     def step(self, action):
         """
@@ -140,27 +151,38 @@ class MovementEnv(gym.Env):
             action = action.item()
         action = int(action)
         
+        print(f"[DQN环境] step({action}) 被调用")
+        
         # 记录当前位置
+        print(f"[DQN环境] 获取当前状态...")
         current_state = self._get_state()
+        print(f"[DQN环境] 当前状态获取完成")
         
         # 将动作转换为位移向量
         displacement = self.action_map[action]
         
         # 发送移动指令到server（如果连接）
         if self.server:
+            print(f"[DQN环境] 发送移动指令: {displacement}")
             self._apply_movement(displacement)
+            print(f"[DQN环境] 移动指令已发送")
         
         # 等待一小段时间让环境更新
         if self.server:
             import time
             time.sleep(0.05)  # 50ms
+            print(f"[DQN环境] 等待完成")
         
         # 获取新状态
+        print(f"[DQN环境] 获取新状态...")
         next_state = self._get_state()
+        print(f"[DQN环境] 新状态获取完成")
         
         # 计算奖励
+        print(f"[DQN环境] 计算奖励...")
         reward = self._calculate_reward(action, current_state, next_state)
         self.episode_reward += reward
+        print(f"[DQN环境] 奖励计算完成: {reward:.2f}")
         
         # 判断是否结束
         self.step_count += 1
@@ -177,6 +199,9 @@ class MovementEnv(gym.Env):
             'episode_reward': self.episode_reward
         }
         
+        if self.step_count % 10 == 0:
+            print(f"[DQN环境] 步骤 {self.step_count}, 奖励: {reward:.2f}, episode总奖励: {self.episode_reward:.2f}")
+        
         return next_state, reward, terminated, truncated, info
     
     def _get_state(self):
@@ -184,16 +209,20 @@ class MovementEnv(gym.Env):
         if not self.server:
             # 测试模式：返回随机状态
             return np.random.randn(21).astype(np.float32)
-        
+            
         try:
+            # 分离锁的获取，避免死锁
+            # 第一步：从 runtime_data 获取无人机状态
             with self.server.data_lock:
-                runtime_data = self.server.unity_runtime_data[self.drone_name]
-                grid_data = self.server.grid_data
-                
+                runtime_data = self.server.unity_runtime_data.get(self.drone_name)
+                if not runtime_data:
+                    print(f"[DQN环境] 警告: 无人机 {self.drone_name} 的runtime_data不存在，返回零状态")
+                    return np.zeros(21, dtype=np.float32)
+                    
                 # 1. 位置 (3)
                 pos = runtime_data.position
                 position = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
-                
+                    
                 # 2. 速度 (3)
                 vel = runtime_data.finalMoveDir
                 velocity = np.array([
@@ -201,14 +230,11 @@ class MovementEnv(gym.Env):
                     vel.y * self.server.config_data.moveSpeed,
                     vel.z * self.server.config_data.moveSpeed
                 ], dtype=np.float32)
-                
+                    
                 # 3. 朝向 (3)
                 fwd = runtime_data.forward
                 direction = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
-                
-                # 4. 局部熵值统计 (3)
-                entropy_info = self._get_entropy_info(grid_data, pos)
-                
+                    
                 # 5. Leader相对位置 (3)
                 if runtime_data.leader_position:
                     leader_rel = np.array([
@@ -218,7 +244,7 @@ class MovementEnv(gym.Env):
                     ], dtype=np.float32)
                 else:
                     leader_rel = np.zeros(3, dtype=np.float32)
-                
+                    
                 # 6. Leader范围信息 (2)
                 if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
                     dist_to_leader = np.linalg.norm(leader_rel)
@@ -227,26 +253,45 @@ class MovementEnv(gym.Env):
                 else:
                     leader_range = np.zeros(2, dtype=np.float32)
                 
-                # 7. 扫描进度 (3)
-                scan_info = self._get_scan_info(grid_data)
+            # 第二步：从 grid_data 获取网格信息
+            with self.server.grid_lock:
+                grid_data = self.server.grid_data
+                if not grid_data or not grid_data.cells:
+                    print(f"[DQN环境] 警告: grid_data 为空或没有cells，返回零状态")
+                    # 返回带有基本信息的状态
+                    entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
+                    scan_info = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                    min_dist_array = np.array([100.0], dtype=np.float32)
+                else:
+                    # 4. 局部熙值统计 (3)
+                    entropy_info = self._get_entropy_info(grid_data, pos)
+                        
+                    # 7. 扫描进度 (3)
+                    scan_info = self._get_scan_info(grid_data)
+                        
+                    # 8. 最近无人机距离 (1) - 需要 runtime_data，稍后单独获取
+                    min_dist_array = np.array([100.0], dtype=np.float32)  # 默认值
                 
-                # 8. 最近无人机距离 (1)
-                min_dist = self._get_min_distance_to_others(runtime_data)
-                min_dist_array = np.array([min_dist], dtype=np.float32)
+            # 第三步：获取其他无人机距离（需要重新获取 data_lock）
+            with self.server.data_lock:
+                runtime_data = self.server.unity_runtime_data.get(self.drone_name)
+                if runtime_data:
+                    min_dist = self._get_min_distance_to_others(runtime_data)
+                    min_dist_array = np.array([min_dist], dtype=np.float32)
                 
-                # 组合状态向量
-                state = np.concatenate([
-                    position,           # 3
-                    velocity,           # 3
-                    direction,          # 3
-                    entropy_info,       # 3
-                    leader_rel,         # 3
-                    leader_range,       # 2
-                    scan_info,          # 3
-                    min_dist_array      # 1
-                ])
+            # 组合状态向量
+            state = np.concatenate([
+                position,           # 3
+                velocity,           # 3
+                direction,          # 3
+                entropy_info,       # 3
+                leader_rel,         # 3
+                leader_range,       # 2
+                scan_info,          # 3
+                min_dist_array      # 1
+            ])
                 
-                return state
+            return state
                 
         except Exception as e:
             print(f"获取状态失败: {str(e)}")
@@ -344,29 +389,39 @@ class MovementEnv(gym.Env):
         return False
     
     def _apply_movement(self, displacement):
-        """应用移动到无人机"""
+        """应用移动到无人机（通过AlgorithmServer的DQN控制模式）"""
+        if not self.server:
+            return  # 没有server连接，无法控制
+        
         try:
-            with self.server.data_lock:
-                runtime_data = self.server.unity_runtime_data[self.drone_name]
-                
-                # 计算目标位置
-                current_pos = runtime_data.position
-                target_pos = {
-                    'x': current_pos.x + displacement[0],
-                    'y': current_pos.y + displacement[1],
-                    'z': current_pos.z + displacement[2]
-                }
-                
-                # 通过算法设置目标方向
-                # 注意：这里简化处理，实际应该通过Unity客户端直接控制
-                direction = displacement / (np.linalg.norm(displacement) + 1e-6)
-                
-                # 更新runtime_data的移动方向
-                from Algorithm.Vector3 import Vector3
-                runtime_data.finalMoveDir = Vector3(direction[0], direction[1], direction[2])
-                
+            # 检查server是否处亊DQN控制模式
+            if not hasattr(self.server, 'control_mode') or self.server.control_mode != 'dqn':
+                logger.warning("警告: AlgorithmServer未处于DQN控制模式，移动指令可能不会生效")
+                return
+            
+            # 将位移转换为Unity坐标系的方向向量
+            # displacement是NumPy数组: [dx, dy, dz]
+            # 需要转换为Vector3对象（Unity坐标系）
+            from Algorithm.Vector3 import Vector3
+            
+            # 计算归一化的方向向量
+            magnitude = np.linalg.norm(displacement)
+            if magnitude > 1e-6:
+                # 归一化方向
+                direction = displacement / magnitude
+                # 转换为Vector3（Unity坐标系：X=前后，Y=高度，Z=左右）
+                move_direction = Vector3(direction[0], direction[1], direction[2])
+            else:
+                # 位移过小，不移动
+                move_direction = Vector3(0, 0, 0)
+            
+            # 通过AlgorithmServer设置DQN移动指令
+            self.server.set_dqn_movement(self.drone_name, move_direction)
+            
         except Exception as e:
-            print(f"应用移动失败: {str(e)}")
+            import traceback
+            logger.error(f"应用移动失败: {str(e)}")
+            logger.debug(traceback.format_exc())
     
     def _get_entropy_info(self, grid_data, position):
         """获取局部熵值统计"""
@@ -416,34 +471,34 @@ class MovementEnv(gym.Env):
         """统计已扫描单元格数量"""
         if not self.server or not self.server.grid_data:
             return 0
-        
+            
         try:
-            with self.server.data_lock:
+            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
                 return sum(
                     1 for cell in self.server.grid_data.cells
                     if cell.entropy < self.config['thresholds']['scanned_entropy']
                 )
         except:
             return 0
-    
+        
     def _get_total_entropy(self):
-        """获取总熵值"""
+        """获取总熙值"""
         if not self.server or not self.server.grid_data:
             return 0.0
-        
+            
         try:
-            with self.server.data_lock:
+            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
                 return sum(cell.entropy for cell in self.server.grid_data.cells)
         except:
             return 0.0
-    
+        
     def _get_scan_ratio(self):
         """获取扫描完成比例"""
         if not self.server or not self.server.grid_data:
             return 0.0
-        
+            
         try:
-            with self.server.data_lock:
+            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
                 total = len(self.server.grid_data.cells)
                 if total == 0:
                     return 0.0
@@ -520,3 +575,439 @@ if __name__ == "__main__":
     print("[OK] 环境测试通过！")
     print("=" * 60)
 
+
+class MultiDroneMovementEnv(gym.Env):
+    """
+    多无人机移动学习环境（参数共享）
+    
+    多个无人机轮流执行动作，共享同一个 DQN 模型
+    动作空间: 6个离散动作（上/下/左/右/前/后）
+    观察空间: 位置、速度、熙值、leader位置等
+    """
+    
+    def __init__(self, server=None, drone_names=None, config_path=None):
+        super(MultiDroneMovementEnv, self).__init__()
+        
+        self.server = server
+        self.drone_names = drone_names if drone_names else ["UAV1"]
+        self.num_drones = len(self.drone_names)
+        
+        # 当前控制的无人机索引（轮流控制）
+        self.current_drone_idx = 0
+        
+        # 加载配置
+        self.config = self._load_config(config_path)
+        print(f"[OK] 多无人机 DQN 环境已加载配置")
+        print(f"  无人机数量: {self.num_drones}")
+        print(f"  无人机列表: {self.drone_names}")
+        
+        # 动作空间: 6个离散动作（所有无人机共享）
+        self.action_space = spaces.Discrete(6)
+        
+        # 观察空间: 21维（所有无人机共享相同结构）
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(21,),
+            dtype=np.float32
+        )
+        
+        # 动作到位移的映射
+        self.action_step = self.config['movement']['step_size']
+        self.action_map = {
+            0: np.array([0, 0, self.action_step]),      # 上
+            1: np.array([0, 0, -self.action_step]),     # 下
+            2: np.array([-self.action_step, 0, 0]),     # 左
+            3: np.array([self.action_step, 0, 0]),      # 右
+            4: np.array([0, self.action_step, 0]),      # 前
+            5: np.array([0, -self.action_step, 0])      # 后
+        }
+        
+        # 为每个无人机维护独立的状态记录
+        self.drone_states = {}
+        for drone_name in self.drone_names:
+            self.drone_states[drone_name] = {
+                'prev_scanned_cells': 0,
+                'prev_position': None,
+                'prev_entropy_sum': 0,
+                'collision_count': 0,
+                'out_of_range_count': 0,
+                'episode_reward': 0
+            }
+        
+        # 全局状态
+        self.step_count = 0
+        self.total_episode_reward = 0
+        
+    def _load_config(self, config_path):
+        """加载配置文件"""
+        if config_path is None:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(current_dir, "movement_dqn_config.json")
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            return self._default_config()
+    
+    def _default_config(self):
+        """默认配置"""
+        return {
+            "movement": {
+                "step_size": 1.0,
+                "max_steps": 500
+            },
+            "rewards": {
+                "exploration": 10.0,
+                "collision": -50.0,
+                "out_of_range": -30.0,
+                "smooth_movement": 1.0,
+                "entropy_reduction": 5.0,
+                "step_penalty": -0.1,
+                "success": 100.0
+            },
+            "thresholds": {
+                "collision_distance": 2.0,
+                "scanned_entropy": 30.0,
+                "nearby_entropy_distance": 10.0,
+                "success_scan_ratio": 0.95
+            }
+        }
+    
+    def reset(self, seed=None, options=None):
+        """重置环境"""
+        print(f"[DQN多机环境] reset() 被调用")
+        if seed is not None:
+            np.random.seed(seed)
+        
+        # 重置服务器
+        if self.server:
+            print(f"[DQN多机环境] 发送重置命令到Unity...")
+            self.server.reset_environment()
+            import time
+            time.sleep(1.0)
+            print(f"[DQN多机环境] Unity重置完成")
+        
+        # 重置每个无人机的状态
+        print(f"[DQN多机环境] 重置 {self.num_drones} 个无人机状态...")
+        for drone_name in self.drone_names:
+            self.drone_states[drone_name] = {
+                'prev_scanned_cells': self._count_scanned_cells(),
+                'prev_position': None,
+                'prev_entropy_sum': self._get_total_entropy(),
+                'collision_count': 0,
+                'out_of_range_count': 0,
+                'episode_reward': 0
+            }
+        
+        self.step_count = 0
+        self.total_episode_reward = 0
+        self.current_drone_idx = 0
+        
+        # 返回第一个无人机的状态
+        print(f"[DQN多机环境] 获取初始状态...")
+        state = self._get_state(self.drone_names[0])
+        print(f"[DQN多机环境] reset() 完成，状态shape: {state.shape}")
+        return state, {}
+    
+    def step(self, action):
+        """
+        执行一步动作（当前无人机）
+        
+        :param action: 0-5的整数，表示6个移动方向
+        :return: observation, reward, terminated, truncated, info
+        """
+        print(f"[DQN多机环境] step({action}) 被调用")
+        
+        # 确保 action 是整数
+        if hasattr(action, 'item'):
+            action = action.item()
+        action = int(action)
+        
+        # 当前控制的无人机
+        current_drone = self.drone_names[self.current_drone_idx]
+        print(f"[DQN多机环境] 当前控制无人机: {current_drone}")
+        
+        # 获取当前状态
+        print(f"[DQN多机环境] 获取当前状态...")
+        current_state = self._get_state(current_drone)
+        print(f"[DQN多机环境] 当前状态获取完成")
+        
+        # 执行动作
+        print(f"[DQN多机环境] 执行动作 {action}...")
+        displacement = self.action_map[action]
+        if self.server:
+            self._apply_movement(current_drone, displacement)
+            import time
+            time.sleep(0.05)
+        print(f"[DQN多机环境] 动作执行完成")
+        
+        # 获取新状态
+        print(f"[DQN多机环境] 获取新状态...")
+        next_state = self._get_state(current_drone)
+        print(f"[DQN多机环境] 新状态获取完成")
+        
+        # 计算奖励
+        print(f"[DQN多机环境] 计算奖励...")
+        reward = self._calculate_reward(current_drone, action, current_state, next_state)
+        print(f"[DQN多机环境] 奖励计算完成: {reward:.2f}")
+        
+        self.drone_states[current_drone]['episode_reward'] += reward
+        self.total_episode_reward += reward
+        
+        # 更新计数器
+        self.step_count += 1
+        
+        # 轮流到下一个无人机
+        self.current_drone_idx = (self.current_drone_idx + 1) % self.num_drones
+        
+        # 判断是否结束
+        print(f"[DQN多机环境] 检查是否结束...")
+        terminated = self._check_done()
+        print(f"[DQN多机环境] 结束检查完成: {terminated}")
+        truncated = False
+        
+        # 额外信息
+        info = {
+            'drone_name': current_drone,
+            'action': action,
+            'displacement': displacement.tolist(),
+            'scanned_cells': self._count_scanned_cells(),
+            'total_reward': self.total_episode_reward,
+            'step_count': self.step_count,
+            'current_drone_idx': self.current_drone_idx
+        }
+        
+        # 返回下一个无人机的状态
+        next_drone = self.drone_names[self.current_drone_idx]
+        print(f"[DQN多机环境] 获取下一个无人机状态: {next_drone}")
+        next_observation = self._get_state(next_drone)
+        print(f"[DQN多机环境] step() 完成")
+        
+        return next_observation, reward, terminated, truncated, info
+    
+    def _get_state(self, drone_name):
+        """获取指定无人机的观察状态（21维）"""
+        if not self.server:
+            return np.random.randn(21).astype(np.float32)
+        
+        try:
+            # 分离锁的获取，避免死锁
+            # 第一步：从 runtime_data 获取无人机状态
+            with self.server.data_lock:
+                runtime_data = self.server.unity_runtime_data.get(drone_name)
+                if not runtime_data:
+                    print(f"[DQN多机环境] 警告: 无人机 {drone_name} 的runtime_data不存在")
+                    return np.zeros(21, dtype=np.float32)
+                
+                # 1. 位置 (3)
+                pos = runtime_data.position
+                position = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
+                
+                # 2. 速度 (3)
+                vel = runtime_data.velocity
+                velocity = np.array([vel.x, vel.y, vel.z], dtype=np.float32)
+                
+                # 3. 朝向 (3)
+                fwd = runtime_data.forward
+                forward = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
+                
+                # 5. Leader相对位置 (3)
+                if runtime_data.leader_position:
+                    leader_rel = np.array([
+                        runtime_data.leader_position.x - pos.x,
+                        runtime_data.leader_position.y - pos.y,
+                        runtime_data.leader_position.z - pos.z
+                    ], dtype=np.float32)
+                else:
+                    leader_rel = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                
+                # 6. Leader范围信息 (2)
+                leader_distance = float(np.linalg.norm(leader_rel))
+                is_out_of_range = 1.0 if leader_distance > runtime_data.leader_scan_radius else 0.0
+                leader_info = np.array([leader_distance, is_out_of_range], dtype=np.float32)
+            
+            # 第二步：从 grid_data 获取网格信息
+            with self.server.grid_lock:
+                grid_data = self.server.grid_data
+                if not grid_data or not grid_data.cells:
+                    print(f"[DQN多机环境] 警告: grid_data 为空或没有cells")
+                    # 返回带有基本信息的状态
+                    entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
+                    scan_info = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                    min_dist_info = np.array([100.0], dtype=np.float32)
+                else:
+                    # 4. 局部熙值统计 (3)
+                    nearby_distance = self.config['thresholds']['nearby_entropy_distance']
+                    nearby_cells = [c for c in grid_data.cells if (c.center - pos).magnitude() < nearby_distance]
+                    if nearby_cells:
+                        entropies = [c.entropy for c in nearby_cells]
+                        entropy_info = np.array([
+                            float(np.mean(entropies)),
+                            float(np.max(entropies)),
+                            float(np.std(entropies))
+                        ], dtype=np.float32)
+                    else:
+                        entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
+                    
+                    # 7. 扫描进度 (3)
+                    scanned_threshold = self.config['thresholds']['scanned_entropy']
+                    scanned_count = sum(1 for cell in grid_data.cells if cell.entropy < scanned_threshold)
+                    total_cells = len(grid_data.cells)
+                    unscanned_count = total_cells - scanned_count
+                    scan_ratio = scanned_count / total_cells if total_cells > 0 else 0.0
+                    scan_info = np.array([scan_ratio, float(scanned_count), float(unscanned_count)], dtype=np.float32)
+                    
+                    # 8. 其他无人机最近距离 (1) - 需要重新获取 data_lock
+                    min_dist_info = np.array([100.0], dtype=np.float32)  # 默认值
+            
+            # 第三步：获取其他无人机距离
+            min_distance = self._get_min_distance_to_others(drone_name)
+            min_dist_info = np.array([min_distance], dtype=np.float32)
+            
+            # 拼接所有特征
+            state = np.concatenate([
+                position,
+                velocity,
+                forward,
+                entropy_info,
+                leader_rel,
+                leader_info,
+                scan_info,
+                min_dist_info
+            ])
+            
+            return state.astype(np.float32)
+            
+        except Exception as e:
+            logger.error(f"获取状态失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return np.zeros(21, dtype=np.float32)
+    
+    def _get_min_distance_to_others(self, drone_name):
+        """获取到其他无人机的最小距离"""
+        try:
+            with self.server.data_lock:
+                current_pos = self.server.unity_runtime_data[drone_name].position
+                min_distance = float('inf')
+                
+                for other_drone in self.drone_names:
+                    if other_drone != drone_name:
+                        other_pos = self.server.unity_runtime_data[other_drone].position
+                        distance = (current_pos - other_pos).magnitude()
+                        min_distance = min(min_distance, distance)
+                
+                return min_distance if min_distance != float('inf') else 100.0
+        except:
+            return 100.0
+    
+    def _apply_movement(self, drone_name, displacement):
+        """应用移动到无人机（通过AlgorithmServer的DQN控制模式）"""
+        if not self.server:
+            return
+        
+        try:
+            if not hasattr(self.server, 'control_mode') or self.server.control_mode != 'dqn':
+                logger.warning("警告: AlgorithmServer未处于DQN控制模式")
+                return
+            
+            from Algorithm.Vector3 import Vector3
+            magnitude = np.linalg.norm(displacement)
+            if magnitude > 1e-6:
+                direction = displacement / magnitude
+                move_direction = Vector3(direction[0], direction[1], direction[2])
+            else:
+                move_direction = Vector3(0, 0, 0)
+            
+            self.server.set_dqn_movement(drone_name, move_direction)
+            
+        except Exception as e:
+            logger.error(f"应用移动失败: {str(e)}")
+    
+    def _calculate_reward(self, drone_name, action, current_state, next_state):
+        """计算奖励"""
+        reward = 0.0
+        drone_state = self.drone_states[drone_name]
+        
+        # 1. 探索奖励
+        current_scanned = self._count_scanned_cells()
+        new_cells = current_scanned - drone_state['prev_scanned_cells']
+        if new_cells > 0:
+            reward += new_cells * self.config['rewards']['exploration']
+        drone_state['prev_scanned_cells'] = current_scanned
+        
+        # 2. 熙值降低奖励
+        current_entropy = self._get_total_entropy()
+        entropy_reduction = drone_state['prev_entropy_sum'] - current_entropy
+        if entropy_reduction > 0:
+            reward += entropy_reduction * self.config['rewards']['entropy_reduction'] * 0.01
+        drone_state['prev_entropy_sum'] = current_entropy
+        
+        # 3. 碰撞惩罚
+        min_distance = self._get_min_distance_to_others(drone_name)
+        if min_distance < self.config['thresholds']['collision_distance']:
+            reward += self.config['rewards']['collision']
+            drone_state['collision_count'] += 1
+        
+        # 4. 超出Leader范围惩罚
+        if next_state[18] > 0.5:  # is_out_of_range
+            reward += self.config['rewards']['out_of_range']
+            drone_state['out_of_range_count'] += 1
+        
+        # 5. 步骤惩罚
+        reward += self.config['rewards']['step_penalty']
+        
+        return reward
+    
+    def _check_done(self):
+        """检查episode是否结束"""
+        # 超过最大步数
+        max_steps = self.config['movement']['max_steps'] * self.num_drones
+        if self.step_count >= max_steps:
+            return True
+        
+        # 扫描完成
+        scan_ratio = self._get_scan_ratio()
+        if scan_ratio >= self.config['thresholds']['success_scan_ratio']:
+            return True
+        
+        return False
+    
+    def _count_scanned_cells(self):
+        """统计已扫描单元格数量"""
+        if not self.server:
+            return 0
+        try:
+            with self.server.grid_lock:
+                scanned_threshold = self.config['thresholds']['scanned_entropy']
+                return sum(1 for cell in self.server.grid_data.cells if cell.entropy < scanned_threshold)
+        except:
+            return 0
+    
+    def _get_total_entropy(self):
+        """获取总熙值"""
+        if not self.server:
+            return 0.0
+        try:
+            with self.server.grid_lock:
+                return sum(cell.entropy for cell in self.server.grid_data.cells)
+        except:
+            return 0.0
+    
+    def _get_scan_ratio(self):
+        """获取扫描比例"""
+        if not self.server:
+            return 0.0
+        try:
+            with self.server.grid_lock:
+                total = len(self.server.grid_data.cells)
+                if total == 0:
+                    return 0.0
+                # 直接在这里计算，而不是调用 _count_scanned_cells()（避免重复获取锁）
+                scanned_threshold = self.config['thresholds']['scanned_entropy']
+                scanned = sum(1 for cell in self.server.grid_data.cells if cell.entropy < scanned_threshold)
+                return scanned / total
+        except:
+            return 0.0

@@ -229,19 +229,25 @@ class DataCollector:
                     leader_pos = runtime_data.leader_position
                     leader_radius = runtime_data.leader_scan_radius
                 
-                # 获取所有无人机的坐标
-                drone_positions = {}
+                # 获取所有无人机的坐标和姿态
+                drone_states = {}
                 with data_lock:
                     for drone_name in self.drone_names_list:
                         runtime_data = runtime_data_dict.get(drone_name)
-                        if runtime_data and runtime_data.position:
-                            drone_positions[drone_name] = {
+                        if runtime_data:
+                            drone_states[drone_name] = {
                                 'x': runtime_data.position.x,
                                 'y': runtime_data.position.y,
-                                'z': runtime_data.position.z
+                                'z': runtime_data.position.z,
+                                'roll': runtime_data.orientation.x if hasattr(runtime_data, 'orientation') else 0.0,
+                                'pitch': runtime_data.orientation.y if hasattr(runtime_data, 'orientation') else 0.0,
+                                'yaw': runtime_data.orientation.z if hasattr(runtime_data, 'orientation') else 0.0
                             }
                         else:
-                            drone_positions[drone_name] = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+                            drone_states[drone_name] = {
+                                'x': 0.0, 'y': 0.0, 'z': 0.0,
+                                'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0
+                            }
                 
                 # 获取权重值（从第一个无人机的算法实例）
                 weights = {}
@@ -344,6 +350,9 @@ class DataCollector:
                         header.append(f'{drone_name}_x')
                         header.append(f'{drone_name}_y')
                         header.append(f'{drone_name}_z')
+                        header.append(f'{drone_name}_roll')   # 新增
+                        header.append(f'{drone_name}_pitch')  # 新增
+                        header.append(f'{drone_name}_yaw')    # 新增
                     
                     # 为每个无人机添加电量列
                     for drone_name in self.drone_names_list:
@@ -385,12 +394,15 @@ class DataCollector:
                         f"{training_data.get('total_reward', 0.0):.4f}"
                     ]
                     
-                    # 添加所有无人机的坐标
+                    # 添加所有无人机的坐标和姿态
                     for drone_name in self.drone_names_list:
-                        pos = drone_positions.get(drone_name, {'x': 0.0, 'y': 0.0, 'z': 0.0})
-                        row.append(f"{pos['x']:.3f}")
-                        row.append(f"{pos['y']:.3f}")
-                        row.append(f"{pos['z']:.3f}")
+                        state = drone_states.get(drone_name, {'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0})
+                        row.append(f"{state['x']:.3f}")
+                        row.append(f"{state['y']:.3f}")
+                        row.append(f"{state['z']:.3f}")
+                        row.append(f"{state['roll']:.2f}")
+                        row.append(f"{state['pitch']:.2f}")
+                        row.append(f"{state['yaw']:.2f}")
                     
                     # 添加所有无人机的电量
                     for drone_name in self.drone_names_list:

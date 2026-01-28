@@ -11,11 +11,11 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 ### 核心特性
 
 - ✅ **人工势场算法（APF）**：多因素权重合成，实现避障与探索的动态平衡。
-- ✅ **科学论证支持 (PoC)**：内置系统活跃度、多机加速比、续航闭环、学习速率等量化证明工具。
-- ✅ **强化学习集成**：支持 DDPG 权重预测，实现算法参数的在线/离线智能进化。
+- ✅ **科学论证支持 (PoC)**：内置系统活跃度、多机加速比、续航闭环、学习速率、**策略收敛性**及**姿态稳定性**等量化证明工具。
+- ✅ **双算法强化学习体系**：支持 DDPG 权重预测（连续动作空间）与 DQN 移动控制（离散动作空间），实现算法参数的智能进化与对比实验。
 - ✅ **全链路数据采集**：同步记录物理、决策、电池及训练元数据，确保分析的闭环完整性。
 - ✅ **虚实融合训练**：支持虚拟仿真与实体无人机数据的混合实时训练（Hybrid Training）。
-- ✅ **跨格式透明分析**：无缝对比 JSON（实体机）与 CSV（仿真）数据，自动字段对齐。
+- ✅ **跨格式透明分析**：无缝对比 JSON（实体机）与 CSV（仿真）数据，自动字段对齐，支持 DDPG vs DQN 算法性能对比。
 - ✅ **多无人机协同**：支持 1-10 台无人机集群控制，提供协同效能量化评估。
 
 ---
@@ -154,9 +154,14 @@ AirsimAlgorithmPython/
 │   │   ├── train_simple.py          # 基础训练脚本
 │   │   └── training_visualizer.py   # 训练实时可视化
 │   │
-│   ├── DQN_Movement/                 # DQN 移动控制模块 (实验性)
+│   ├── DQN_Movement/                 # DQN 移动控制模块 ⭐
+│   │   ├── models/                  # 训练好的模型
+│   │   ├── logs/                    # 训练日志（自动生成）
 │   │   ├── movement_env.py          # 移动环境定义
-│   │   └── train_movement_dqn.py    # 训练脚本
+│   │   ├── train_movement_dqn.py    # DQN 训练脚本
+│   │   ├── train_movement_with_airsim.py  # AirSim 环境训练
+│   │   ├── test_movement_dqn.py     # DQN 模型测试
+│   │   └── movement_dqn_config.json # DQN 配置文件
 │   │
 │   ├── setup_path.py                # 路径设置工具
 │   └── DDPG与DQN介绍.md              # 强化学习模块说明
@@ -169,7 +174,9 @@ AirsimAlgorithmPython/
 │   ├── 训练权重DDPG-实体机在线.bat
 │   ├── 训练权重DDPG-虚实融合.bat
 │   ├── 训练移动DQN-真实环境.bat
-│   └── 数据可视化分析.bat          # ⭐ 科学论证入口
+│   ├── 测试移动DQN.bat              # ⭐ DQN 模型测试
+│   ├── 数据可视化分析.bat          # ⭐ 科学论证入口
+│   └── (对应的英文版批处理文件)
 │
 ├── requirements.txt                  # Python 依赖
 ├── setup.py                          # 安装脚本
@@ -223,7 +230,7 @@ AirsimAlgorithmPython/
 
 **采集内容**：
 - **物理扫描数据**：AOI 区域内栅格状态（已侦察/未侦察）、实时扫描比例（Scan Ratio）。
-- **飞行遥测数据**：多机实时 3D 位置（x, y, z）、电池电压（Battery Voltage）。
+- **飞行遥测数据**：多机实时 3D 位置（x, y, z）、欧拉角（Roll, Pitch, Yaw）、电池电压（Battery Voltage）。
 - **算法决策数据**：APF 算法的 5 个实时权重系数。
 - **强化学习元数据**：Episode 编号、Step 步数、单步奖励（Step Reward）、累计总奖励（Total Reward）。
 
@@ -376,12 +383,25 @@ timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repu
 
 #### 4. 学习速度与策略收敛证明 (Learning & Convergence Analysis)
 - **奖励增长斜率**：使用线性回归（Linear Regression）量化奖励曲线的上升斜率。
-- **权重稳定性证明**：通过计算训练后期权重参数的滚动标准差（Rolling Std），量化证明策略已趋于稳定，而非发散震荡。
+- **策略收敛性量化证明**：通过计算训练后期权重参数的滚动统计量（Rolling Std/Variance），量化证明策略已趋于稳定，而非发散震荡。
 - **收敛状态判定**：系统自动根据波动强度判定“已收敛”或“震荡中”，为模型可用性提供科学依据。
 
-#### 5. 多机协作加速比证明 (Collaboration Speedup)
+#### 5. 飞行姿态稳定性证明 (Attitude Stability Analysis)
+- **姿态波动监控**：在 `flight_attitude_stability.png` 中记录 Roll/Pitch 欧拉角随时间的变化。
+- **安全性判定**：自动计算姿态抖动（Jitter）统计值。若波动长期处于低位且无剧烈抖动，即证明飞控系统在算法驱动下具备极高鲁棒性，无失控风险。
+
+#### 6. 多机协作加速比证明 (Collaboration Speedup)
 - **加速比 (Speedup)**：计算公式为 $S = T_{single} / T_{multi}$。
 - **协同证明**：通过对比 1 台、3 台、5 台无人机的任务达成耗时，量化证明多机系统相比单机系统的效能提升倍数。
+
+#### 7. DDPG vs DQN 算法对比 (Algorithm Comparison) ✨
+- **算法对比**：自动对比 DDPG（连续动作空间，权重预测）与 DQN（离散动作空间，移动控制）的训练效果。
+- **多维度分析**：
+  - **奖励曲线对比**：可视化两种算法的学习曲线，观察收敛速度差异。
+  - **收敛速度对比**：通过线性回归计算奖励增长斜率和 R² 值，量化学习效率。
+  - **最终性能对比**：对比最后 10 个 Episode 的平均奖励，评估算法稳态表现。
+  - **学习稳定性对比**：分析奖励方差，评估算法在训练过程中的波动程度。
+- **对比报告生成**：自动生成文本格式的详细对比报告，包含算法简介、收敛统计、性能指标和应用建议。
 
 ### 跨格式兼容性支持
 
@@ -394,7 +414,9 @@ timestamp,elapsed_time,scanned_count,unscanned_count,total_count,scan_ratio,repu
 #### 方式一：使用主菜单 (推荐)
 1. 启动 `start.bat`。
 2. 选择选项 `[A] 数据可视化分析`。
-3. 进入子菜单选择 `[5] 多个实验数据对比分析`（用于生成加速比和学习速度对比）。
+3. 进入子菜单选择：
+   - `[5] 多个实验数据对比分析`（用于生成加速比和学习速度对比）
+   - 或选择主菜单 `[B] DDPG vs DQN 算法对比`（专门的算法对比分析）
 
 #### 方式二：直接运行批处理
 - 运行 `scripts/数据可视化分析.bat`。
@@ -406,6 +428,9 @@ python multirotor/Algorithm/visualize_training_data.py --csv scan_data_XYZ.csv -
 
 # 进行多个实验的量化对比分析（生成加速比、学习速率对比）
 python multirotor/Algorithm/visualize_training_data.py --auto --compare
+
+# DDPG vs DQN 算法对比分析 ✨
+python multirotor/Algorithm/visualize_training_data.py --auto --compare-algorithms
 ```
 
 ### 输出结果
@@ -413,6 +438,8 @@ python multirotor/Algorithm/visualize_training_data.py --auto --compare
 分析结果统一保存至 `analysis_results/` 目录下：
 - `comparison_results/`：包含多机加速比、覆盖进度对比。
 - `comparison_training/`：包含奖励曲线叠加对比、学习速率斜率对比。
+- `algorithm_comparison_ddpg_vs_dqn/`：✨ **DDPG vs DQN 算法对比结果**（奖励曲线、收敛速度、最终性能、稳定性分析、对比报告）。
+- `dqn_training_*/`：✨ **DQN 训练专用分析**（奖励曲线、Episode 长度、学习速度、总结统计）。
 - `scan_data_*/`：包含该次实验的活跃度、续航分析、实时同步奖励等 10+ 张专业图表。
 
 ---
@@ -695,19 +722,122 @@ python AlgorithmServer.py --use-learned-weights \
     --model-path DDPG_Weight/models/weight_predictor_airsim_20260126_153022
 ```
 
-### DQN 移动控制
+### DQN 移动控制 ⭐
 
-**功能**：使用 DQN 直接控制无人机移动
+**功能**：使用 DQN 直接控制无人机移动（离散动作空间）
 
-**训练模型**：
+**算法特点**：
+- **动作空间**：6 个离散方向（上/下/左/右/前/后）
+- **观察空间**：21 维向量（位置、速度、朝向、熵值统计、Leader 信息、扫描进度等）
+- **应用场景**：适合离散决策任务，可与 DDPG 进行对比实验
+
+#### 训练 DQN 模型
+
+**方式一：使用主菜单**（推荐）
+```bash
+start.bat
+# 选择 [8] 训练移动DQN (真实AirSim环境)
+```
+
+**方式二：使用批处理脚本**
+```bash
+# 中文版
+scripts\训练移动DQN-真实环境.bat
+
+# 英文版
+scripts\Train_DQN_Movement_Real_Environment.bat
+```
+
+**方式三：命令行**
 ```bash
 cd multirotor/DQN_Movement
 
-# 训练模型
+# 使用默认配置训练
+python train_movement_dqn.py
+
+# 使用 AirSim 环境训练
 python train_movement_with_airsim.py
 ```
 
-**状态**：⚠️ **实验性功能**。目前由于动作空间映射和状态反馈延迟，该模块在复杂协同场景下表现尚不稳定，推荐优先使用 DDPG 权重预测配合 APF 算法。
+**前置条件**：
+- Unity AirSim 仿真场景已启动（如使用 AirSim 训练）
+- 配置文件 `movement_dqn_config.json` 已正确设置
+
+**训练输出**：
+- **模型文件**：`multirotor/DQN_Movement/models/movement_dqn_final.zip`
+- **训练日志**：`multirotor/DQN_Movement/logs/dqn_training_YYYYMMDD_HHMMSS/`
+  - `dqn_training_stats.csv` - Episode 奖励、长度、时间统计
+  - `dqn_training_metadata.json` - 完整的训练配置和环境信息
+
+#### 测试 DQN 模型
+
+**方式一：使用主菜单**（推荐）
+```bash
+start.bat
+# 选择 [D] 测试移动DQN模型
+```
+
+**方式二：使用批处理脚本**
+```bash
+# 中文版
+scripts\测试移动DQN.bat
+
+# 英文版
+scripts\Test_DQN_Movement.bat
+```
+
+**方式三：命令行**
+```bash
+cd multirotor/DQN_Movement
+python test_movement_dqn.py
+```
+
+#### 分析 DQN 训练数据
+
+```bash
+# 分析指定 DQN 训练日志
+python multirotor/Algorithm/visualize_training_data.py --dir multirotor/DQN_Movement/logs --show
+
+# 自动扫描并分析所有 DQN 数据
+python multirotor/Algorithm/visualize_training_data.py --auto
+```
+
+**生成的分析图表**：
+1. **奖励曲线**：Episode 总奖励 + 移动平均平滑曲线
+2. **Episode 长度**：每个 Episode 的步数变化
+3. **学习速度分析**：奖励增长斜率（Learning Rate）
+4. **总结统计**：平均奖励、最大/最小奖励、总 Episode 数等
+
+#### DDPG vs DQN 对比分析
+
+**方式一：使用主菜单**（推荐）
+```bash
+start.bat
+# 选择 [B] DDPG vs DQN 算法对比
+```
+
+**方式二：命令行**
+```bash
+python multirotor/Algorithm/visualize_training_data.py --auto --compare-algorithms --out analysis_results
+```
+
+**对比内容**：
+1. **奖励曲线对比**：DDPG（红色）vs DQN（蓝绿色）学习曲线
+2. **收敛速度对比**：奖励增长斜率 + R² 拟合度
+3. **最终性能对比**：最后 10 个 Episode 的平均奖励（带误差棒）
+4. **学习稳定性对比**：10-Episode 滚动标准差分析
+5. **文本对比报告**：`comparison_report.txt` 包含算法简介、统计数据、结论建议
+
+**输出位置**：`analysis_results/algorithm_comparison_ddpg_vs_dqn/`
+
+#### 应用建议
+
+- **DDPG**：适合连续参数优化（APF 权重预测），输出平滑的权重值
+- **DQN**：适合离散决策任务（移动方向选择），动作明确且易于理解
+- **组合使用**：DQN 控制移动策略 + DDPG 优化 APF 权重，实现多层次智能控制
+- **对比实验**：通过算法对比分析，为论文提供量化实验证据
+
+**状态说明**：✅ **已完全集成**。DQN 模块现已完成数据标准化、可视化分析和算法对比功能，可用于实验和论文研究。
 
 ---
 
@@ -886,11 +1016,25 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 🔄 版本信息
 
-- **当前版本**：1.2.0
+- **当前版本**：1.2.2
 - **Python 版本**：3.7+
-- **最后更新**：2026-01-26 (PoC 增强版)
+- **最后更新**：2026-01-27 (DQN 集成版)
 
 ### 更新日志
+
+- **v1.2.2**（2026-01-27）
+  - ✨ **DQN 模块完全集成**：DQN 移动控制模块完成生产化改造，支持标准化数据输出。
+  - ✨ **算法对比分析体系**：新增 DDPG vs DQN 算法性能对比功能，生成多维度对比图表和详细报告。
+  - ✨ **DQN 专用可视化分析器**：在 `visualize_training_data.py` 中添加 `DQNDataVisualizer` 类，支持 4 种分析图表。
+  - ✨ **主菜单扩展**：在 `start.bat` 中添加 DQN 训练、测试和算法对比选项（选项 [8]、[D]、[B]）。
+  - ✨ **批处理脚本完善**：新增 `测试移动DQN.bat` 和 `Test_DQN_Movement.bat` 测试脚本。
+  - 🔧 **数据格式标准化**：DQN 训练数据输出为 CSV（episode, reward, length, elapsed_time）+ JSON（元数据）。
+  - 📚 **README 文档更新**：补充完整的 DQN 使用指南、对比分析说明和应用建议。
+
+- **v1.2.1**（2026-01-26）
+  - ✨ **飞行姿态稳定性证明**：新增欧拉角波动分析，支持多机 Roll/Pitch 抖动（Jitter）量化判定与平稳性验证。
+  - ✨ **策略收敛性量化增强**：引入滚动方差（Rolling Variance）分析，提供更严谨的算法稳态判定判据。
+  - 🔧 **数据底座扩充**：在 CSV 详志中集成姿态、电量、奖励和权重，实现环境-执行-决策全时域同步存储。
 
 - **v1.2.0**（2026-01-26）
   - ✨ **科学论证 (PoC) 体系建立**：新增系统活跃度、多机加速比、学习速率斜率及续航闭环量化分析工具。

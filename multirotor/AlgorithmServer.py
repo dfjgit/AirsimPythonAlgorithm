@@ -27,6 +27,7 @@ from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.HexGridDataModel import HexGridDataModel
 from Algorithm.battery_data import BatteryManager, BatteryInfo, BatteryStatus  # 新增导入
+from Algorithm.drones_config import DronesConfig
 from Crazyswarm.crazyswarm import CrazyswarmManager
 from Crazyswarm.crazyflie_operate import CrazyflieOperate
 from Crazyswarm.crazyflie_logging_data import CrazyflieLoggingData
@@ -48,15 +49,16 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False, control_mode: str = 'apf'):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用scanner_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
-        :param use_learned_weights: 是否使用学习的权重（DQN模型预测）
-        :param model_path: DQN模型路径（不含.zip后缀），如果为None则使用默认模型
+        :param use_learned_weights: 是否使用学习的权重（DDPG模型预测，仅在control_mode='apf'时有效）
+        :param model_path: DDPG模型路径（不含.zip后缀），如果为None则使用默认模型
         :param enable_visualization: 是否启用可视化（默认True）
         :param enable_data_collection_print: 是否启用数据采集DEBUG打印（默认False，训练模式下应设为True）
+        :param control_mode: 控制模式，'apf'=APF算法控制（默认），'dqn'=DQN外部控制
         """
         # 配置文件路径处理
         self.config_path = self._resolve_config_path(config_file)
@@ -84,11 +86,14 @@ class MultiDroneAlgorithmServer:
             name: {} for name in self.drone_names
         }
 
+        # 加载无人机配置
+        self.drones_config = DronesConfig()
+        
         # 电量数据管理
-        self.battery_manager = BatteryManager(self.config_data)  
+        self.battery_manager = BatteryManager(self.config_data, self.drones_config)  
         self.battery_lock = threading.Lock()  # 电量数据锁
 
-        self.crazyswarm = CrazyswarmManager(self.unity_socket, self.battery_manager, self.config_data)
+        self.crazyswarm = CrazyswarmManager(self.unity_socket, self.battery_manager, self.config_data, self.drones_config)
 
         # 共享网格数据
         self.grid_data = HexGridDataModel()
@@ -120,12 +125,25 @@ class MultiDroneAlgorithmServer:
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
         
-        # DQN权重预测（可选）
-        self.use_learned_weights = use_learned_weights
+        # 控制模式：'apf' 或 'dqn'
+        self.control_mode = control_mode.lower()
+        if self.control_mode not in ['apf', 'dqn']:
+            logger.warning(f"未知的控制模式: {control_mode}，使用默认APF模式")
+            self.control_mode = 'apf'
+        logger.info(f"控制模式: {self.control_mode.upper()}")
+        
+        # DQN控制模式相关
+        self.dqn_commands: Dict[str, Vector3] = {name: Vector3(0, 0, 0) for name in self.drone_names}  # 存储DQN移动指令
+        self.dqn_command_lock = threading.Lock()  # DQN指令锁
+        
+        # DDPG权重预测（仅在APF模式下使用）
+        self.use_learned_weights = use_learned_weights and (self.control_mode == 'apf')
         self.model_path = model_path  # 保存模型路径参数
         self.weight_model = None
         if self.use_learned_weights:
             self._init_weight_predictor()
+        elif use_learned_weights and self.control_mode == 'dqn':
+            logger.info("DQN控制模式下，use_learned_weights参数被忽略")
         
         # 初始化可视化组件（如果启用）
         if self.enable_visualization:
@@ -388,7 +406,7 @@ class MultiDroneAlgorithmServer:
         all_success = True
         for drone_name in self.drone_names:
             # 添加是否为实体无人机镜像判断
-            if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+            if not self.drones_config.is_crazyflie_mirror(drone_name):
                 if not self.drone_controller.enable_api_control(True, drone_name):
                     logger.error(f"无人机{drone_name}启用API控制失败")
                     all_success = False
@@ -446,7 +464,7 @@ class MultiDroneAlgorithmServer:
         all_success = True
         for drone_name in self.drone_names:
             # 添加是否为实体无人机镜像判断
-            if self.config_data.get_uav_crazyflie_mirror(drone_name):
+            if self.drones_config.is_crazyflie_mirror(drone_name):
                 self.crazyswarm.take_off(drone_name, 0.5, 2)
             else:
                 logger.info(f"无人机{drone_name}准备起飞...")
@@ -783,7 +801,7 @@ class MultiDroneAlgorithmServer:
     
     def _process_drone(self, drone_name: str) -> None:
         """无人机算法处理线程：计算移动方向并控制无人机"""
-        logger.info(f"无人机{drone_name}算法线程启动")
+        logger.info(f"无人机{drone_name}算法线程启动 (控制模式: {self.control_mode.upper()})")
         while self.running:
             try:
                 # 检查数据就绪状态
@@ -794,30 +812,61 @@ class MultiDroneAlgorithmServer:
                     time.sleep(1)
                     continue
 
-                # 如果启用权重预测，更新APF权重
-                if self.use_learned_weights:
-                    predicted_weights = self._predict_weights(drone_name)
-                    if predicted_weights:
-                        self.algorithms[drone_name].set_coefficients(predicted_weights)
-                        # 添加调试日志
-                        logger.debug(f"无人机{drone_name}使用DDPG预测权重: {predicted_weights}")
+                # 根据控制模式选择不同的控制逻辑
+                if self.control_mode == 'apf':
+                    # APF模式：使用算法计算移动方向
+                    # 如果启用权重预测，更新APF权重
+                    if self.use_learned_weights:
+                        predicted_weights = self._predict_weights(drone_name)
+                        if predicted_weights:
+                            self.algorithms[drone_name].set_coefficients(predicted_weights)
+                            logger.debug(f"无人机{drone_name}使用DDPG预测权重: {predicted_weights}")
+                        else:
+                            logger.warning(f"无人机{drone_name}权重预测失败，使用默认权重")
+                    
+                    # 同步 AirSim 中的姿态数据到运行时数据（用于数据采集分析）
+                    if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                        try:
+                            state = self.drone_controller.get_vehicle_state(drone_name)
+                            if "orientation" in state:
+                                roll, pitch, yaw = state["orientation"]
+                                with self.data_lock:
+                                    self.unity_runtime_data[drone_name].orientation = Vector3(roll, pitch, yaw)
+                        except Exception as e:
+                            logger.debug(f"同步无人机{drone_name}姿态失败: {e}")
+
+                    # 执行算法计算最终方向
+                    final_dir = self.algorithms[drone_name].update_runtime_data(
+                        self.grid_data, self.unity_runtime_data[drone_name]
+                    )
+                    
+                    if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                        # 控制无人机移动
+                         self._control_drone_movement(drone_name, final_dir.finalMoveDir)
                     else:
-                        logger.warning(f"无人机{drone_name}权重预测失败，使用默认权重")
-                
-                # 执行算法计算最终方向
-                final_dir = self.algorithms[drone_name].update_runtime_data(
-                    self.grid_data, self.unity_runtime_data[drone_name]
-                )
-                
-                if not self.config_data.get_uav_crazyflie_mirror(drone_name):
-                    # 控制无人机移动
-                     self._control_drone_movement(drone_name, final_dir.finalMoveDir)
-                else:
-                    # 获取实体无人机前往指令
-                    self.crazyswarm.go_to(drone_name, final_dir.finalMoveDir, self.config_data.updateInterval)
-                
-                # 发送处理后的数据到Unity
-                self._send_processed_data(drone_name, final_dir)
+                        # 获取实体无人机前往指令
+                        self.crazyswarm.go_to(drone_name, final_dir.finalMoveDir, self.config_data.updateInterval)
+                    
+                    # 发送处理后的数据到Unity
+                    self._send_processed_data(drone_name, final_dir)
+                    
+                elif self.control_mode == 'dqn':
+                    # DQN模式：使用外部DQN提供的移动指令
+                    with self.dqn_command_lock:
+                        move_direction = self.dqn_commands.get(drone_name, Vector3(0, 0, 0))
+                    
+                    # 如果有有效的DQN指令，执行移动
+                    if move_direction.magnitude() > 0.001:
+                        if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                            self._control_drone_movement(drone_name, move_direction)
+                        else:
+                            self.crazyswarm.go_to(drone_name, move_direction, self.config_data.updateInterval)
+                        
+                        logger.debug(f"无人机{drone_name} DQN控制: {move_direction}")
+                    
+                    # DQN模式下不需要运行APF算法，因为DQN已经直接控制无人机
+                    # 只需要保持runtime_data的基本更新即可（由Unity发送）
+                    logger.debug(f"[DQN模式] DQN直接控制，跳过APF算法计算")
 
                 # 按配置间隔休眠
                 time.sleep(self.config_data.updateInterval)
@@ -983,6 +1032,21 @@ class MultiDroneAlgorithmServer:
             except Exception as e:
                 # 捕获发送异常，避免影响主流程
                 logger.warning(f"发送运行时数据到Unity失败: {str(e)}")
+
+
+    def set_dqn_movement(self, drone_name: str, direction: Vector3) -> None:
+        """
+        为DQN控制模式设置移动指令
+        :param drone_name: 无人机名称
+        :param direction: 移动方向向量（Unity坐标系）
+        """
+        if self.control_mode != 'dqn':
+            logger.warning(f"当前控制模式为{self.control_mode}，无法设置DQN移动指令")
+            return
+        
+        with self.dqn_command_lock:
+            self.dqn_commands[drone_name] = direction
+        logger.debug(f"DQN设置移动指令: {drone_name} -> {direction}")
 
 
     def reset_environment(self) -> None:
