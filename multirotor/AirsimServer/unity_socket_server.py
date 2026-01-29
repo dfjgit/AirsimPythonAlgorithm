@@ -133,6 +133,18 @@ class UnitySocketServer:
         except Exception as e:
             logger.error(f"发送重置命令失败: {str(e)}")
     
+    def send_start_simulation_command(self) -> None:
+        """发送开始仿真命令到Unity（让领导者开始移动）"""
+        try:
+            pack = DataPacks()
+            pack.type = PackType.start_simulation
+            pack.time_span = str(time.time())
+            pack.pack_data_list = {}  # 开始仿真命令不需要额外数据
+            self.pending_packs.append(pack)
+            logger.info("[开始仿真] 已发送开始仿真命令到Unity")
+        except Exception as e:
+            logger.error(f"发送开始仿真命令失败: {str(e)}")
+    
     def get_stats(self) -> dict:
         """获取通信统计信息"""
         return {

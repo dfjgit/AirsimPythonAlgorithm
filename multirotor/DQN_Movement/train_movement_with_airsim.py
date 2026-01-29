@@ -198,16 +198,16 @@ class AirSimProgressCallback(BaseCallback):
         self.current_episode_reward = 0
         self.current_episode_length = 0
         self.episode_count = 0
+        self.start_time = datetime.now()
         
         # CSV 日志记录
         self.log_dir = log_dir
         if self.log_dir:
-            from datetime import datetime
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             self.csv_path = os.path.join(self.log_dir, f'dqn_training_{timestamp}.csv')
             # 创建 CSV 文件并写入表头
             with open(self.csv_path, 'w', encoding='utf-8') as f:
-                f.write('episode,reward,length,scanned_cells,timestep\n')
+                f.write('episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,collision_count,out_of_range_count,scan_efficiency\n')
             print(f"  ✓ CSV 日志: {self.csv_path}")
         
     def _on_step(self) -> bool:
@@ -265,20 +265,33 @@ class AirSimProgressCallback(BaseCallback):
             print(f"  - Length: {self.current_episode_length}")
             print(f"  - Timestep: {self.num_timesteps}")
             
-            # 获取扫描信息
+            # 获取扫描信息和其他指标
             scanned_cells = 0
+            collision_count = 0
+            out_of_range_count = 0
+            
             if 'infos' in self.locals and len(self.locals['infos']) > 0:
                 info = self.locals['infos'][0]
                 scanned_cells = info.get('scanned_cells', 0)
+                collision_count = info.get('collision_count', 0)
+                out_of_range_count = info.get('out_of_range_count', 0)
+                
                 self.episode_scanned.append(scanned_cells)
                 print(f"  - Scanned cells: {scanned_cells}")
+                print(f"  - Collisions: {collision_count}")
+                print(f"  - Out of range: {out_of_range_count}")
+            
+            # 计算耗时
+            elapsed_time = (datetime.now() - self.start_time).total_seconds()
+            timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            scan_efficiency = scanned_cells / max(elapsed_time, 1.0)
             
             # 写入 CSV 日志
             if self.log_dir:
                 try:
                     print(f"[DEBUG] 准备写入 CSV: {self.csv_path}")
                     with open(self.csv_path, 'a', encoding='utf-8') as f:
-                        line = f'{self.episode_count},{self.current_episode_reward:.2f},{self.current_episode_length},{scanned_cells},{self.num_timesteps}\n'
+                        line = f'{self.episode_count},{self.current_episode_reward:.2f},{self.current_episode_length},{scanned_cells},{self.num_timesteps},{elapsed_time:.2f},{timestamp_str},{collision_count},{out_of_range_count},{scan_efficiency:.2f}\n'
                         f.write(line)
                         f.flush()  # 确保立即写入磁盘
                         print(f"  [✅] 成功写入 CSV: {line.strip()}")
@@ -348,16 +361,8 @@ try:
     print(f"[DEBUG] total_timesteps = {total_timesteps}")
     print(f"[DEBUG] learning_starts = {dqn_config['training']['learning_starts']}")
     
-    # 测试环境是否可以正常工作
-    print(f"\n[DEBUG] 测试环境...")
-    print(f"[DEBUG] 调用 env.reset()...")
-    test_obs, test_info = env.reset()
-    print(f"[DEBUG] env.reset() 完成，observation shape = {test_obs.shape}")
-    
-    print(f"[DEBUG] 调用 env.step(0)...")
-    test_obs2, test_reward, test_done, test_truncated, test_info2 = env.step(0)
-    print(f"[DEBUG] env.step(0) 完成，reward = {test_reward:.2f}, done = {test_done}")
-    print(f"[DEBUG] 环境测试通过！\n")
+    # 注：删除了测试性的 env.reset() 调用，因为它会在无人机已移动后触发重置
+    # 现在领导者在接收到 start_simulation 指令后才开始移动，无需额外重置
     
     print(f"[DEBUG] \n开始训练循环...\n")
     

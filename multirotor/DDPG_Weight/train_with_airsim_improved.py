@@ -402,12 +402,10 @@ class ImprovedTrainingCallback(BaseCallback):
                     is_episode_done=True
                 )
             
-            # 通知 DataCollector 记录训练数据
+            # 通知 DataCollector 记录训练数据 (仅更新全局统计，Episode 切换由 Env 触发)
             if hasattr(self, 'server') and hasattr(self.server, 'data_collector'):
-                self.server.data_collector.set_external_data('episode', self.episode_count)
-                self.server.data_collector.set_external_data('step', self.num_timesteps)
-                self.server.data_collector.set_external_data('reward', ep_reward)
-                self.server.data_collector.set_external_data('total_reward', sum(self.episode_rewards))
+                self.server.data_collector.set_external_data('global_step', self.num_timesteps)
+                self.server.data_collector.set_external_data('global_reward', sum(self.episode_rewards))
             
             # ========== 美观的Episode完成信息显示 ==========
             print(f"\n{'╔'+'═'*58+'╗'}")
@@ -582,13 +580,14 @@ def main():
     safety_limit = bool(_get_config_value(None, config, "safety_limit", True))  # 权重变化安全限制
     max_weight_delta = float(_get_config_value(None, config, "max_weight_delta", 0.5))  # 权重变化最大幅度
     
-    # 模型覆盖逻辑：命令行优先
-    overwrite_model = bool(_get_config_value(
-        args.overwrite_model if args.overwrite_model is not None else None,
-        config,
-        "overwrite_model",
-        DEFAULT_OVERWRITE_MODEL
-    ))
+    # 模型覆盖逻辑：默认开启覆盖模式以满足用户需求
+    overwrite_model = True 
+    
+    # 允许命令行覆盖此默认值
+    if args.overwrite_model is not None:
+        overwrite_model = args.overwrite_model
+    elif "overwrite_model" in config:
+        overwrite_model = config["overwrite_model"]
     
     # 模型名称
     model_name = _get_config_value(
@@ -754,51 +753,69 @@ def main():
                 print("💡 训练将继续，但不显示可视化")
                 training_visualizer = None
 
-        # ========== [5/5] 创建DDPG模型 ==========
-        print("\n[5/5] 创建DDPG模型...")
+        # ========== [5/5] 创建或加载 DDPG 模型 ==========
+        print("\n[5/5] 获取 DDPG 模型...")
+                
+        # 确定模型路径
+        model_dir = os.path.join(os.path.dirname(__file__), 'models')
+        os.makedirs(model_dir, exist_ok=True)
+        fixed_model_path = os.path.join(model_dir, f"{model_name}.zip")
+                
+        # 检查是否存在旧模型
+        reset_num_timesteps = True
+        if os.path.exists(fixed_model_path):
+            print(f"🔄 发现现有模型: {fixed_model_path}")
+            print(f"   正在从旧模型加载神经网络参数进行增量训练...")
+            try:
+                # 加载旧模型，去掉 .zip 后缀
+                model = DDPG.load(fixed_model_path[:-4], env=env)
+                reset_num_timesteps = False
+                print("✅ 旧模型加载成功，将继续训练")
+            except Exception as e:
+                print(f"⚠️  加载旧模型失败: {e}")
+                print("🆕 将创建新的随机初始化模型")
+                model = None
+        else:
+            print(f"🆕 未发现现有模型 ({model_name}.zip)，将创建新模型")
+            model = None
         
-        # 获取动作空间维度（5个APF权重系数）
-        n_actions = env.action_space.shape[0]
-        
-        # 创建动作噪声（用于探索）
-        # NormalActionNoise: 高斯噪声，帮助算法探索动作空间
-        # sigma=0.15: 噪声标准差，控制探索强度
-        action_noise = NormalActionNoise(
-            mean=np.zeros(n_actions),  # 噪声均值为0
-            sigma=0.15 * np.ones(n_actions)  # 适度噪声，平衡探索与利用
-        )
-        
-        # 创建DDPG模型
-        # DDPG (Deep Deterministic Policy Gradient): 适用于连续动作空间的强化学习算法
-        model = DDPG(
-            "MlpPolicy",  # 使用多层感知机（MLP）策略网络
-            env,  # 训练环境
-            action_noise=action_noise,  # 动作噪声（探索）
-            learning_rate=1e-4,  # 学习率（较小值，稳定训练）
-            buffer_size=5000,  # 经验回放缓冲区大小（小缓冲区，快速训练）
-            learning_starts=200,  # 开始学习前的步数（收集经验）
-            batch_size=64,  # 批次大小（每次训练使用的样本数）
-            tau=0.005,  # 软更新系数（目标网络更新速度）
-            gamma=0.99,  # 折扣因子（未来奖励的重要性）
-            train_freq=(1, "episode"),  # 训练频率（每个episode训练一次）
-            gradient_steps=-1,  # 梯度步数（-1表示使用所有可用数据）
-            verbose=0,  # 详细程度（0=静默）
-            device='cpu'  # 使用CPU（可改为'cuda'使用GPU）
-        )
-        
-        print("✅ DDPG模型创建成功")
-        
+        if model is None:
+            # 获取动作空间维度（5个APF权重系数）
+            n_actions = env.action_space.shape[0]
+                    
+            # 创建动作噪声（用于探索）
+            action_noise = NormalActionNoise(
+                mean=np.zeros(n_actions),  # 噪声均值为0
+                sigma=0.15 * np.ones(n_actions)  # 适度噪声，平衡探索与利用
+            )
+                    
+            # 创建DDPG模型
+            model = DDPG(
+                "MlpPolicy",  # 使用多层感知机（MLP）策略网络
+                env,  # 训练环境
+                action_noise=action_noise,  # 动作噪声（探索）
+                learning_rate=1e-4,  # 学习率（较小值，稳定训练）
+                buffer_size=5000,  # 经验回放缓冲区大小（小缓冲区，快速训练）
+                learning_starts=200,  # 开始学习前的步数（收集经验）
+                batch_size=64,  # 批次大小（每次训练使用的样本数）
+                tau=0.005,  # 软更新系数（目标网络更新速度）
+                gamma=0.99,  # 折扣因子（未来奖励的重要性）
+                train_freq=(1, "episode"),  # 训练频率（每个episode训练一次）
+                gradient_steps=-1,  # 梯度步数（-1表示使用所有可用数据）
+                verbose=0,  # 详细程度（0=静默）
+                device='cpu'  # 使用CPU（可改为'cuda'使用GPU）
+            )
+            print("✅ DDPG模型初始化成功")
+                
         # 开始训练
         print("\n" + "=" * 60)
         print("🎯 开始训练")
         print("=" * 60)
         print(f"📊 训练步数: {total_timesteps}")
+        print(f"🔄 增量训练: {'是' if not reset_num_timesteps else '否'}")
         print(f"⏸️  按 Ctrl+C 可随时停止")
         print("=" * 60 + "\n")
-        
-        model_dir = os.path.join(os.path.dirname(__file__), 'models')
-        os.makedirs(model_dir, exist_ok=True)
-        
+                
         training_callback = ImprovedTrainingCallback(
             total_timesteps=total_timesteps,
             check_freq=checkpoint_freq,
@@ -809,11 +826,12 @@ def main():
             model_name=model_name,  # 传入模型名称
             verbose=1
         )
-        
+                
         model.learn(
             total_timesteps=total_timesteps,
             log_interval=None,
-            callback=training_callback
+            callback=training_callback,
+            reset_num_timesteps=reset_num_timesteps
         )
         
         print("\n" + "=" * 60)

@@ -178,6 +178,15 @@ class SimpleWeightEnv(gym.Env):
         print(f"  • 预计时长: {self.reward_config.max_steps * self.step_duration / 60:.1f}分钟")
         print(f"{'='*60}\n")
         
+        # 通知服务器 Episode 切换 (用于数据采集及时记录上一个 Episode)
+        if self.server:
+            self.server.set_training_stats(
+                episode=self.episode_count,
+                step=0,
+                reward=0.0,
+                total_reward=0.0
+            )
+        
         return state
     
     def step(self, action):

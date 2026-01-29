@@ -546,7 +546,7 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         self.prev_scanned_cells = 0  # 上一次扫描的网格单元数量
         self.last_action = np.zeros(5, dtype=np.float32)  # 上一次的动作（权重）
         self._has_initial_action = False  # 是否已设置初始动作（用于安全限制）
-
+        
     def reset(self):
         """
         重置环境到初始状态
@@ -565,11 +565,12 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         self.total_episode_reward = 0.0
         self.last_action = np.zeros(5, dtype=np.float32)
         self._has_initial_action = False
-
+                
         # 如果配置了重置Unity环境，则执行重置
         if self.reset_unity and self.server:
+            print(f"[DDPG环境] 🔄 Episode结束，执行环境重置...")
             self.server.reset_environment()
-
+                
         # 更新已扫描网格单元数量（用于计算扫描奖励）
         if self.server and self.server.grid_data and self.server.grid_data.cells:
             self.prev_scanned_cells = self._count_scanned_cells()

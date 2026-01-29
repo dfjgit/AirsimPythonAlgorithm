@@ -70,8 +70,9 @@ class DroneController:
     def connect(self) -> bool:
         """连接到AirSim模拟器"""
         try:
-            self.client = airsim.MultirotorClient()
-            self.client.confirmConnection()
+            with self.api_lock:
+                self.client = airsim.MultirotorClient()
+                self.client.confirmConnection()
             self.connection_status = True
             logger.info("成功连接到AirSim模拟器")
             return True
@@ -83,7 +84,8 @@ class DroneController:
     def reset(self) -> bool:
         """重置模拟器状态"""
         try:
-            self.client.reset()
+            with self.api_lock:
+                self.client.reset()
             logger.info("模拟器已重置")
             self.vehicle_states.clear()
             return True
@@ -138,12 +140,13 @@ class DroneController:
                 logger.warning(f"无人机{vehicle_name}已处于飞行状态")
                 return True
 
-            # 执行起飞（示例中的调用方式，不传递超时到join()）
+            # 执行起飞
             with self.api_lock:
                 self.client.takeoffAsync(vehicle_name=vehicle_name).join()
-            # 假设起飞成功
+                # 状态更新也放在锁内，确保一致性
+                self._update_vehicle_state_internal(vehicle_name)
+                
             self._update_state_field(vehicle_name, "flying", True)
-            self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}起飞完成")
             return True
         except Exception as e:
@@ -162,8 +165,10 @@ class DroneController:
             # 执行降落
             with self.api_lock:
                 self.client.landAsync(vehicle_name=vehicle_name).join()
+                # 状态更新也放在锁内
+                self._update_vehicle_state_internal(vehicle_name)
+                
             self._update_state_field(vehicle_name, "flying", False)
-            self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}降落完成")
             return True
         except Exception as e:
@@ -183,12 +188,15 @@ class DroneController:
             if speed <= 0:
                 logger.error(f"无人机{vehicle_name}速度必须大于0")
                 return False
-            # 执行移动并等待完成（与其他异步操作保持一致）
-            self.client.moveToPositionAsync(
-                x, y, z, speed, vehicle_name=vehicle_name
-            ).join()
+                
+            # 执行移动并等待完成
+            with self.api_lock:
+                self.client.moveToPositionAsync(
+                    x, y, z, speed, vehicle_name=vehicle_name
+                ).join()
+                # 状态更新也放在锁内
+                self._update_vehicle_state_internal(vehicle_name)
             
-            self._update_vehicle_position(vehicle_name)
             logger.info(f"无人机{vehicle_name}已移动到({x},{y},{z})")
             return True
         except Exception as e:
@@ -233,7 +241,6 @@ class DroneController:
         """获取指定相机图像并返回Base64编码"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:            
-            
             # 使用get方法获取值并提供默认值
             image_newType = IMAGE_TYPE_MAPPING.get(image_type, None)
             if image_newType is None:
@@ -242,7 +249,9 @@ class DroneController:
                  
             logger.info(f"获取{vehicle_name}的{camera_name}相机{image_newType}类型图像中...")
             # 匹配示例中的图像获取方式
-            image_data = self.client.simGetImage(camera_name, image_newType, vehicle_name=vehicle_name)
+            with self.api_lock:
+                image_data = self.client.simGetImage(camera_name, image_newType, vehicle_name=vehicle_name)
+            
             if image_data:
                 import io
                 from PIL import Image
@@ -266,25 +275,42 @@ class DroneController:
     def _update_vehicle_state(self, vehicle_name: str) -> None:
         """更新无人机状态（完全适配示例API）"""
         try:
-            # 更新飞行状态（使用正确的LandedState属性名）
-            state = self.client.getMultirotorState(vehicle_name=vehicle_name)
-            # 修正LandedState属性名（移除前缀）
-            flying_status = (state.landed_state == airsim.LandedState.Flying)
-            self._update_state_field(vehicle_name, "flying", flying_status)
-            
-            # 更新位置
-            self._update_vehicle_position(vehicle_name)
-            
-            # 更新姿态
-            self._update_vehicle_orientation(vehicle_name)
-            
+            # 线程安全地一次性获取并更新状态，减少 API 调用次数和冲突概率
+            with self.api_lock:
+                self._update_vehicle_state_internal(vehicle_name)
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}状态失败: {str(e)}")
+
+    def _update_vehicle_state_internal(self, vehicle_name: str) -> None:
+        """内部状态更新逻辑（假设已持有 api_lock）"""
+        # 获取综合状态
+        state = self.client.getMultirotorState(vehicle_name=vehicle_name)
+        
+        # 1. 更新飞行状态
+        # LandedState: 0=Landed, 1=Flying, 2=TakingOff, 3=Landing
+        # 我们认为只要不是处于完全降落状态，都属于“广义飞行”中
+        flying_status = (state.landed_state != airsim.LandedState.Landed)
+        self._update_state_field(vehicle_name, "flying", flying_status)
+        
+        # 2. 更新位置
+        pos = state.kinematics_estimated.position
+        self._update_state_field(vehicle_name, "position", (pos.x_val, pos.y_val, pos.z_val))
+        
+        # 3. 更新姿态
+        orientation_q = state.kinematics_estimated.orientation
+        from airsim.utils import to_eularian_angles
+        pitch, roll, yaw = to_eularian_angles(orientation_q)
+        self._update_state_field(
+            vehicle_name, 
+            "orientation", 
+            (math.degrees(roll), math.degrees(pitch), math.degrees(yaw))
+        )
     
     def _update_vehicle_position(self, vehicle_name: str) -> None:
         """更新无人机位置信息"""
         try:
-            position = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.position
+            with self.api_lock:
+                position = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.position
             # 使用安全更新方法，避免numpy视图冲突
             self._update_state_field(vehicle_name, "position", (position.x_val, position.y_val, position.z_val))
         except Exception as e:
@@ -293,7 +319,8 @@ class DroneController:
     def _update_vehicle_orientation(self, vehicle_name: str) -> None:
         """更新无人机姿态信息（欧拉角）"""
         try:
-            orientation_q = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.orientation
+            with self.api_lock:
+                orientation_q = self.client.getMultirotorState(vehicle_name=vehicle_name).kinematics_estimated.orientation
             from airsim.utils import to_eularian_angles
             pitch, roll, yaw = to_eularian_angles(orientation_q)
             # 使用安全更新方法，避免numpy视图冲突

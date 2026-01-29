@@ -10,6 +10,7 @@ class PackType(Enum):
     crazyflie_logging_data = "crazyflie_logging"
     crazyflie_operate_data = "crazyflie_operate"
     reset_env = "reset_env"  # 重置环境命令
+    start_simulation = "start_simulation"  # 开始仿真命令（让领导者开始移动）
 
 
 # 数据包数据结构（通信发送的数据包）

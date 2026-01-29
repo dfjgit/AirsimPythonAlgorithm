@@ -8,6 +8,7 @@ import csv
 import json
 import logging
 import traceback
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, Any, Callable
@@ -18,14 +19,16 @@ logger = logging.getLogger("DataCollector")
 class DataCollector:
     """数据采集器类，负责采集和记录扫描数据"""
     
-    def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0, enable_debug_print: bool = False):
+    def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0, enable_debug_print: bool = False, training_prefix: str = "ddpg"):
         """
         初始化数据采集器
         :param data_dir: 数据保存目录（默认使用 DDPG_Weight/airsim_training_logs）
         :param collection_interval: 采集间隔（秒，默认1.0）
         :param enable_debug_print: 是否启用DEBUG打印（默认False，训练时应设置为True）
+        :param training_prefix: 训练数据文件名前缀（默认 "ddpg"）
         """
         self.collection_interval = collection_interval
+        self.training_prefix = training_prefix
         self.running = False
         self.collection_thread: Optional[threading.Thread] = None
         self.csv_file = None
@@ -46,7 +49,10 @@ class DataCollector:
         self.current_episode = 0
         self.current_episode_reward = 0.0
         self.current_episode_length = 0
+        self.current_episode_weights = []  # 记录当前 episode 的权重用于取平均
         self.last_episode = -1  # 用于检测 episode 切换
+        self.last_step = -1     # 用于检测 step 切换
+        self.last_scanned_count = 0  # 记录最近一次扫描数
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -71,7 +77,7 @@ class DataCollector:
             # 生成CSV文件名（带时间戳）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             csv_filename = data_path / f"scan_data_{timestamp}.csv"
-            training_csv_filename = data_path / f"ddpg_training_{timestamp}.csv"
+            training_csv_filename = data_path / f"{self.training_prefix}_training_{timestamp}.csv"
             
             # 打开 scan_data CSV 文件（表头将在第一次采集数据时写入）
             self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
@@ -84,7 +90,9 @@ class DataCollector:
             self.training_csv_filename = training_csv_filename
             
             # 写入训练数据表头
-            self.training_csv_writer.writerow(['episode', 'reward', 'length', 'scanned_cells', 'timestep'])
+            header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'timestamp', 'scan_efficiency',
+                      'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction']
+            self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
             self.training_header_written = True
             
@@ -187,6 +195,9 @@ class DataCollector:
             self.collection_thread.join(timeout=2.0)
             logger.info("数据采集线程已停止")
             
+        # 强制写入最后一个 episode 的数据
+        self._flush_training_data()
+            
         # 关闭 CSV 文件
         if self.csv_file:
             try:
@@ -203,6 +214,44 @@ class DataCollector:
             except Exception as e:
                 logger.error(f"关闭训练数据文件失败: {str(e)}")
     
+    def _flush_training_data(self):
+        """确保最后的训练数据被写入文件"""
+        if self.training_csv_writer and self.last_episode >= 0 and self.current_episode_length > 0:
+            try:
+                elapsed_time = time.time() - self.start_time
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                scan_efficiency = self.last_scanned_count / max(elapsed_time, 1.0)
+                
+                # 计算平均权重
+                avg_weights = [0.0] * 5
+                if self.current_episode_weights:
+                    avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
+
+                training_row = [
+                    self.last_episode,
+                    f"{self.current_episode_reward:.2f}",
+                    self.current_episode_length,
+                    self.last_scanned_count,
+                    int(elapsed_time), # 此处 elapsed_time 作为训练步长累计的一个参考
+                    f"{elapsed_time:.2f}",
+                    timestamp,
+                    f"{scan_efficiency:.2f}",
+                    f"{avg_weights[0]:.3f}",
+                    f"{avg_weights[1]:.3f}",
+                    f"{avg_weights[2]:.3f}",
+                    f"{avg_weights[3]:.3f}",
+                    f"{avg_weights[4]:.3f}"
+                ]
+                self.training_csv_writer.writerow(training_row)
+                self.training_csv_file.flush()
+                logger.info(f"✅ 已记录 Episode {self.last_episode} 统计数据 (奖励: {self.current_episode_reward:.2f}, 长度: {self.current_episode_length})")
+                # 重置防止重复写入
+                self.last_episode = -1
+                self.current_episode_length = 0
+                self.current_episode_weights = []
+            except Exception as e:
+                logger.error(f"冲刷训练数据失败: {e}")
+
     def _collection_thread(self,
                           get_grid_data_func,
                           get_runtime_data_func,
@@ -353,6 +402,9 @@ class DataCollector:
                     # 计算全局采集百分比
                     global_scan_ratio = (global_scanned_count / global_total_count * 100) if global_total_count > 0 else 0.0
                 
+                # 记录最近的扫描数，用于训练数据输出
+                self.last_scanned_count = scanned_count
+
                 # 如果表头未写入，先写入表头
                 if self.csv_writer and not self.header_written:
                     header = [
@@ -452,30 +504,61 @@ class DataCollector:
                 # 写入训练数据（每个 episode 完成时）
                 if self.training_csv_writer and training_data:
                     current_episode = training_data.get('episode', 0)
+                    current_step = training_data.get('step', -1)
                     step_reward = training_data.get('reward', 0.0)
+                    
+                    # 提取当前权重
+                    current_weights = [
+                        weights.get('repulsionCoefficient', 0.0),
+                        weights.get('entropyCoefficient', 0.0),
+                        weights.get('distanceCoefficient', 0.0),
+                        weights.get('leaderRangeCoefficient', 0.0),
+                        weights.get('directionRetentionCoefficient', 0.0)
+                    ]
                     
                     # 累计 episode 数据
                     if current_episode != self.last_episode:
                         # Episode 切换，写入上一个 episode 的数据
                         if self.last_episode >= 0 and self.current_episode_length > 0:
+                            # 计算上一个 episode 的平均权重
+                            avg_weights = [0.0] * 5
+                            if self.current_episode_weights:
+                                avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
+
+                            elapsed_time = time.time() - self.start_time
+                            scan_efficiency = self.last_scanned_count / max(elapsed_time, 1.0)
+                            
                             training_row = [
                                 self.last_episode,
                                 f"{self.current_episode_reward:.2f}",
                                 self.current_episode_length,
-                                scanned_count,  # 使用当前的扫描数据
-                                int(elapsed_time)  # timestep
+                                self.last_scanned_count,
+                                int(elapsed_time),  # timestep
+                                f"{elapsed_time:.2f}",
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                f"{scan_efficiency:.2f}",
+                                f"{avg_weights[0]:.3f}",
+                                f"{avg_weights[1]:.3f}",
+                                f"{avg_weights[2]:.3f}",
+                                f"{avg_weights[3]:.3f}",
+                                f"{avg_weights[4]:.3f}"
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()
+                            logger.info(f"✅ 已记录 Episode {self.last_episode} 统计数据 (奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length})")
                         
                         # 重置计数器
                         self.last_episode = current_episode
                         self.current_episode_reward = step_reward
                         self.current_episode_length = 1
-                    else:
-                        # 同一 episode，累计
+                        self.last_step = current_step
+                        self.current_episode_weights = [current_weights]
+                    elif current_step != self.last_step:
+                        # 同一 episode，且是新的一步，才累计奖励和长度
                         self.current_episode_reward += step_reward
                         self.current_episode_length += 1
+                        self.last_step = current_step
+                        self.current_episode_weights.append(current_weights)
                 
             except Exception as e:
                 logger.error(f"数据采集线程出错: {str(e)}")

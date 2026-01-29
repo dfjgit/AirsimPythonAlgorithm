@@ -126,7 +126,8 @@ class MultiDroneAlgorithmServer:
             self.data_collector = DataCollector(
                 data_dir=dqn_data_dir,
                 collection_interval=1.0,
-                enable_debug_print=enable_data_collection_print
+                enable_debug_print=enable_data_collection_print,
+                training_prefix="dqn"
             )
         else:
             # APF/DDPG 模式：保存到 DDPG_Weight/airsim_training_logs（默认）
@@ -442,7 +443,13 @@ class MultiDroneAlgorithmServer:
             logger.info("无人机起飞完成，等待稳定...")
             time.sleep(3)
             
-            # 2. 启动算法处理线程
+            # 2. 发送开始仿真指令到Unity（让领导者开始移动）
+            if self.unity_socket and self.unity_socket.is_connected():
+                logger.info("发送开始仿真指令到Unity...")
+                self.unity_socket.send_start_simulation_command()
+                time.sleep(0.5)  # 等待Unity处理指令
+            
+            # 3. 启动算法处理线程
             logger.info("启动算法处理线程...")
             self.running = True
             for drone_name in self.drone_names:
@@ -454,7 +461,7 @@ class MultiDroneAlgorithmServer:
                 self.drone_threads[drone_name].start()
                 logger.info(f"无人机{drone_name}算法线程启动")
 
-            # 3. 启动数据采集线程
+            # 4. 启动数据采集线程
             logger.info("启动数据采集线程...")
             self.data_collector.start(
                 get_grid_data_func=lambda: self.grid_data,
@@ -1063,17 +1070,80 @@ class MultiDroneAlgorithmServer:
 
 
     def reset_environment(self) -> None:
-        """重置Unity环境（网格熵值、无人机位置、Leader等）"""
-        logger.info("[重置] 正在重置Unity环境...")
-        if self.unity_socket and self.unity_socket.is_connected():
-            self.unity_socket.send_reset_command()
-            time.sleep(1.5)  # 等待Unity完成重置并发送完整网格数据
-            logger.info("[重置] Unity环境重置完成，等待接收新的完整网格数据")
+        """重置运行环境（网格熵值、无人机位置、Leader等）"""
+        logger.info("[重置] 正在重置运行环境...")
+        
+        # 智能重置判断：检查无人机是否已经在起点且处于飞行状态
+        need_physical_reset = False
+        
+        # 如果是实体无人机镜像，我们通常不执行物理重置 (交给外部控制或手动重置)
+        # 仅针对虚拟无人机 (AirSim) 进行智能判断
+        for drone_name in self.drone_names:
+            if not self.drones_config.is_crazyflie_mirror(drone_name):
+                try:
+                    state = self.drone_controller.get_vehicle_state(drone_name)
+                    pos = state.get("position", (0, 0, 0)) # AirSim 坐标: (x, y, z)
+                    api_enabled = state.get("api_enabled", False)
+                    flying = state.get("flying", False)
+                    
+                    # 计算水平距离 (x, y) 距离起点的偏移
+                    horizontal_dist = math.sqrt(pos[0]**2 + pos[1]**2)
+                    
+                    # 记录详细日志以便排查
+                    logger.info(f"[重置检测] 无人机:{drone_name}, 位置:({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
+                                f"水平距离:{horizontal_dist:.2f}m, API启用:{api_enabled}, 飞行状态:{flying}")
+                    
+                    # 只要无人机在飞（只要不在地面，flying即为True）且距离起点不远，就跳过物理重置
+                    if horizontal_dist > 3.0 or not flying:
+                        need_physical_reset = True
+                        reason = "距离过远" if horizontal_dist > 3.0 else "未处于飞行状态"
+                        logger.info(f"[重置检测] 判定需要物理重置，原因: {reason}")
+                        break
+                except Exception as e:
+                    logger.debug(f"[重置] 获取无人机{drone_name}状态失败，默认执行物理重置: {e}")
+                    need_physical_reset = True
+                    break
+        
+        # 1. 重置AirSim模拟器和无人机位置 (仅针对虚拟无人机)
+        if need_physical_reset and hasattr(self, 'drone_controller') and self.drone_controller.connection_status:
+            try:
+                logger.info("[重置] 检测到无人机偏移或未就绪，执行 AirSim 物理重置...")
+                self.drone_controller.reset()
+                
+                # 重置后需要重新初始化无人机并起飞
+                time.sleep(1)
+                logger.info("[重置] 重新初始化无人机并重置电量...")
+                self._init_drones()
+                
+                # 重置所有无人机电量数据
+                for drone_name in self.drone_names:
+                    self.reset_battery_voltage(drone_name)
+                
+                logger.info("[重置] 所有无人机重新起飞...")
+                self._takeoff_all()
+            except Exception as e:
+                logger.error(f"[重置] AirSim重置失败: {str(e)}")
         else:
-            logger.warning("[重置] Unity未连接，无法重置环境")
+            logger.info("[重置] 🚀 无人机已在起点并处于飞行状态，跳过 AirSim 物理重置(降落/起飞)")
+            # 即使跳过物理重置，也总是重置电量数据以保证统计准确
+            for drone_name in self.drone_names:
+                self.reset_battery_voltage(drone_name)
+
+        # 2. 发送重置命令到Unity（重置网格数据、Leader状态等）
+        if self.unity_socket and self.unity_socket.is_connected():
+            logger.info("[重置] 发送重置命令到Unity...")
+            self.unity_socket.send_reset_command()
+            
+            # 等待较长时间，确保Unity完成重置并发送新数据
+            time.sleep(3.0) 
+            logger.info("[重置] Unity重置指令已发送，等待接收新数据")
+        else:
+            logger.warning("[重置] Unity未连接，仅清空本地网格数据")
             # 清空Python端的网格数据
             with self.grid_lock:
                 self.grid_data.cells.clear()
+        
+        logger.info("[重置] 环境重置流程执行完毕")
     
     def stop(self) -> None:
         """停止服务：降落无人机，断开连接，清理资源"""

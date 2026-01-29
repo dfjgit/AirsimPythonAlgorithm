@@ -28,11 +28,11 @@ def set_ch_font():
     # 根据操作系统自动选择常见的中文字体
     system = platform.system()
     if system == "Windows":
-        plt.rcParams['font.sans-serif'] = ['SimHei']  # 黑体
+        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'SimSun', 'Arial']
     elif system == "Darwin":  # macOS
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'STHeiti', 'sans-serif']
     else:  # Linux (如 Ubuntu)
-        plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback']
+        plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback', 'Ubuntu Micro Hei', 'WenQuanYi Micro Hei', 'sans-serif']
     
     # 解决负号 '-' 显示为方块的问题
     plt.rcParams['axes.unicode_minus'] = False 

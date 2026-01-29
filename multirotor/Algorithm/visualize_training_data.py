@@ -61,11 +61,11 @@ except ImportError:
 def set_ch_font():
     system = platform.system()
     if system == "Windows":
-        plt.rcParams['font.sans-serif'] = ['SimHei']
+        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'SimSun', 'Arial']
     elif system == "Darwin":
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'STHeiti', 'sans-serif']
     else:
-        plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback']
+        plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback', 'Ubuntu Micro Hei', 'WenQuanYi Micro Hei', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
 
 set_ch_font()
@@ -1186,8 +1186,7 @@ class DQNDataVisualizer:
 动作空间: {metadata.get('action_space', {}).get('n', 6)} 个离散动作
 观察空间: {metadata.get('observation_space', {}).get('shape', [21])}
 """
-        ax4.text(0.1, 0.5, info_text, fontsize=10, verticalalignment='center', 
-                family='monospace')
+        ax4.text(0.1, 0.5, info_text, fontsize=10, verticalalignment='center')
         
         plt.tight_layout()
         plt.savefig(output_dir / "dqn_summary_stats.png", dpi=150)

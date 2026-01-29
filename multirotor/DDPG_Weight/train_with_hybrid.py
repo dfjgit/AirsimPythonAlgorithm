@@ -325,7 +325,7 @@ class ImprovedTrainingCallback(BaseCallback):
                     is_episode_done=True
                 )
             
-            # 记录 Episode 统计信息到数据记录器
+            # 记录 Episode 统计信息到数据记录器 (仅更新全局统计，Episode 切换由 Env 触发)
             if hasattr(self, 'data_logger') and self.data_logger:
                 self.data_logger.record_episode_stats(
                     episode=self.episode_count,
