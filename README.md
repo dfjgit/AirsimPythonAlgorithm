@@ -816,19 +816,50 @@ start.bat
 # 选择 [B] DDPG vs DQN 算法对比
 ```
 
-**方式二：命令行**
+**方式二：直接运行批处理脚本**
 ```bash
+# 需要先训练 DDPG 和 DQN 模型
+start.bat  # 选择 [4] 训练 DDPG，选择 [8] 训练 DQN
+
+# 然后进行对比分析
+start.bat  # 选择 [B]
+```
+
+**方式三：命令行（灵活控制）**
+```bash
+# 基础对比（4图+报告）
 python multirotor/Algorithm/visualize_training_data.py --auto --compare-algorithms --out analysis_results
+
+# 全方位对比（6图+详细报告）
+python multirotor/Algorithm/visualize_training_data.py --auto --compare-algorithms --compare-algorithms-full --out analysis_results
+
+# 仅分析单个算法数据
+python multirotor/Algorithm/visualize_training_data.py --auto --out analysis_results
 ```
 
 **对比内容**：
-1. **奖励曲线对比**：DDPG（红色）vs DQN（蓝绿色）学习曲线
-2. **收敛速度对比**：奖励增长斜率 + R² 拟合度
+
+**基础对比** (`--compare-algorithms`)：
+1. **奖励曲线对比**：DDPG（红色）vs DQN（蓝绿色）学习曲线叠加
+2. **收敛速度对比**：奖励增长斜率（Learning Rate）+ R² 拟合优度
 3. **最终性能对比**：最后 10 个 Episode 的平均奖励（带误差棒）
-4. **学习稳定性对比**：10-Episode 滚动标准差分析
+4. **学习稳定性对比**：10-Episode 滚动标准差分析（波动性评估）
 5. **文本对比报告**：`comparison_report.txt` 包含算法简介、统计数据、结论建议
 
-**输出位置**：`analysis_results/algorithm_comparison_ddpg_vs_dqn/`
+**全方位对比** (`--compare-algorithms-full`，包含基础对比所有内容 + 以下扩展）：
+6. **参数敏感性对比**：不同超参数设置下的性能变化
+7. **长期趋势对比**：整个训练周期的奖励增长趋势
+8. **样本效率对比**：达到目标奖励所需的训练步数
+
+**输出目录结构**：
+```
+analysis_results/
+├── DDPG_scan_data_XXXXXX/          # DDPG 单独分析（11张图表）
+├── DQN_scan_data_XXXXXX/           # DQN 单独分析（11张图表）
+├── dqn_movement_XXXXXX/            # DQN 训练专用分析（4张图表）
+├── algorithm_comparison_ddpg_vs_dqn/       # 基础对比（4图+报告）
+└── algorithm_comparison_ddpg_vs_dqn_full/  # 全方位对比（6图+详细报告）
+```
 
 #### 应用建议
 
@@ -837,7 +868,11 @@ python multirotor/Algorithm/visualize_training_data.py --auto --compare-algorith
 - **组合使用**：DQN 控制移动策略 + DDPG 优化 APF 权重，实现多层次智能控制
 - **对比实验**：通过算法对比分析，为论文提供量化实验证据
 
-**状态说明**：✅ **已完全集成**。DQN 模块现已完成数据标准化、可视化分析和算法对比功能，可用于实验和论文研究。
+**状态说明**：✅ **已完全集成并生产就绪**。DQN 模块现已完成数据标准化、可视化分析和算法对比功能，可用于实验和论文研究。
+
+**模型状态**：
+- ✅ DDPG 模型：`multirotor/DDPG_Weight/models/` 目录下存在多个训练版本
+- ✅ DQN 模型：`multirotor/DQN_Movement/models/movement_dqn_airsim_final.zip`（已训练完成）
 
 ---
 
@@ -1016,11 +1051,18 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 🔄 版本信息
 
-- **当前版本**：1.2.2
+- **当前版本**：1.2.3
 - **Python 版本**：3.7+
-- **最后更新**：2026-01-27 (DQN 集成版)
+- **最后更新**：2026-01-29 (算法对比完善版)
 
 ### 更新日志
+
+- **v1.2.3**（2026-01-29）
+  - ✨ **全方位算法对比**：扩展 DDPG vs DQN 对比分析，新增学习稳定性、最终性能、参数敏感性等 6 维度深度对比。
+  - ✨ **对比报告增强**：算法对比报告新增收敛速度、稳定性分析和应用建议章节，为论文提供详实数据支撑。
+  - ✨ **主菜单优化**：完善 `start.bat` 菜单，选项 [B] 现支持基础对比和全方位对比的自动化流程。
+  - 🔧 **输出目录规范化**：对比结果统一保存至 `analysis_results/algorithm_comparison_*` 目录，层次清晰。
+  - 📚 **文档完善**：README 新增算法对比的三种使用方式（主菜单/批处理/命令行）和输出结构说明。
 
 - **v1.2.2**（2026-01-27）
   - ✨ **DQN 模块完全集成**：DQN 移动控制模块完成生产化改造，支持标准化数据输出。
