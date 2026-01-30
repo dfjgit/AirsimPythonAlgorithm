@@ -81,6 +81,9 @@ class SimpleWeightEnv(gym.Env):
         self.max_weight_delta = max_weight_delta
         self._has_initial_action = False
         
+        # 首次重置标志（用于跳过启动时的物理重置）
+        self._first_reset = True
+        
     def reset(self):
         """重置环境"""
         import time
@@ -95,24 +98,29 @@ class SimpleWeightEnv(gym.Env):
         
         # 如果有server
         if self.server:
-            # 重置所有虚拟无人机的电量数据
-            if self.reset_unity:
-                print(f"🔋 重置电量数据...")
-                for drone_name in self.server.drone_names:
-                    self.server.reset_battery_voltage(drone_name)
-                print(f"  ✅ 所有无人机电量已重置为4.2V")
+            # 重置所有虚拟无人机的电量数据（每个 Episode 都需要）
+            print(f"🔋 重置电量数据...")
+            for drone_name in self.server.drone_names:
+                self.server.reset_battery_voltage(drone_name)
+            print(f"  ✅ 所有无人机电量已重置为4.2V")
             
-            # 模式A：标准episode训练（重置Unity环境）
-            if self.reset_unity:
-                print(f"🎮 正在重置Unity环境...")
-                self.server.reset_environment()
-                
-                # 等待重置完成
-                for i in range(3):
-                    sys.stdout.write(f"\r  ⏳ 等待重置... {'.' * (i+1)}   ")
-                    sys.stdout.flush()
-                    time.sleep(1)
-                print(f"\r  ✅ Unity重置完成!     ")
+            # 首次重置：跳过物理重置（因为无人机已通过 start_mission() 起飞）
+            if self._first_reset:
+                self._first_reset = False
+                print(f"🚀 首次reset，跳过Unity物理重置，直接初始化状态")
+                print(f"💡 无人机已通过 start_mission() 启动，继续使用当前飞行状态")
+            else:
+                # 后续 Episode：执行完整的物理重置（如果启用）
+                if self.reset_unity:
+                    print(f"🎮 正在重置Unity环境...")
+                    self.server.reset_environment()
+                    
+                    # 等待重置完成
+                    for i in range(3):
+                        sys.stdout.write(f"\r  ⏳ 等待重置... {'.' * (i+1)}   ")
+                        sys.stdout.flush()
+                        time.sleep(1)
+                    print(f"\r  ✅ Unity重置完成!     ")
             
             # 等待数据就绪
             print(f"\n📡 等待数据同步...")
@@ -139,7 +147,9 @@ class SimpleWeightEnv(gym.Env):
                 print(f"\r  ⚠️  等待数据超时     ")
         
         # 重置内部状态
-        if self.reset_unity:
+        # 物理 reset 后扫描进度从零开始，否则继承当前扫描进度（连续训练模式）
+        # 注意：首次 reset 时 _first_reset 已经变为 False，但 episode_count=1，视为物理重置
+        if self.episode_count == 1 or (self.reset_unity and not self._first_reset):
             self.prev_scanned_cells = 0
         else:
             if self.server:
