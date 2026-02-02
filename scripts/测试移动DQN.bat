@@ -45,7 +45,7 @@ echo.
 
 REM 检查测试脚本
 echo [3/3] 检查测试脚本...
-if exist "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py" (
+if exist "%~dp0..\multirotor\DQN_Movement\tests\test_movement_dqn.py" (
     echo [OK] 测试脚本已找到
 ) else (
     echo [!] 错误: 测试脚本不存在
@@ -61,7 +61,7 @@ echo.
 echo 提示: 按 Ctrl+C 可随时中断测试
 echo.
 
-python "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py"
+python "%~dp0..\multirotor\DQN_Movement\tests\test_movement_dqn.py"
 
 echo.
 echo ============================================================

@@ -36,7 +36,7 @@ echo.
 
 REM Check training script
 echo [2/3] Checking training script...
-if exist "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py" (
+if exist "%~dp0..\multirotor\DQN_Movement\scripts\train_movement_with_airsim.py" (
     echo [OK] Training script found
 ) else (
     echo [!] Error: Training script does not exist
@@ -52,7 +52,7 @@ echo ============================================================
 echo Tip: Press Ctrl+C to interrupt training at any time
 echo ============================================================
 echo.
-python "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py"
+python "%~dp0..\multirotor\DQN_Movement\scripts\train_movement_with_airsim.py"
 
 echo.
 echo ============================================================

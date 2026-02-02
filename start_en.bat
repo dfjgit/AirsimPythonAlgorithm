@@ -16,6 +16,8 @@ echo   [4] Train DDPG Weights (Real AirSim Environment) [⭐Available!]
 echo.
 echo === DQN Movement Control Training ===
 echo   [5] Train DQN Movement (Real AirSim Environment)[⭐Available!]
+echo   [H] Train Hierarchical DQN (Offline/Mock Mode)
+echo   [F] Train Hierarchical DQN (AirSim Fusion Mode) [⭐New!]
 echo   [D] Test DQN Movement Model [⭐Available!]
 echo.
 echo === Data Analysis ===
@@ -36,6 +38,8 @@ if /i "%choice%"=="2" goto run_dqn
 if /i "%choice%"=="3" goto run_dqn_movement
 if /i "%choice%"=="4" goto train_weight_airsim
 if /i "%choice%"=="5" goto train_movement_airsim
+if /i "%choice%"=="H" goto train_hierarchical_dqn
+if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
 if /i "%choice%"=="b" goto compare_algorithms
@@ -92,6 +96,24 @@ echo DQN Movement Control Training (Real AirSim Environment)
 echo ============================================================
 echo.
 call scripts\Train_DQN_Movement_Real_Environment.bat
+goto menu
+
+:train_hierarchical_dqn
+cls
+echo ============================================================
+echo Hierarchical Reinforcement Learning (HRL) - Offline Mode
+echo ============================================================
+echo.
+call scripts\Train_Hierarchical_DQN.bat
+goto menu
+
+:train_hierarchical_airsim
+cls
+echo ============================================================
+echo Hierarchical Reinforcement Learning (HRL) - AirSim Fusion Mode
+echo ============================================================
+echo.
+call scripts\Train_Hierarchical_With_AirSim.bat
 goto menu
 
 :test_movement_dqn
@@ -164,6 +186,7 @@ echo   - scripts\Run_System_Fixed_Weights.bat      : Run System (Fixed Weights)
 echo   - scripts\Run_System_DDPG_Weights.bat       : Run System (DDPG Weights)
 echo   - scripts\Train_DDPG_Weights_Real_Environment.bat   : Train DDPG Weights (Real Env)
 echo   - scripts\Train_DQN_Movement_Real_Environment.bat   : Train DQN Movement (Real Env)
+echo   - scripts\Train_Hierarchical_DQN.bat                : Train Hierarchical DQN (HL+LL)
 echo.
 echo Python Environment:
 call .venv\Scripts\activate.bat 2>nul

@@ -36,7 +36,7 @@ echo.
 
 REM 检查训练脚本
 echo [2/3] 检查训练脚本...
-if exist "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py" (
+if exist "%~dp0..\multirotor\DQN_Movement\scripts\train_movement_with_airsim.py" (
     echo [OK] 训练脚本已找到
 ) else (
     echo [!] 错误: 训练脚本不存在
@@ -52,7 +52,7 @@ echo ============================================================
 echo 提示: 按 Ctrl+C 可随时中断训练
 echo ============================================================
 echo.
-python "%~dp0..\multirotor\DQN_Movement\train_movement_with_airsim.py"
+python "%~dp0..\multirotor\DQN_Movement\scripts\train_movement_with_airsim.py"
 
 echo.
 echo ============================================================

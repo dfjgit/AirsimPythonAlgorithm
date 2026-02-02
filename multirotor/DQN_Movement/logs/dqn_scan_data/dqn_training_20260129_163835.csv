@@ -1,2 +1,0 @@
-episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,scan_efficiency,avg_repulsion,avg_entropy,avg_distance,avg_leader,avg_direction
-1,-937.31,135,7,137,137.54,2026-01-29 16:41:40,0.05,4.000,2.000,2.000,2.000,2.000

@@ -45,7 +45,7 @@ echo.
 
 REM Check test script
 echo [3/3] Checking test script...
-if exist "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py" (
+if exist "%~dp0..\multirotor\DQN_Movement\tests\test_movement_dqn.py" (
     echo [OK] Test script found
 ) else (
     echo [!] Error: Test script does not exist
@@ -61,7 +61,7 @@ echo.
 echo Tip: Press Ctrl+C to interrupt testing at any time
 echo.
 
-python "%~dp0..\multirotor\DQN_Movement\test_movement_dqn.py"
+python "%~dp0..\multirotor\DQN_Movement\tests\test_movement_dqn.py"
 
 echo.
 echo ============================================================

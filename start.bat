@@ -19,6 +19,8 @@ echo   [7] 训练权重DDPG (虚实融合训练) [⭐可以使用！]
 echo.
 echo === DQN移动控制训练 ===
 echo   [8] 训练移动DQN (真实AirSim环境)[⭐可以使用！]
+echo   [H] 训练分层DQN (离线/Mock模式)
+echo   [F] 训练分层DQN (AirSim融合模式) [⭐新功能！]
 echo   [D] 测试移动DQN模型 [⭐可以使用！]
 echo.
 echo === 数据分析 ===
@@ -42,6 +44,8 @@ if /i "%choice%"=="5" goto train_weight_crazyflie_online
 if /i "%choice%"=="6" goto train_weight_crazyflie_logs
 if /i "%choice%"=="7" goto train_weight_hybrid
 if /i "%choice%"=="8" goto train_movement_airsim
+if /i "%choice%"=="H" goto train_hierarchical_dqn
+if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
 if /i "%choice%"=="b" goto compare_algorithms
@@ -125,6 +129,24 @@ echo DQN移动控制训练 (真实AirSim环境)
 echo ============================================================
 echo.
 call scripts\Train_DQN_Movement_Real_Environment.bat
+goto menu
+
+:train_hierarchical_dqn
+cls
+echo ============================================================
+echo 分层强化学习 (HRL) 训练 - 离线模式
+echo ============================================================
+echo.
+call scripts\Train_Hierarchical_DQN.bat
+goto menu
+
+:train_hierarchical_airsim
+cls
+echo ============================================================
+echo 分层强化学习 (HRL) 训练 - AirSim融合模式
+echo ============================================================
+echo.
+call scripts\Train_Hierarchical_With_AirSim.bat
 goto menu
 
 :test_movement_dqn
@@ -214,6 +236,7 @@ echo   - scripts\训练权重DDPG-实体机在线.bat : 训练权重DDPG(实体�
 echo   - scripts\训练权重DDPG-实体机日志.bat : 训练权重DDPG(实体日志)
 echo   - scripts\训练权重DDPG-虚实融合.bat   : 训练权重DDPG(虚实融合)
 echo   - scripts\训练移动DQN-真实环境.bat   : 训练移动DQN(真实环境)
+echo   - scripts\训练分层DQN.bat            : 训练分层DQN(高层+底层)
 echo.
 echo Python环境:
 call .venv\Scripts\activate.bat 2>nul
