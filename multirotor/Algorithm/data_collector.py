@@ -88,10 +88,11 @@ class DataCollector:
             self.training_csv_file = open(training_csv_filename, 'w', newline='', encoding='utf-8')
             self.training_csv_writer = csv.writer(self.training_csv_file)
             self.training_csv_filename = training_csv_filename
-            
-            # 写入训练数据表头
+                    
+            # 写入训练数据表头 (新增元数据字段以支持跨算法比较)
             header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'timestamp', 'scan_efficiency',
-                      'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction']
+                      'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
+                      'algorithm_type', 'env_type', 'control_mode']
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
             self.training_header_written = True
@@ -227,6 +228,12 @@ class DataCollector:
                 if self.current_episode_weights:
                     avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
+                # 获取元数据 (默认空字符串)
+                with self.external_data_lock:
+                    algo_type = self.external_data.get('algorithm_type', '')
+                    env_type = self.external_data.get('env_type', '')
+                    ctrl_mode = self.external_data.get('control_mode', '')
+
                 training_row = [
                     self.last_episode,
                     f"{self.current_episode_reward:.2f}",
@@ -240,7 +247,10 @@ class DataCollector:
                     f"{avg_weights[1]:.3f}",
                     f"{avg_weights[2]:.3f}",
                     f"{avg_weights[3]:.3f}",
-                    f"{avg_weights[4]:.3f}"
+                    f"{avg_weights[4]:.3f}",
+                    algo_type,
+                    env_type,
+                    ctrl_mode
                 ]
                 self.training_csv_writer.writerow(training_row)
                 self.training_csv_file.flush()
@@ -423,8 +433,14 @@ class DataCollector:
                         'entropy_coefficient',
                         'distance_coefficient',
                         'leader_range_coefficient',
-                        'direction_retention_coefficient'
-                        # 注意：已移除 training_episode, training_step, step_reward, total_reward
+                        'direction_retention_coefficient',
+                        'hl_action',      # 新增：分层强化学习高层动作索引
+                        'hl_goal_x',      # 新增：分层强化学习高层目标X
+                        'hl_goal_y',      # 新增：分层强化学习高层目标Y
+                        'hl_goal_z',      # 新增：分层强化学习高层目标Z
+                        'algorithm_type', # 新增：实验标签
+                        'env_type',       # 新增：实验标签
+                        'control_mode'    # 新增：实验标签
                     ]
                     # 为每个无人机添加坐标列
                     for drone_name in self.drone_names_list:
@@ -452,6 +468,16 @@ class DataCollector:
                     
                     bins, hist, cdf = self._calc_entropy_distribution(entropies)
 
+                    # 提取元数据 (用于 scan_data 行写入)
+                    with self.external_data_lock:
+                        hl_action_val = self.external_data.get('hl_action', '')
+                        hl_goal_x_val = self.external_data.get('hl_goal_x', '')
+                        hl_goal_y_val = self.external_data.get('hl_goal_y', '')
+                        hl_goal_z_val = self.external_data.get('hl_goal_z', '')
+                        algo_type = self.external_data.get('algorithm_type', '')
+                        env_type = self.external_data.get('env_type', '')
+                        ctrl_mode = self.external_data.get('control_mode', '')
+
                     row = [
                         timestamp,
                         f"{elapsed_time:.2f}",
@@ -468,8 +494,14 @@ class DataCollector:
                         weights.get('entropyCoefficient', 0.0),
                         weights.get('distanceCoefficient', 0.0),
                         weights.get('leaderRangeCoefficient', 0.0),
-                        weights.get('directionRetentionCoefficient', 0.0)
-                        # 注意：已移除训练数据
+                        weights.get('directionRetentionCoefficient', 0.0),
+                        hl_action_val,
+                        hl_goal_x_val,
+                        hl_goal_y_val,
+                        hl_goal_z_val,
+                        algo_type,
+                        env_type,
+                        ctrl_mode
                     ]
                     
                     # 添加所有无人机的坐标和姿态
@@ -525,6 +557,12 @@ class DataCollector:
                             if self.current_episode_weights:
                                 avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
+                            # 获取元数据
+                            with self.external_data_lock:
+                                algo_type = self.external_data.get('algorithm_type', '')
+                                env_type = self.external_data.get('env_type', '')
+                                ctrl_mode = self.external_data.get('control_mode', '')
+
                             elapsed_time = time.time() - self.start_time
                             scan_efficiency = self.last_scanned_count / max(elapsed_time, 1.0)
                             
@@ -541,7 +579,10 @@ class DataCollector:
                                 f"{avg_weights[1]:.3f}",
                                 f"{avg_weights[2]:.3f}",
                                 f"{avg_weights[3]:.3f}",
-                                f"{avg_weights[4]:.3f}"
+                                f"{avg_weights[4]:.3f}",
+                                algo_type,
+                                env_type,
+                                ctrl_mode
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()

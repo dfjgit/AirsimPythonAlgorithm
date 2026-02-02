@@ -309,6 +309,19 @@ class MultiDroneAlgorithmServer:
             self.data_collector.set_external_data('reward', reward)
             self.data_collector.set_external_data('total_reward', total_reward)
 
+    def set_experiment_meta(self, algorithm_type: str, env_type: str, control_mode: str):
+        """
+        设置实验元数据，用于数据采集的统一标签
+        :param algorithm_type: 算法类型 (如 'hrl_dqn_apf', 'pure_dqn', 'ddpg_apf')
+        :param env_type: 环境类型 (如 'hierarchical', 'movement', 'weight')
+        :param control_mode: 控制模式 (如 'dqn', 'apf')
+        """
+        if self.data_collector:
+            self.data_collector.set_external_data('algorithm_type', algorithm_type)
+            self.data_collector.set_external_data('env_type', env_type)
+            self.data_collector.set_external_data('control_mode', control_mode)
+            logger.info(f"实验元数据已设置: {algorithm_type}/{env_type}/{control_mode}")
+
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         """获取所有无人机的电量数据"""
         return self.battery_manager.get_all_battery_data()

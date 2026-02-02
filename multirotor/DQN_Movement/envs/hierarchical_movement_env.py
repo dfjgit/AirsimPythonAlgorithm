@@ -44,6 +44,12 @@ class HierarchicalMovementEnv(gym.Env):
         
         # 加载配置
         self.config = self._load_config(config_path)
+        self.term_cfg = self.config.get('termination_config', {
+            "target_scan_ratio": 0.95,
+            "max_collision_count": 1,
+            "max_elapsed_time_sec": 300.0,
+            "stagnation_timeout_sec": 30.0
+        })
         
         # 初始化底层 APF 算法
         scanner_cfg = ScannerConfigData()
@@ -93,6 +99,7 @@ class HierarchicalMovementEnv(gym.Env):
         self.prev_scanned_cells = 0
         self.prev_entropy_sum = 0
         
+        self.episode_index = 0  # 新增：用于 DataCollector 的 Episode 计数
         self._first_reset = True
         
         # 底层策略 (在训练 HL 时需要，如果是协同训练则由外部管理)
@@ -113,11 +120,15 @@ class HierarchicalMovementEnv(gym.Env):
             "movement": {"step_size": 1.0, "max_steps": 100}, # HL steps
             "rewards": {
                 "exploration": 10.0, "collision": -50.0, "out_of_range": -30.0,
-                "goal_reached": 50.0, "step_penalty": -1.0
+                "goal_reached": 50.0, "step_penalty": -1.0,
+                "battery_low_penalty": 10.0, "battery_optimal_reward": 2.0
             },
             "thresholds": {
                 "collision_distance": 2.0, "scanned_entropy": 10.0,
-                "success_scan_ratio": 0.95
+                "success_scan_ratio": 0.95,
+                "battery_low_threshold": 3.5,
+                "battery_optimal_min": 3.7,
+                "battery_optimal_max": 4.1
             }
         }
 
@@ -143,6 +154,7 @@ class HierarchicalMovementEnv(gym.Env):
         self.prev_scanned_cells = self._count_scanned_cells()
         self.prev_entropy_sum = self._get_total_entropy()
         self.current_hl_goal = None
+        self.episode_index += 1  # 增加 Episode 计数
         
         return self._get_hl_observation(), {}
 
@@ -193,6 +205,23 @@ class HierarchicalMovementEnv(gym.Env):
         hl_reward = self._calculate_hl_reward(hl_action, total_ll_reward)
         self.episode_reward += hl_reward
         
+        # --- 新增：记录训练统计到 DataCollector ---
+        if self.server and hasattr(self.server, 'set_training_stats'):
+            self.server.set_training_stats(
+                episode=self.episode_index,
+                step=self.step_count,
+                reward=float(hl_reward),
+                total_reward=float(self.episode_reward)
+            )
+            
+        # --- 新增：记录高层动作和目标到 DataCollector (用于 scan_data.csv) ---
+        if self.server and hasattr(self.server, 'data_collector'):
+            self.server.data_collector.set_external_data('hl_action', int(hl_action))
+            if self.current_hl_goal:
+                self.server.data_collector.set_external_data('hl_goal_x', float(self.current_hl_goal.x))
+                self.server.data_collector.set_external_data('hl_goal_y', float(self.current_hl_goal.y))
+                self.server.data_collector.set_external_data('hl_goal_z', float(self.current_hl_goal.z))
+        
         # 检查是否结束
         if not terminated:
             terminated = self._check_done()
@@ -213,6 +242,14 @@ class HierarchicalMovementEnv(gym.Env):
         if self.server:
             self._apply_movement(displacement)
             time.sleep(0.05) # 基础等待
+            
+            # 更新电量消耗
+            if hasattr(self.server, "update_battery_voltage"):
+                # 计算动作强度（基于位移大小）
+                step_norm = float(np.linalg.norm(displacement))
+                base_step = max(self.ll_action_step, 1e-6)
+                action_intensity = min(1.0, step_norm / base_step)
+                self.server.update_battery_voltage(self.drone_name, action_intensity)
             
         next_ll_obs = self._get_ll_observation()
         reward = self._calculate_ll_reward(action, next_ll_obs)
@@ -395,6 +432,22 @@ class HierarchicalMovementEnv(gym.Env):
             reward += entropy_reduced * entropy_weight
         self.prev_entropy_sum = current_entropy
         
+        # 5. 电量奖励与惩罚
+        if self.server and hasattr(self.server, "get_battery_voltage"):
+            try:
+                current_voltage = self.server.get_battery_voltage(self.drone_name)
+                cfg_rewards = self.config.get("rewards", {})
+                cfg_thresholds = self.config.get("thresholds", {})
+                
+                # 电量过低惩罚
+                if current_voltage < cfg_thresholds.get("battery_low_threshold", 3.5):
+                    reward -= cfg_rewards.get("battery_low_penalty", 10.0)
+                # 电量最优范围奖励
+                elif cfg_thresholds.get("battery_optimal_min", 3.7) <= current_voltage <= cfg_thresholds.get("battery_optimal_max", 4.1):
+                    reward += cfg_rewards.get("battery_optimal_reward", 2.0)
+            except:
+                pass
+        
         return reward
 
     def _calculate_ll_reward(self, action, next_obs):
@@ -429,6 +482,22 @@ class HierarchicalMovementEnv(gym.Env):
                     # 最佳高度奖励
                     if abs(current_height - optimal_height) < 1.5:
                         reward += self.config['rewards'].get('optimal_height_bonus', 1.0)
+                        
+                    # 【新增】超出领导者范围的返回奖励
+                    if rd.leader_position:
+                        dist_to_leader = (rd.position - rd.leader_position).magnitude()
+                        radius = rd.leader_scan_radius if rd.leader_scan_radius > 0 else 50.0
+                        
+                        if dist_to_leader > radius:
+                            # 如果超出范围，检查是否在往回飞(通过leader_rel判断)
+                            leader_rel = next_obs[6:9]  # leader_rel位置
+                            goal_rel = next_obs[0:3]     # 目标相对位置
+                            
+                            # 如果目标在领导者附近(比当前位置更接近),给予奖励
+                            dist_goal_to_leader = np.linalg.norm(goal_rel - leader_rel)
+                            if dist_goal_to_leader < dist_to_leader:
+                                return_bonus = self.config['rewards'].get('return_to_range_bonus', 8.0)
+                                reward += return_bonus
         
         return reward
 
@@ -519,8 +588,19 @@ class HierarchicalMovementEnv(gym.Env):
     def _get_battery_info(self):
         if not self.server or not hasattr(self.server, 'get_battery_voltage'):
             return np.array([4.2, 100.0], dtype=np.float32)
-        v = self.server.get_battery_voltage(self.drone_name)
-        return np.array([v, 100.0], dtype=np.float32)
+        
+        try:
+            voltage = self.server.get_battery_voltage(self.drone_name)
+            percentage = 100.0
+            
+            if hasattr(self.server, "battery_manager"):
+                battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+                if battery_info:
+                    percentage = battery_info.get_remaining_percentage()
+            
+            return np.array([voltage, percentage], dtype=np.float32)
+        except:
+            return np.array([4.2, 100.0], dtype=np.float32)
 
     def _apply_movement(self, displacement):
         if not self.server: return
@@ -531,22 +611,31 @@ class HierarchicalMovementEnv(gym.Env):
             self.server.set_dqn_movement(self.drone_name, Vector3(direction[0], direction[1], direction[2]))
 
     def _check_done(self):
-        # 高层步数限制
-        if self.step_count >= self.config['movement']['max_steps']: 
-            print(f"[终止] {self.drone_name} 达到最大步数: {self.step_count}/{self.config['movement']['max_steps']}")
+        """判断Episode是否结束 (统一终止逻辑)"""
+        # 计算高层对应的累计物理时间
+        # self.step_count 是高层步数，每步包含 ll_steps_per_hl 个底层步
+        elapsed_time = self.step_count * self.ll_steps_per_hl * self.ll_step_duration
+        
+        # 1. 达到最大物理仿真时间
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
             return True
         
-        # 扫描完成检查（只在训练后期生效，避免偶然提前完成）
-        if self.server and self.step_count >= 30:  # 至少飞行30个高层步（2.5分钟）后才检查扫描完成
-            with self.server.grid_lock:
-                total = len(self.server.grid_data.cells)
-                if total > 0:
-                    scanned = sum(1 for c in self.server.grid_data.cells if c.entropy < 10.0)
-                    scan_ratio = scanned / total
-                    # 成功阈值从配置读取，但增加打印日志
-                    if scan_ratio >= self.config['thresholds']['success_scan_ratio']:
-                        print(f"[终止] {self.drone_name} 扫描完成: {scanned}/{total} ({scan_ratio*100:.1f}%)")
-                        return True
+        # 2. 达到目标扫描比例
+        with self.server.grid_lock:
+            total = len(self.server.grid_data.cells)
+            if total > 0:
+                scanned = sum(1 for c in self.server.grid_data.cells if c.entropy < 10.0)
+                scan_ratio = scanned / total
+                if scan_ratio >= self.term_cfg['target_scan_ratio']:
+                    print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+                    return True
+        
+        # 3. 碰撞次数达到阈值
+        if self.collision_count >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞或超过上限: {self.collision_count} / {self.term_cfg['max_collision_count']}")
+            return True
+            
         return False
 
 class MultiDroneHierarchicalMovementEnv(gym.Env):
@@ -580,6 +669,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         
         self.step_count = 0
         self.total_episode_reward = 0
+        self.episode_index = 0  # 新增：用于 DataCollector 的 Episode 计数
         self._first_reset = True
 
     def _load_config(self, config_path):
@@ -614,6 +704,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             
         self.step_count = 0
         self.total_episode_reward = 0
+        self.episode_index += 1  # 增加 Episode 计数
         self.current_drone_idx = 0
         
         return self.envs[self.drone_names[0]]._get_hl_observation(), {}
@@ -647,6 +738,13 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
                 
                 # 应用移动
                 env._apply_movement(displacement)
+                
+                # 更新每个无人机的电量消耗
+                if self.server and hasattr(self.server, "update_battery_voltage"):
+                    step_norm = float(np.linalg.norm(displacement))
+                    base_step = max(env.ll_action_step, 1e-6)
+                    action_intensity = min(1.0, step_norm / base_step)
+                    self.server.update_battery_voltage(name, action_intensity)
             
             # 统一等待环境更新
             if self.server: time.sleep(0.05)
@@ -671,6 +769,24 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         hl_reward = current_env._calculate_hl_reward(action, total_ll_reward)
         self.total_episode_reward += hl_reward
         self.step_count += 1
+        
+        # --- 新增：记录训练统计到 DataCollector (多机模式) ---
+        if self.server and hasattr(self.server, 'set_training_stats'):
+            self.server.set_training_stats(
+                episode=self.episode_index,
+                step=self.step_count,
+                reward=float(hl_reward),
+                total_reward=float(self.total_episode_reward)
+            )
+            
+        # --- 新增：记录高层动作和目标到 DataCollector ---
+        if self.server and hasattr(self.server, 'data_collector'):
+            self.server.data_collector.set_external_data('hl_action', int(action))
+            self.server.data_collector.set_external_data('drone_name', current_drone)
+            if current_env.current_hl_goal:
+                self.server.data_collector.set_external_data('hl_goal_x', float(current_env.current_hl_goal.x))
+                self.server.data_collector.set_external_data('hl_goal_y', float(current_env.current_hl_goal.y))
+                self.server.data_collector.set_external_data('hl_goal_z', float(current_env.current_hl_goal.z))
         
         # 切换到下一个无人机
         self.current_drone_idx = (self.current_drone_idx + 1) % self.num_drones

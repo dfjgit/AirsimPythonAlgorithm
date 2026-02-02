@@ -1772,7 +1772,33 @@ class DataComparer:
         self.output_dir = output_dir
         self.show_plots = show_plots
         self.output_dir.mkdir(parents=True, exist_ok=True)
-    
+        
+        # 算法 ID 到友好名称的映射
+        self.ALGO_NAME_MAP = {
+            'hrl_dqn_apf': '双层融合训练 (HRL+APF)',
+            'pure_dqn': '纯 DQN 移动控制',
+            'ddpg_apf': 'DDPG 权重自适应 (APF)',
+            'unknown': '未标记算法'
+        }
+
+    def _get_display_name(self, df: pd.DataFrame, file_stem: str) -> str:
+        """尝试从数据中获取算法名称，如果失败则返回文件名"""
+        if 'algorithm_type' in df.columns:
+            algo_id = df['algorithm_type'].iloc[0]
+            if pd.notna(algo_id) and str(algo_id).strip():
+                return self.ALGO_NAME_MAP.get(algo_id, algo_id)
+        
+        # 尝试从路径猜测
+        path_str = str(file_stem).lower()
+        if 'hrl' in path_str or 'hierarchical' in path_str:
+            return self.ALGO_NAME_MAP['hrl_dqn_apf']
+        if 'dqn' in path_str:
+            return self.ALGO_NAME_MAP['pure_dqn']
+        if 'ddpg' in path_str:
+            return self.ALGO_NAME_MAP['ddpg_apf']
+            
+        return file_stem
+
     def compare_scan_data(self, csv_files: List[Path]) -> bool:
         """对比多份扫描数据"""
         if len(csv_files) < 2:
@@ -1786,7 +1812,8 @@ class DataComparer:
             try:
                 df, _, _, _ = load_and_prepare(f)
                 if not df.empty:
-                    all_data.append((f.stem, df))
+                    display_name = self._get_display_name(df, f.stem)
+                    all_data.append((display_name, df))
             except Exception as e:
                 LOGGER.error(f"❌ 读取对比文件失败 {f.name}: {e}")
         
@@ -1931,13 +1958,15 @@ class DataComparer:
                             # 统一字段名：将实体 JSON 的 length 映射为 steps 以对齐 CSV
                             if 'length' in df.columns:
                                 df = df.rename(columns={'length': 'steps'})
-                            all_stats.append((f.stem, df))
+                            
+                            display_name = self._get_display_name(df, f.stem)
+                            all_stats.append((display_name, df))
                 elif f.suffix == '.csv' and 'training_stats' in f.name:
                     # 处理虚拟训练 CSV
                     df = pd.read_csv(f)
                     if not df.empty:
-                        # 确保 CSV 也有 episode 字段（如果 CSV 叫 'episode' 就不动）
-                        all_stats.append((f.stem, df))
+                        display_name = self._get_display_name(df, f.stem)
+                        all_stats.append((display_name, df))
             except Exception as e:
                 LOGGER.error(f"❌ 读取训练对比文件失败 {f.name}: {e}")
                 

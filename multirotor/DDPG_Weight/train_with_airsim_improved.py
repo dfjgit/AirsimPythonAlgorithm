@@ -679,6 +679,14 @@ def main():
             return
         
         print("[OK] 无人机已起飞，算法线程运行中")
+
+        # [2.5] 设置实验元数据 (用于跨方案数据对比)
+        if hasattr(server, 'set_experiment_meta'):
+            server.set_experiment_meta(
+                algorithm_type='ddpg_apf',
+                env_type='weight',
+                control_mode='apf'
+            )
         
         # 等待系统稳定
         print("\n[3/5] 等待系统稳定...")

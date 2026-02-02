@@ -8,14 +8,17 @@
   "rewards": {
     "exploration": 15.0,
     "collision": -100.0,
-    "out_of_range": -50.0,
+    "out_of_range": -30.0,
     "goal_reached": 100.0,
     "step_penalty": -2.0,
     "success": 500.0,
     "ll_efficiency_weight": 0.1,
     "entropy_reduction_weight": 2.0,
     "height_penalty": -5.0,
-    "optimal_height_bonus": 2.0
+    "optimal_height_bonus": 2.0,
+    "return_to_range_bonus": 8.0,
+    "battery_low_penalty": 10.0,
+    "battery_optimal_reward": 2.0
   },
   "thresholds": {
     "collision_distance": 3.0,
@@ -24,7 +27,10 @@
     "min_scan_height": 2.0,
     "max_scan_height": 15.0,
     "optimal_scan_height": 8.0,
-    "high_entropy_threshold": 40.0
+    "high_entropy_threshold": 40.0,
+    "battery_low_threshold": 3.5,
+    "battery_optimal_min": 3.7,
+    "battery_optimal_max": 4.1
   },
   "model": {
     "policy": "MlpPolicy",
@@ -42,5 +48,11 @@
     "exploration_fraction": 0.3,
     "exploration_initial_eps": 1.0,
     "exploration_final_eps": 0.05
+  },
+  "termination_config": {
+    "target_scan_ratio": 0.95,
+    "max_collision_count": 1,
+    "max_elapsed_time_sec": 300.0,
+    "stagnation_timeout_sec": 30.0
   }
 }

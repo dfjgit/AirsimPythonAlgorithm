@@ -8,6 +8,12 @@
   "initial_model_path": "D:/Work/Python Project/airsim-python-algorithm/multirotor/DDPG_Weight/models/weight_predictor_airsim_20260123_120000",
   "safety_limit": true,
   "max_weight_delta": 0.5,
+  "termination_config": {
+    "target_scan_ratio": 0.95,
+    "max_collision_count": 1,
+    "max_elapsed_time_sec": 300.0,
+    "stagnation_timeout_sec": 30.0
+  },
   "overwrite_model": false,
   "model_name": "weight_predictor_airsim"
 }

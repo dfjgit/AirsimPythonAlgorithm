@@ -49,7 +49,26 @@ class SimpleWeightEnv(gym.Env):
             reward_config_path = os.path.join(current_dir, "..", "configs", "crazyflie_reward_config.json")
 
         self.reward_config = CrazyflieRewardConfig(reward_config_path)
-        print("[OK] 训练环境已加载奖励配置（与实体一致）")
+        
+        # 统一终止配置
+        self.term_cfg = {
+            "target_scan_ratio": 0.95,
+            "max_collision_count": 1,
+            "max_elapsed_time_sec": 300.0
+        }
+        # 尝试从统一配置文件加载
+        try:
+            unified_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "configs", "unified_train_config.json")
+            if os.path.exists(unified_cfg_path):
+                import json
+                with open(unified_cfg_path, 'r', encoding='utf-8') as f:
+                    u_cfg = json.load(f)
+                    if 'common' in u_cfg and 'termination_config' in u_cfg['common']:
+                        self.term_cfg.update(u_cfg['common']['termination_config'])
+        except Exception as e:
+            print(f"加载终止配置失败: {e}")
+            
+        print("[OK] 训练环境已加载奖励配置和终止配置")
         
         # 状态空间: 18维
         # [位置(3) + 速度(3) + 方向(3) + 熵值(3) + Leader(3) + 扫描(3)]
@@ -72,6 +91,7 @@ class SimpleWeightEnv(gym.Env):
         # 记录上一步的状态
         self.prev_scanned_cells = 0
         self.step_count = 0
+        self.collision_count = 0  # 新增碰撞计数
         self.episode_count = 0  # 记录Episode编号
         self.total_episode_reward = 0.0  # 记录当前Episode的总奖励
         self.last_action = np.zeros(5)  # 记录上一步的动作，用于电量消耗计算
@@ -159,6 +179,7 @@ class SimpleWeightEnv(gym.Env):
                 self.prev_scanned_cells = 0
         
         self.step_count = 0
+        self.collision_count = 0 # 重置碰撞计数
         self.total_episode_reward = 0.0
         self.last_action = np.zeros(5)
         self.prev_velocity = np.zeros(3, dtype=np.float32)
@@ -248,27 +269,19 @@ class SimpleWeightEnv(gym.Env):
             # 更新所有虚拟无人机的电量消耗
             if self.step_count > 1:
                 with self.server.data_lock:
-                    # 更新训练无人机的电量（使用action计算动作强度）
-                    action_intensity = np.linalg.norm(action - self.last_action)
-                    self.server.battery_manager.update_voltage(self.drone_name, action_intensity)
-                    
-                    # 更新其他虚拟无人机的电量（使用它们的移动速度计算动作强度）
-                    for other_drone_name in self.server.drone_names:
-                        if other_drone_name == self.drone_name:
-                            continue  # 跳过训练无人机，已经更新过了
-                        
-                        # 获取其他无人机的运行时数据
-                        other_runtime_data = self.server.unity_runtime_data.get(other_drone_name)
-                        if other_runtime_data:
-                            # 计算实际速度大小（finalMoveDir是方向向量，乘以moveSpeed得到实际速度）
-                            move_dir = other_runtime_data.finalMoveDir
+                    for drone_name in self.server.drone_names:
+                        # 获取无人机的运行时数据
+                        runtime_data = self.server.unity_runtime_data.get(drone_name)
+                        if runtime_data:
+                            # 使用实际速度大小作为动作强度
+                            # finalMoveDir 是方向向量，乘以 moveSpeed 得到实际速度
+                            move_dir = runtime_data.finalMoveDir
                             move_speed = self.server.config_data.moveSpeed
-                            # 计算速度向量的模长（方向向量的模长 * 移动速度）
                             speed_magnitude = np.sqrt(move_dir.x**2 + move_dir.y**2 + move_dir.z**2) * move_speed
-                            # 将速度归一化到0-1范围作为动作强度（假设最大速度为moveSpeed）
-                            # 如果速度接近0，动作强度也接近0；如果速度接近moveSpeed，动作强度接近1
-                            action_intensity_other = min(1.0, speed_magnitude / max(move_speed, 0.1))
-                            self.server.battery_manager.update_voltage(other_drone_name, action_intensity_other)
+                            
+                            # 归一化到 0-1 范围（假设最大速度为 moveSpeed）
+                            action_intensity = min(1.0, speed_magnitude / max(move_speed, 0.1))
+                            self.server.battery_manager.update_voltage(drone_name, action_intensity)
             
             # 显示所有无人机的当前电量
             print(f"🔋 电量状态:")
@@ -306,6 +319,15 @@ class SimpleWeightEnv(gym.Env):
         reward = self._calculate_reward(action)
         self.total_episode_reward += reward
         
+        # 更新碰撞计数（基于状态中的距离或服务器数据）
+        if self.server:
+            with self.server.data_lock:
+                rd = self.server.unity_runtime_data.get(self.drone_name)
+                if rd:
+                    min_dist = self._get_min_distance_to_others(rd)
+                    if min_dist < 2.0: # 碰撞阈值
+                        self.collision_count += 1
+
         # 将训练统计信息传递给服务器（用于数据采集）
         if self.server:
             self.server.set_training_stats(
@@ -318,8 +340,28 @@ class SimpleWeightEnv(gym.Env):
         # 记录当前动作
         self.last_action = action.copy()
         
-        # 判断是否结束
-        done = self.step_count >= self.reward_config.max_steps
+        # 判断是否结束 (统一终止逻辑)
+        elapsed_time = self.step_count * self.step_duration
+        done = False
+        
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s")
+            done = True
+        elif self.collision_count >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞: {self.collision_count}")
+            done = True
+        else:
+            # 检查覆盖率
+            if self.server:
+                with self.server.data_lock:
+                    total_cells = len(self.server.grid_data.cells)
+                    if total_cells > 0:
+                        scanned_cells = sum(1 for cell in self.server.grid_data.cells 
+                                          if cell.entropy < self.reward_config.scan_entropy_threshold)
+                        scan_ratio = scanned_cells / total_cells
+                        if scan_ratio >= self.term_cfg['target_scan_ratio']:
+                            print(f"[终止] 覆盖率达成: {scan_ratio:.2%}")
+                            done = True
         
         # 显示奖励信息
         print(f"\n📈 本步奖励: {reward:+.2f}")
@@ -351,6 +393,14 @@ class SimpleWeightEnv(gym.Env):
         
         return next_state, reward, done, info
     
+    def _get_min_distance_to_others(self, rd):
+        """获取到其他无人机的最小距离"""
+        if not rd or not rd.otherScannerPositions:
+            return 999.0
+        pos = rd.position
+        dists = [np.sqrt((pos.x-op.x)**2 + (pos.y-op.y)**2 + (pos.z-op.z)**2) for op in rd.otherScannerPositions]
+        return min(dists) if dists else 999.0
+
     def _get_state(self):
         """获取当前状态（18维）"""
         if not self.server:

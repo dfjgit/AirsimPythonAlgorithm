@@ -21,14 +21,21 @@ class MovementEnv(gym.Env):
     观察空间: 位置、速度、熵值、leader位置等
     """
     
-    def __init__(self, server=None, drone_name="UAV1", config_path=None):
+    def __init__(self, server=None, drone_name="UAV1", config_path=None, step_duration=0.5):
         super(MovementEnv, self).__init__()
         
         self.server = server
         self.drone_name = drone_name
+        self.step_duration = step_duration  # 物理步长（秒）
         
         # 加载配置
         self.config = self._load_config(config_path)
+        self.term_cfg = self.config.get('termination_config', {
+            "target_scan_ratio": 0.95,
+            "max_collision_count": 1,
+            "max_elapsed_time_sec": 300.0,
+            "stagnation_timeout_sec": 30.0
+        })
         print(f"[OK] 移动DQN环境已加载配置")
         
         # 动作空间: 6个离散动作
@@ -476,7 +483,10 @@ class MovementEnv(gym.Env):
                 
                 # 每个动作都更新电量消耗
                 if hasattr(self.server, 'update_battery_voltage'):
-                    action_intensity = 0.5  # 动作强度，可根据实际动作调整
+                    # 计算动作强度（位移长度归一化）
+                    step_norm = float(np.linalg.norm(displacement))
+                    base_step = max(self.action_step, 1e-6)
+                    action_intensity = min(1.0, max(0.0, step_norm / base_step))
                     self.server.update_battery_voltage(self.drone_name, action_intensity)
                 
         except Exception as e:
@@ -485,26 +495,24 @@ class MovementEnv(gym.Env):
         return reward
     
     def _check_done(self):
-        """判断episode是否结束"""
-        # 达到最大步数
-        if self.step_count >= self.config['movement']['max_steps']:
-            print(f"[DQN环境] Episode 结束: 达到最大步数 {self.step_count}/{self.config['movement']['max_steps']}")
+        """判断episode是否结束 (统一终止逻辑)"""
+        elapsed_time = self.step_count * self.step_duration
+        
+        # 1. 达到最大物理仿真时间
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
             return True
         
-        # 扫描完成
+        # 2. 达到目标扫描比例
         scan_ratio = self._get_scan_ratio()
-        if scan_ratio >= self.config['thresholds']['success_scan_ratio']:
-            print(f"[DQN环境] Episode 结束: 扫描完成 {scan_ratio:.2%} >= {self.config['thresholds']['success_scan_ratio']:.2%}")
+        if scan_ratio >= self.term_cfg['target_scan_ratio']:
+            print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
             return True
         
-        # 碰撞次数过多
-        if self.collision_count >= 10:
-            print(f"[DQN环境] Episode 结束: 碰撞次数过多 {self.collision_count}/10")
+        # 3. 碰撞次数达到阈值
+        if self.collision_count >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞或超过上限: {self.collision_count} / {self.term_cfg['max_collision_count']}")
             return True
-        
-        # [DEBUG] 打印当前状态（仅前10步）
-        if self.step_count <= 10:
-            print(f"[DQN环境] _check_done() - 步骤 {self.step_count}: scan_ratio={scan_ratio:.2%}, collision={self.collision_count}, out_of_range={self.out_of_range_count}")
         
         return False
     
@@ -1133,6 +1141,10 @@ class MultiDroneMovementEnv(gym.Env):
         cfg_reward = self.config['rewards']
         cfg_thresh = self.config['thresholds']
         
+        # 计算上一步到领导者的距离(用于判断是否在返回)
+        prev_dist_to_leader = current_state[15] if current_state is not None else dist_to_leader
+        is_returning = (dist_to_leader < prev_dist_to_leader) and is_out_of_range
+        
         try:
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data[drone_name]
@@ -1144,16 +1156,26 @@ class MultiDroneMovementEnv(gym.Env):
                     safe_ratio = cfg_thresh.get('stability_safe_ratio', 0.7)
                     penalty_ratio = cfg_thresh.get('stability_penalty_ratio', 0.8)
                     
+                    # 【修复】脱离范围后保留部分稳定性系数,而非完全归零
                     if dist_ratio > 1.0:
-                        stability_factor = 0.0
+                        # 超出范围后,稳定性系数缓慢衰减到0.2(保留20%奖励)
+                        overshoot = min(dist_ratio - 1.0, 0.5)  # 最多考虑0.5倍半径的超出
+                        stability_factor = max(0.2, 1.0 - overshoot * 1.6)  # 从1.0衰减到0.2
+                        
+                        # 【新增】返回奖励:如果正在往回飞,给予额外正奖励
+                        if is_returning:
+                            return_bonus = cfg_reward.get('return_to_range_bonus', 15.0)
+                            reward += return_bonus * (prev_dist_to_leader - dist_to_leader)
                     elif dist_ratio > safe_ratio:
                         # safe_ratio - 1.0 之间线性衰减
-                        stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.9
+                        stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.5  # 从1.0衰减到0.5
                     
-                    # 额外稳定性惩罚
+                    # 【修改】稳定性惩罚降低强度,避免过度打压
                     if dist_ratio > penalty_ratio:
                         penalty_weight = cfg_reward.get('stability_penalty_weight', 20.0)
-                        reward -= (dist_ratio - penalty_ratio) * penalty_weight
+                        # 惩罚上限设置,避免单步惩罚过重
+                        penalty = min((dist_ratio - penalty_ratio) * penalty_weight, 30.0)
+                        reward -= penalty
         except:
             pass
             
@@ -1246,8 +1268,11 @@ class MultiDroneMovementEnv(gym.Env):
                 
                 # 更新电量消耗
                 if hasattr(self.server, 'update_battery_voltage'):
-                    action_intensity = 0.5
-                    self.server.update_battery_voltage(drone_name, action_intensity)
+                    # 计算动作强度（位移长度归一化）
+                    step_norm = float(np.linalg.norm(displacement))
+                    base_step = max(self.action_step, 1e-6)
+                    action_intensity = min(1.0, max(0.0, step_norm / base_step))
+                    self.server.update_battery_voltage(current_drone, action_intensity)
             except Exception as e:
                 logger.debug(f"电量奖励计算失败: {str(e)}")
         

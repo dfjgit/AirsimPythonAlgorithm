@@ -122,6 +122,14 @@ def train_hrl_with_airsim(enable_visualization=True):
 
     print(f"✓ 无人机任务启动成功")
 
+    # 2.5 设置实验元数据 (用于跨方案数据对比)
+    if hasattr(server, 'set_experiment_meta'):
+        server.set_experiment_meta(
+            algorithm_type='hrl_dqn_apf',
+            env_type='hierarchical',
+            control_mode='dqn'
+        )
+
     # 3. 创建训练环境
     if len(drone_names) == 1:
         training_drone = drone_names[0]

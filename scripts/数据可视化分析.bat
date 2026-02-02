@@ -195,23 +195,31 @@ goto menu
 :compare_analyze
 cls
 echo ============================================================
-echo 对比分析 (多份数据指标叠加)
+echo 统一多算法对比分析 (Unified Multi-Algorithm Comparison)
 echo ============================================================
 echo.
-echo 正在扫描并对比同类数据...
+echo 正在扫描所有训练日志目录并进行跨算法对比...
+echo 包括: DQN, DDPG+APF, HRL(双层融合) 以及后续新增算法
 echo.
 
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\visualize_training_data.py --auto --out analysis_results --compare --show
+python multirotor\Algorithm\training_analyzer.py --dirs multirotor\DDPG_Weight\airsim_training_logs multirotor\DQN_Movement\logs\dqn_scan_data --out analysis_results\algorithm_comparison
 
 echo.
 echo ============================================================
 echo 对比分析完成！
-echo 结果保存在: %cd%\analysis_results\comparison_results
+echo 结果保存在: %cd%\analysis_results\algorithm_comparison
+echo 生成图表包括: 奖励对比、扫描效率对比、熵下降对比等
 echo ============================================================
 echo.
+
+REM 询问是否打开结果目录
+set /p open_dir=是否打开结果对比目录? (y/n): 
+if /i "%open_dir%"=="y" (
+    start "" "%cd%\analysis_results\algorithm_comparison"
+)
 
 pause
 goto menu

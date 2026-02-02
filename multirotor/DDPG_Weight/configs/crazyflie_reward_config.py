@@ -37,14 +37,14 @@ class CrazyflieRewardConfig:
             self.out_of_range_penalty = rewards.get("out_of_range_penalty", 2.0)
             self.action_change_penalty = rewards.get("action_change_penalty", 0.05)
             self.action_magnitude_penalty = rewards.get("action_magnitude_penalty", 0.01)
-            self.battery_optimal_reward = rewards.get("battery_optimal_reward", 0.5)
-            self.battery_low_penalty = rewards.get("battery_low_penalty", 1.0)
+            self.battery_optimal_reward = rewards.get("battery_optimal_reward", 2.0)
+            self.battery_low_penalty = rewards.get("battery_low_penalty", 10.0)
 
             thresholds = config.get("thresholds", {})
             self.scan_entropy_threshold = thresholds.get("scan_entropy_threshold", 30)
             self.leader_range_buffer = thresholds.get("leader_range_buffer", 0.0)
             self.battery_optimal_min = thresholds.get("battery_optimal_min", 3.7)
-            self.battery_optimal_max = thresholds.get("battery_optimal_max", 4.0)
+            self.battery_optimal_max = thresholds.get("battery_optimal_max", 4.1)
             self.battery_low_threshold = thresholds.get("battery_low_threshold", 3.5)
 
             episode = config.get("episode", {})
@@ -69,13 +69,13 @@ class CrazyflieRewardConfig:
         self.out_of_range_penalty = 2.0
         self.action_change_penalty = 0.05
         self.action_magnitude_penalty = 0.01
-        self.battery_optimal_reward = 0.5
-        self.battery_low_penalty = 1.0
+        self.battery_optimal_reward = 2.0
+        self.battery_low_penalty = 10.0
 
         self.scan_entropy_threshold = 30
         self.leader_range_buffer = 0.0
         self.battery_optimal_min = 3.7
-        self.battery_optimal_max = 4.0
+        self.battery_optimal_max = 4.1
         self.battery_low_threshold = 3.5
 
         self.max_steps = 200

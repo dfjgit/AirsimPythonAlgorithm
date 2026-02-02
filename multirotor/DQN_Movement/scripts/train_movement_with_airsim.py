@@ -112,6 +112,14 @@ if not server.start_mission():
 
 print(f"  ✓ 无人机任务启动成功")
 
+# [步骤3.5] 设置实验元数据 (用于跨方案数据对比)
+if hasattr(server, 'set_experiment_meta'):
+    server.set_experiment_meta(
+        algorithm_type='pure_dqn',
+        env_type='movement',
+        control_mode='dqn'
+    )
+
 print("\n" + "=" * 80)
 print("[步骤4] 创建训练环境")
 print("=" * 80)

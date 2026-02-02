@@ -9,14 +9,14 @@
         "out_of_range_penalty": 2.0,
         "action_change_penalty": 0.05,
         "action_magnitude_penalty": 0.01,
-        "battery_optimal_reward": 0.5,
-        "battery_low_penalty": 1.0
+        "battery_optimal_reward": 2.0,
+        "battery_low_penalty": 10.0
     },
     "thresholds": {
         "scan_entropy_threshold": 30,
         "leader_range_buffer": 0.0,
         "battery_optimal_min": 3.7,
-        "battery_optimal_max": 4.0,
+        "battery_optimal_max": 4.1,
         "battery_low_threshold": 3.5
     },
     "episode": {
