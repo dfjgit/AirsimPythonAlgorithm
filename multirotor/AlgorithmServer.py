@@ -1137,6 +1137,12 @@ class MultiDroneAlgorithmServer:
             # 等待较长时间，确保Unity完成重置并发送新数据
             time.sleep(3.0) 
             logger.info("[重置] Unity重置指令已发送，等待接收新数据")
+            
+            # 关键修复：重置后必须重新发送start_simulation指令，让Leader恢复移动
+            logger.info("[重置] 发送start_simulation指令，让Leader恢复移动...")
+            self.unity_socket.send_start_simulation_command()
+            time.sleep(0.5)  # 等待Unity处理指令
+            logger.info("[重置] Leader已恢复移动")
         else:
             logger.warning("[重置] Unity未连接，仅清空本地网格数据")
             # 清空Python端的网格数据

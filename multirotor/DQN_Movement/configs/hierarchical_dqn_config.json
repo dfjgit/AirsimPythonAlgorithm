@@ -1,7 +1,7 @@
 {
   "movement": {
     "step_size": 2.0,
-    "max_steps": 100,
+    "max_steps": 150,
     "ll_steps_per_hl": 10,
     "ll_step_duration": 0.5
   },
@@ -18,9 +18,9 @@
     "optimal_height_bonus": 2.0
   },
   "thresholds": {
-    "collision_distance": 2.5,
+    "collision_distance": 3.0,
     "scanned_entropy": 10.0,
-    "success_scan_ratio": 0.95,
+    "success_scan_ratio": 0.98,
     "min_scan_height": 2.0,
     "max_scan_height": 15.0,
     "optimal_scan_height": 8.0,
@@ -31,15 +31,15 @@
     "net_arch": [256, 256, 128]
   },
   "training": {
-    "total_timesteps": 50000,
+    "total_timesteps": 80000,
     "learning_rate": 3e-4,
-    "buffer_size": 10000,
-    "learning_starts": 1000,
+    "buffer_size": 15000,
+    "learning_starts": 2000,
     "batch_size": 64,
     "tau": 1.0,
     "gamma": 0.99,
     "target_update_interval": 1000,
-    "exploration_fraction": 0.2,
+    "exploration_fraction": 0.3,
     "exploration_initial_eps": 1.0,
     "exploration_final_eps": 0.05
   }

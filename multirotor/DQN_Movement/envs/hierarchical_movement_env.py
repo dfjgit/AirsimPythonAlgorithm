@@ -69,8 +69,9 @@ class HierarchicalMovementEnv(gym.Env):
         )
         
         # --- 底层 (LL) 参数 ---
-        self.ll_steps_per_hl = 10  # 5s / 0.5s = 10步
+        self.ll_steps_per_hl = 30  # 最大 15s / 0.5s = 30步 (按需触发)
         self.ll_step_duration = 0.5
+        self.arrival_threshold = 2.0 # 到达阈值 2米
         
         # LL 动作映射 (修正映射：0/1对应高度Y，2/3对应左右Z，4/5对应前后X)
         self.ll_action_step = self.config['movement']['step_size']
@@ -147,30 +148,44 @@ class HierarchicalMovementEnv(gym.Env):
 
     def step(self, hl_action):
         """
-        高层决策一步 (5s)
+        高层决策一步 (基于条件触发：到达、超时、起步)
         """
+        # 3. 起步阶段：如果当前没有设定目标，或者收到新指令，则立即开始执行
+        # (在 RL step 中，hl_action 的到来本身就是一种触发)
+        
         # 1. 将 hl_action 映射为物理目标点
         self.current_hl_goal = self._map_hl_action_to_goal(hl_action)
         
         total_ll_reward = 0
         terminated = False
+        actual_steps = 0
         
-        # 2. 执行 10 个底层步 (0.5s 每步)
+        # 2. 执行底层步，直到满足触发条件
+        # 条件 1: 目标达成 (Arrival) -> 在循环内检查
+        # 条件 2: 超时 (Timeout) -> range(self.ll_steps_per_hl) 限制了最大 15s
         for i in range(self.ll_steps_per_hl):
+            actual_steps += 1
             ll_obs = self._get_ll_observation()
             
-            # 2.1 获取 LL 动作 (如果策略存在则使用，否则使用简单趋向逻辑或随机)
+            # 2.1 获取 LL 动作
             if self.ll_policy:
                 ll_action, _ = self.ll_policy.predict(ll_obs, deterministic=True)
             else:
                 ll_action = self._simple_ll_planner(ll_obs)
             
-            # 2.2 执行底层移动 (集成 APF)
+            # 2.2 执行底层移动
             ll_next_obs, ll_reward, ll_done, info = self.ll_step(ll_action)
             total_ll_reward += ll_reward
             
             if ll_done:
                 terminated = True
+                break
+                
+            # --- 核心修改：检查是否到达目标 (Arrival) ---
+            goal_rel = ll_next_obs[0:3]
+            dist = np.linalg.norm(goal_rel)
+            if dist < self.arrival_threshold:
+                # print(f"[到达] {self.drone_name} 已到达目标范围 (2m)，触发下一决策")
                 break
         
         # 3. 高层统计与奖励
@@ -242,9 +257,18 @@ class HierarchicalMovementEnv(gym.Env):
             rd = self.server.unity_runtime_data.get(self.drone_name)
             if rd:
                 min_dist = self._get_min_distance_to_others(rd)
-                if min_dist < self.config['thresholds']['collision_distance']:
+                # 放宽碰撞阈值，避免APF正常避障时误触发
+                collision_threshold = self.config['thresholds']['collision_distance']
+                if min_dist < collision_threshold * 0.8:  # 更严格的碰撞判定（距离更小才算真正碰撞）
                     self.collision_count += 1
-                    if self.collision_count >= 5: return True
+                    # 增加容忍次数，避免过早终止（从5次增加到15次）
+                    if self.collision_count >= 15: 
+                        print(f"[终止] {self.drone_name} 碰撞次数过多: {self.collision_count}次")
+                        return True
+                else:
+                    # 距离恢复安全时重置计数器（给予训练纠错机会）
+                    if self.collision_count > 0 and min_dist > collision_threshold * 1.5:
+                        self.collision_count = max(0, self.collision_count - 1)  # 缓慢恢复
         return False
 
     def _get_hl_observation(self):
@@ -508,14 +532,21 @@ class HierarchicalMovementEnv(gym.Env):
 
     def _check_done(self):
         # 高层步数限制
-        if self.step_count >= self.config['movement']['max_steps']: return True
-        # 扫描完成
-        if self.server:
+        if self.step_count >= self.config['movement']['max_steps']: 
+            print(f"[终止] {self.drone_name} 达到最大步数: {self.step_count}/{self.config['movement']['max_steps']}")
+            return True
+        
+        # 扫描完成检查（只在训练后期生效，避免偶然提前完成）
+        if self.server and self.step_count >= 30:  # 至少飞行30个高层步（2.5分钟）后才检查扫描完成
             with self.server.grid_lock:
                 total = len(self.server.grid_data.cells)
                 if total > 0:
                     scanned = sum(1 for c in self.server.grid_data.cells if c.entropy < 10.0)
-                    if scanned / total >= self.config['thresholds']['success_scan_ratio']: return True
+                    scan_ratio = scanned / total
+                    # 成功阈值从配置读取，但增加打印日志
+                    if scan_ratio >= self.config['thresholds']['success_scan_ratio']:
+                        print(f"[终止] {self.drone_name} 扫描完成: {scanned}/{total} ({scan_ratio*100:.1f}%)")
+                        return True
         return False
 
 class MultiDroneHierarchicalMovementEnv(gym.Env):
@@ -597,14 +628,15 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         total_ll_reward = 0
         terminated = False
         
-        # 2. 执行 10 个底层步，让所有无人机同步动作
+        # 2. 执行底层步，直到当前无人机到达或超时
+        # 使用当前环境配置的步数 (默认 30 步 = 15s)
         for i in range(current_env.ll_steps_per_hl):
             # 为每个无人机决定位移并应用
             for name in self.drone_names:
                 env = self.envs[name]
                 ll_obs = env._get_ll_observation()
                 
-                # 获取 LL 动作 (如果策略存在则使用，否则使用简单趋向)
+                # 获取 LL 动作
                 if env.ll_policy:
                     ll_action, _ = env.ll_policy.predict(ll_obs, deterministic=True)
                 else:
@@ -621,7 +653,15 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             
             # 计算当前决策无人机的底层奖励和状态
             next_ll_obs = current_env._get_ll_observation()
-            total_ll_reward += current_env._calculate_ll_reward(0, next_ll_obs) # action 这里传 0 即可，奖励主要看距离
+            total_ll_reward += current_env._calculate_ll_reward(0, next_ll_obs)
+            
+            # --- 核心修改：检查当前无人机是否到达目标 (Arrival) ---
+            goal_rel = next_ll_obs[0:3]
+            dist = np.linalg.norm(goal_rel)
+            if dist < current_env.arrival_threshold:
+                # print(f"[同步到达] {current_drone} 已到达目标，结束本轮 HL step")
+                break
+                
             if current_env._is_ll_done():
                 terminated = True
                 break
