@@ -108,12 +108,12 @@ class SimpleWeightEnv(gym.Env):
         if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
             unified_env_cfg = self.server.config_data.env_config
         
-        # 2. 如果没有 server，尝试从本地 scanner_config.json 加载
+        # 2. 如果没有 server，尝试从本地 apf_algorithm_config.json 加载
         if unified_env_cfg is None:
             try:
-                # 寻找根目录下的 scanner_config.json
+                # 寻找根目录下的 apf_algorithm_config.json
                 # 当前文件在 multirotor/DDPG_Weight/envs/，根目录在 multirotor/
-                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(config_path):
                     import json
                     with open(config_path, 'r', encoding='utf-8') as f:

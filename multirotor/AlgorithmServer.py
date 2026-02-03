@@ -52,7 +52,7 @@ class MultiDroneAlgorithmServer:
     def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False, control_mode: str = 'apf'):
         """
         初始化服务器实例
-        :param config_file: 算法配置文件路径（默认使用scanner_config.json）
+        :param config_file: 算法配置文件路径（默认使用apf_algorithm_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
         :param use_learned_weights: 是否使用学习的权重（DDPG模型预测，仅在control_mode='apf'时有效）
         :param model_path: DDPG模型路径（不含.zip后缀），如果为None则使用默认模型
@@ -166,13 +166,13 @@ class MultiDroneAlgorithmServer:
             logger.info("可视化已禁用")
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
-        """解析配置文件路径，默认使用项目根目录下的scanner_config.json"""
+        """解析配置文件路径，默认使用项目根目录下的apf_algorithm_config.json"""
         if config_file:
             if os.path.exists(config_file):
                 return config_file
             logger.warning(f"指定的配置文件不存在: {config_file}，将使用默认配置")
 
-        default_path = Path(__file__).parent / "scanner_config.json"
+        default_path = Path(__file__).parent / "apf_algorithm_config.json"
         if not default_path.exists():
             raise FileNotFoundError(f"默认配置文件不存在: {default_path}")
         return str(default_path)
@@ -792,7 +792,7 @@ class MultiDroneAlgorithmServer:
         
         try:
             # 是否为实体无人机镜像
-            isCrazyflieMirror = self.config_data.get_uav_crazyflie_mirror(drone_name)
+            isCrazyflieMirror = self.drones_config.is_crazyflie_mirror(drone_name)
             state = self._get_state_for_prediction(drone_name) if not isCrazyflieMirror else self._crazyflie_get_state_for_prediction(drone_name)
 
             action, _ = self.weight_model.predict(state, deterministic=True)
@@ -858,7 +858,7 @@ class MultiDroneAlgorithmServer:
                             logger.warning(f"无人机{drone_name}权重预测失败，使用默认权重")
                     
                     # 同步 AirSim 中的姿态数据到运行时数据（用于数据采集分析）
-                    if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                    if not self.drones_config.is_crazyflie_mirror(drone_name):
                         try:
                             state = self.drone_controller.get_vehicle_state(drone_name)
                             if "orientation" in state:
@@ -873,7 +873,7 @@ class MultiDroneAlgorithmServer:
                         self.grid_data, self.unity_runtime_data[drone_name]
                     )
                     
-                    if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                    if not self.drones_config.is_crazyflie_mirror(drone_name):
                         # 控制无人机移动
                          self._control_drone_movement(drone_name, final_dir.finalMoveDir)
                     else:
@@ -890,7 +890,7 @@ class MultiDroneAlgorithmServer:
                     
                     # 如果有有效的DQN指令，执行移动
                     if move_direction.magnitude() > 0.001:
-                        if not self.config_data.get_uav_crazyflie_mirror(drone_name):
+                        if not self.drones_config.is_crazyflie_mirror(drone_name):
                             self._control_drone_movement(drone_name, move_direction)
                         else:
                             self.crazyswarm.go_to(drone_name, move_direction, self.config_data.updateInterval)

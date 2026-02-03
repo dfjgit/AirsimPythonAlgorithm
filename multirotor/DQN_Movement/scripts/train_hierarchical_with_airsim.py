@@ -99,7 +99,7 @@ def train_hrl_with_airsim(enable_visualization=True):
     with open(hrl_config_path, 'r', encoding='utf-8') as f:
         hrl_config = json.load(f)
 
-    config_file = os.path.join(os.path.dirname(__file__), "..", "scanner_config.json")
+    config_file = os.path.join(os.path.dirname(__file__), "..", "apf_algorithm_config.json")
 
     # 2. 启动 AirSim 服务器（禁用SimpleVisualizer，使用HierarchicalVisualizer代替）
     print(f"正在启动服务器 (DQN控制模式)...")

@@ -15,17 +15,6 @@
     "targetSearchRange": 20.0,
     "revisitCooldown": 10.0,
     "altitude": 2.0,
-    "droneSettings": {
-        "UAV1": {
-            "isCrazyflieMirror": false
-        },
-        "UAV2": {
-            "isCrazyflieMirror": false
-        },
-        "UAV3": {
-            "isCrazyflieMirror": false
-        }
-    },
     "env_config": {
         "termination": {
             "target_scan_ratio": 0.95,

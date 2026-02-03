@@ -77,10 +77,10 @@ with open(dqn_config_path, 'r', encoding='utf-8') as f:
     dqn_config = json.load(f)
 print(f"  ✓ 加载 movement_dqn_config.json")
 
-# scanner_config.json 路径（AlgorithmServer需要）
-config_file = os.path.join(os.path.dirname(__file__), "..", "scanner_config.json")
+# apf_algorithm_config.json 路径（AlgorithmServer需要）
+config_file = os.path.join(os.path.dirname(__file__), "..", "apf_algorithm_config.json")
 if not os.path.exists(config_file):
-    print(f"  ✗ scanner_config.json 不存在: {config_file}")
+    print(f"  ✗ apf_algorithm_config.json 不存在: {config_file}")
     sys.exit(1)
 
 print("\n" + "=" * 80)

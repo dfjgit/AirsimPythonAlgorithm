@@ -322,9 +322,9 @@ class CrazyflieLogEnv(gym.Env):
     def _apply_unified_config(self):
         """应用统一环境配置，确保奖励系数一致性（方案 B）"""
         unified_env_cfg = None
-        # 离线环境通常没有 server，直接读本地 scanner_config.json
+        # 离线环境通常没有 server，直接读本地 apf_algorithm_config.json
         try:
-            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apf_algorithm_config.json")
             if os.path.exists(config_path):
                 import json
                 with open(config_path, 'r', encoding='utf-8') as f:
@@ -606,10 +606,10 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         if hasattr(self, 'server') and self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
             unified_env_cfg = self.server.config_data.env_config
         
-        # 2. 如果没有 server，尝试从本地 scanner_config.json 加载
+        # 2. 如果没有 server，尝试从本地 apf_algorithm_config.json 加载
         if unified_env_cfg is None:
             try:
-                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(config_path):
                     import json
                     with open(config_path, 'r', encoding='utf-8') as f:

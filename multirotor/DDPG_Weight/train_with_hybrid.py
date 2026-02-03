@@ -520,7 +520,7 @@ def main():
     try:
         # ========== [0/5] 设置虚实融合配置 ==========
         print("\n[0/5] 设置虚实融合配置...")
-        original_config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scanner_config.json")
+        original_config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apf_algorithm_config.json")
         temp_config_file = _setup_hybrid_config(original_config_file, mirror_drones)
         
         # ========== [1/5] 启动AlgorithmServer ==========
