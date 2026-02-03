@@ -76,9 +76,9 @@ except ImportError as e:
 
 # ==================== 导入项目模块 ====================
 from envs.simple_weight_env import SimpleWeightEnv
-from training_visualizer import TrainingVisualizer
-from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Visualization import DDPGTrainingVisualizer
+from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.scanner_config_data import ScannerConfigData
 # ==================================================
@@ -617,7 +617,7 @@ def main():
         if enable_visualization:
             print("\n[4.5/5] 启动训练专用可视化...")
             try:
-                training_visualizer = TrainingVisualizer(server=server, env=env)
+                training_visualizer = DDPGTrainingVisualizer(server=server, env=env)
                 if training_visualizer.start_visualization():
                     print("✅ 训练可视化已启动")
                 else:

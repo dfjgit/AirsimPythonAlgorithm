@@ -35,11 +35,12 @@ from Algorithm.drones_config import DronesConfig
 
 # 导入可视化器
 try:
-    from visualizers.hierarchical_visualizer import HierarchicalVisualizer
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from Visualization import HierarchicalTrainingVisualizer
     HAS_VISUALIZER = True
 except ImportError:
     HAS_VISUALIZER = False
-    print("警告: 无法导入HierarchicalVisualizer，可视化功能将被禁用")
+    print("警告: 无法导入HierarchicalTrainingVisualizer，可视化功能将被禁用")
 
 class VisualizationCallback(BaseCallback):
     """训练回调，用于更新可视化数据"""
@@ -192,7 +193,7 @@ def train_hrl_with_airsim(enable_visualization=True):
     if enable_visualization and HAS_VISUALIZER:
         try:
             print(f"\n正在初始化分层训练可视化...")
-            visualizer = HierarchicalVisualizer(env.unwrapped, server)
+            visualizer = HierarchicalTrainingVisualizer(env.unwrapped, server)
             visualizer.start_visualization()
             print(f"✓ 可视化已启动")
             time.sleep(1.0)  # 等待窗口初始化

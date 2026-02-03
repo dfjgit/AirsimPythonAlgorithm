@@ -13,7 +13,7 @@ import numpy as np
 
 # 配置日志系统
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -37,7 +37,7 @@ from AirsimServer.data_pack import PackType
 
 # 尝试导入可视化模块
 try:
-    from Algorithm.simple_visualizer import SimpleVisualizer
+    from Visualization import RuntimeVisualizer
     HAS_VISUALIZATION = True
 except ImportError as e:
     logging.warning(f"无法导入可视化模块: {str(e)}")
@@ -272,7 +272,7 @@ class MultiDroneAlgorithmServer:
             return
         
         try:
-            self.visualizer = SimpleVisualizer(self)
+            self.visualizer = RuntimeVisualizer(self)
             logger.info("✅ 可视化组件初始化成功")
             logger.info("💡 可视化将在start()后启动")
             logger.info("=" * 60)
@@ -1121,6 +1121,17 @@ class MultiDroneAlgorithmServer:
         if need_physical_reset and hasattr(self, 'drone_controller') and self.drone_controller.connection_status:
             try:
                 logger.info("[重置] 检测到无人机偏移或未就绪，执行 AirSim 物理重置...")
+                
+                # 检查所有无人机的碰撞状态
+                for drone_name in self.drone_names:
+                    if not self.drones_config.is_crazyflie_mirror(drone_name):
+                        collision = self.drone_controller.check_collision(drone_name)
+                        if collision['has_collided']:
+                            logger.warning(f"[重置] 无人机{drone_name}处于碰撞状态，将执行安全恢复")
+                            # 先尝试悬停恢复
+                            self.drone_controller.recover_from_collision(drone_name)
+                
+                # 执行安全重置(带防穿地保护)
                 self.drone_controller.reset()
                 
                 # 重置后需要重新初始化无人机并起飞

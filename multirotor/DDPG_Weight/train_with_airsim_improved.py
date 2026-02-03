@@ -89,7 +89,8 @@ except ImportError as e:
 from envs.simple_weight_env import SimpleWeightEnv
 
 # 导入训练可视化模块：实时显示训练统计和进度
-from training_visualizer import TrainingVisualizer
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Visualization import DDPGTrainingVisualizer
 
 # 导入算法服务器：负责与Unity AirSim通信和算法执行
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -384,6 +385,14 @@ class ImprovedTrainingCallback(BaseCallback):
             print("\n[中断] 停止训练...")
             return False  # 返回False停止训练
         # ===================================
+        
+        # ⭐ 每步都更新可视化（用于采集权重）
+        if self.training_visualizer:
+            # 获取当前步的奖励（如果有）
+            current_reward = 0.0  # 可以从 locals 获取，但不是必需的
+            self.training_visualizer.update_training_stats(
+                current_step_reward=current_reward  # 传递任意值触发权重采集
+            )
         
         # ========== Episode完成检测 ==========
         # 检查是否有新的Episode完成（通过比较ep_info_buffer长度）
@@ -749,7 +758,7 @@ def main():
         if enable_visualization:
             print("\n[4.5/5] 启动训练专用可视化...")
             try:
-                training_visualizer = TrainingVisualizer(server=server, env=env)
+                training_visualizer = DDPGTrainingVisualizer(server=server, env=env)
                 if training_visualizer.start_visualization():
                     print("✅ 训练可视化已启动")
                     print("💡 可视化窗口应该会弹出，显示训练统计和环境状态")

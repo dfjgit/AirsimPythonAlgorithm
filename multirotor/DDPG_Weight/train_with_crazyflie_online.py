@@ -47,7 +47,7 @@ if PROJECT_ROOT not in sys.path:
 
 # 导入训练环境和可视化模块
 from envs.crazyflie_weight_env import CrazyflieOnlineWeightEnv  # 实体无人机在线训练环境
-from training_visualizer import TrainingVisualizer  # 训练可视化模块
+from Visualization import DDPGTrainingVisualizer  # 训练可视化模块
 from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
 
 
@@ -719,7 +719,7 @@ def main():
         if enable_visualization:
             logger.info("启动训练专用可视化...")
             try:
-                training_visualizer = TrainingVisualizer(server=server, env=env)
+                training_visualizer = DDPGTrainingVisualizer(server=server, env=env)
                 if training_visualizer.start_visualization():
                     logger.info("✅ 训练可视化已启动")
                     logger.info("💡 可视化窗口应该会弹出，显示训练统计和环境状态")

@@ -82,15 +82,31 @@ class DroneController:
             return False
 
     def reset(self) -> bool:
-        """重置模拟器状态"""
+        """重置模拟器状态(带防穿地保护)"""
         try:
             with self.api_lock:
+                # 1. 暂停仿真,避免物理引擎在重置过程中导致穿地
+                self.client.simPause(True)
+                time.sleep(0.1)
+                
+                # 2. 执行重置
                 self.client.reset()
-            logger.info("模拟器已重置")
+                time.sleep(0.3)
+                
+                # 3. 恢复仿真
+                self.client.simPause(False)
+                
+            logger.info("模拟器已安全重置(防穿地保护已启用)")
             self.vehicle_states.clear()
             return True
         except Exception as e:
             logger.error(f"重置模拟器失败: {str(e)}")
+            # 确保仿真恢复运行
+            try:
+                with self.api_lock:
+                    self.client.simPause(False)
+            except:
+                pass
             return False
 
     def enable_api_control(self, enable: bool = True, vehicle_name: Optional[str] = None) -> bool:
@@ -331,3 +347,104 @@ class DroneController:
             )
         except Exception as e:
             logger.warning(f"更新无人机{vehicle_name}姿态失败: {str(e)}")
+    
+    def check_collision(self, vehicle_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        检查无人机碰撞状态
+        
+        Returns:
+            Dict: {
+                'has_collided': bool,
+                'object_name': str,
+                'penetration_depth': float,
+                'impact_point': tuple,
+                'normal': tuple
+            }
+        """
+        vehicle_name = vehicle_name or self.default_vehicle
+        try:
+            with self.api_lock:
+                collision_info = self.client.simGetCollisionInfo(vehicle_name)
+            
+            result = {
+                'has_collided': collision_info.has_collided,
+                'object_name': collision_info.object_name,
+                'penetration_depth': collision_info.penetration_depth,
+                'impact_point': (collision_info.impact_point.x_val, 
+                                collision_info.impact_point.y_val, 
+                                collision_info.impact_point.z_val),
+                'normal': (collision_info.normal.x_val, 
+                          collision_info.normal.y_val, 
+                          collision_info.normal.z_val),
+                'time_stamp': collision_info.time_stamp
+            }
+            
+            if result['has_collided']:
+                logger.warning(f"无人机{vehicle_name}发生碰撞: 对象={result['object_name']}, "
+                             f"穿透深度={result['penetration_depth']:.3f}m")
+            
+            return result
+        except Exception as e:
+            logger.error(f"获取无人机{vehicle_name}碰撞信息失败: {str(e)}")
+            return {'has_collided': False, 'object_name': '', 'penetration_depth': 0.0,
+                   'impact_point': (0, 0, 0), 'normal': (0, 0, 0), 'time_stamp': 0.0}
+    
+    def recover_from_collision(self, vehicle_name: Optional[str] = None) -> bool:
+        """
+        从碰撞中恢复(尝试悬停稳定)
+        
+        Returns:
+            bool: 是否成功恢复
+        """
+        vehicle_name = vehicle_name or self.default_vehicle
+        try:
+            collision = self.check_collision(vehicle_name)
+            
+            if collision['has_collided']:
+                logger.info(f"尝试从碰撞中恢复无人机{vehicle_name}...")
+                
+                # 尝试悬停稳定
+                with self.api_lock:
+                    self.client.hoverAsync(vehicle_name=vehicle_name).join()
+                
+                time.sleep(1.0)
+                logger.info(f"无人机{vehicle_name}已悬停稳定")
+                return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"无人机{vehicle_name}碰撞恢复失败: {str(e)}")
+            return False
+    
+    def reset_vehicle_to_pose(self, vehicle_name: Optional[str] = None, 
+                             position: tuple = (0, 0, -3), 
+                             ignore_collision: bool = True) -> bool:
+        """
+        将无人机重置到指定位置(可忽略碰撞)
+        
+        Args:
+            vehicle_name: 无人机名称
+            position: 目标位置 (x, y, z), NED坐标系
+            ignore_collision: 是否忽略碰撞(用于从穿地状态恢复)
+        
+        Returns:
+            bool: 是否成功
+        """
+        vehicle_name = vehicle_name or self.default_vehicle
+        try:
+            from airsim import Pose, Vector3r, Quaternionr
+            
+            # 创建姿态
+            pose = Pose()
+            pose.position = Vector3r(position[0], position[1], position[2])
+            pose.orientation = Quaternionr(0, 0, 0, 1)  # 默认姿态
+            
+            with self.api_lock:
+                self.client.simSetVehiclePose(pose, ignore_collision, vehicle_name)
+            
+            time.sleep(0.2)
+            logger.info(f"无人机{vehicle_name}已重置到位置{position}")
+            return True
+        except Exception as e:
+            logger.error(f"无人机{vehicle_name}位置重置失败: {str(e)}")
+            return False
