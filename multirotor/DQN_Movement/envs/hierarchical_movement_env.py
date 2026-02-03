@@ -1027,8 +1027,8 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         self.current_drone_idx = (self.current_drone_idx + 1) % self.num_drones
         next_drone = self.drone_names[self.current_drone_idx]
         
-        # 检查整体是否结束
-        done = terminated or self.step_count >= self.config['movement']['max_steps'] * self.num_drones
+        # 检查整体是否结束（使用统一终止逻辑）
+        done = self._check_done()
         
         next_obs = self.envs[next_drone]._get_hl_observation()
         
@@ -1045,3 +1045,35 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         """为所有无人机设置底层策略"""
         for env in self.envs.values():
             env.ll_policy = policy
+    
+    def _check_done(self):
+        """判断Episode是否结束（统一终止逻辑）"""
+        # 计算高层对应的累计物理时间
+        # 每个高层步对应多个底层步，每个底层步有固定时长
+        # 使用第一个环境的配置作为参考
+        first_env = self.envs[self.drone_names[0]]
+        elapsed_time = self.step_count * first_env.ll_steps_per_hl * first_env.ll_step_duration
+        
+        # 1. 达到最大物理仿真时间
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
+            return True
+        
+        # 2. 达到目标扫描比例
+        if self.server and hasattr(self.server, 'grid_data'):
+            with self.server.grid_lock:
+                total = len(self.server.grid_data.cells)
+                if total > 0:
+                    scanned = sum(1 for c in self.server.grid_data.cells if c.entropy < 10.0)
+                    scan_ratio = scanned / total
+                    if scan_ratio >= self.term_cfg['target_scan_ratio']:
+                        print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+                        return True
+        
+        # 3. 碰撞次数达到阈值（检查所有无人机的碰撞总和）
+        total_collisions = sum(env.collision_count for env in self.envs.values())
+        if total_collisions >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞或超过上限: {total_collisions} / {self.term_cfg['max_collision_count']}")
+            return True
+        
+        return False

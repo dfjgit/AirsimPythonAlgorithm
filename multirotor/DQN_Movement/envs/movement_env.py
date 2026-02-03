@@ -786,12 +786,13 @@ class MultiDroneMovementEnv(gym.Env):
     观察空间: 位置、速度、熙值、leader位置等
     """
     
-    def __init__(self, server=None, drone_names=None, config_path=None):
+    def __init__(self, server=None, drone_names=None, config_path=None, step_duration=0.5):
         super(MultiDroneMovementEnv, self).__init__()
         
         self.server = server
         self.drone_names = drone_names if drone_names else ["UAV1"]
         self.num_drones = len(self.drone_names)
+        self.step_duration = step_duration  # 物理步长（秒）
         
         # 当前控制的无人机索引（轮流控制）
         self.current_drone_idx = 0
@@ -1399,15 +1400,25 @@ class MultiDroneMovementEnv(gym.Env):
         return reward
     
     def _check_done(self):
-        """检查episode是否结束"""
-        # 超过最大步数
-        max_steps = self.config['movement']['max_steps'] * self.num_drones
-        if self.step_count >= max_steps:
+        """检查episode是否结束 (统一终止逻辑)"""
+        # 计算累计物理仿真时间
+        elapsed_time = self.step_count * self.step_duration
+        
+        # 1. 达到最大物理仿真时间
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
             return True
         
-        # 扫描完成
+        # 2. 达到目标扫描比例
         scan_ratio = self._get_scan_ratio()
-        if scan_ratio >= self.config['thresholds']['success_scan_ratio']:
+        if scan_ratio >= self.term_cfg['target_scan_ratio']:
+            print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+            return True
+        
+        # 3. 碰撞次数达到阈值（检查所有无人机的碰撞总和）
+        total_collisions = sum(state['collision_count'] for state in self.drone_states.values())
+        if total_collisions >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞或超过上限: {total_collisions} / {self.term_cfg['max_collision_count']}")
             return True
         
         return False
