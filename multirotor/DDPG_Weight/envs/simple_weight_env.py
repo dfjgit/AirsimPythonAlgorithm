@@ -56,17 +56,9 @@ class SimpleWeightEnv(gym.Env):
             "max_collision_count": 1,
             "max_elapsed_time_sec": 300.0
         }
-        # 尝试从统一配置文件加载
-        try:
-            unified_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "configs", "unified_train_config.json")
-            if os.path.exists(unified_cfg_path):
-                import json
-                with open(unified_cfg_path, 'r', encoding='utf-8') as f:
-                    u_cfg = json.load(f)
-                    if 'common' in u_cfg and 'termination_config' in u_cfg['common']:
-                        self.term_cfg.update(u_cfg['common']['termination_config'])
-        except Exception as e:
-            print(f"加载终止配置失败: {e}")
+        
+        # 应用统一环境配置（方案 B：解耦物理规则与训练参数）
+        self._apply_unified_config()
             
         print("[OK] 训练环境已加载奖励配置和终止配置")
         
@@ -104,6 +96,68 @@ class SimpleWeightEnv(gym.Env):
         # 首次重置标志（用于跳过启动时的物理重置）
         self._first_reset = True
         
+    def _first_reset_logic(self):
+        """处理首次重置逻辑"""
+        pass # Placeholder if needed, or just keep as is in reset()
+
+    def _apply_unified_config(self):
+        """应用统一环境配置，确保物理规则一致性（方案 B）"""
+        unified_env_cfg = None
+        
+        # 1. 优先从 server 获取 (AlgorithmServer 持有最新的 ScannerConfigData)
+        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
+            unified_env_cfg = self.server.config_data.env_config
+        
+        # 2. 如果没有 server，尝试从本地 scanner_config.json 加载
+        if unified_env_cfg is None:
+            try:
+                # 寻找根目录下的 scanner_config.json
+                # 当前文件在 multirotor/DDPG_Weight/envs/，根目录在 multirotor/
+                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+                if os.path.exists(config_path):
+                    import json
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        full_cfg = json.load(f)
+                        unified_env_cfg = full_cfg.get('env_config')
+            except Exception as e:
+                print(f"[Warning] 加载本地统一配置失败: {e}")
+
+        if unified_env_cfg:
+            print(f"[UnifiedConfig] 正在应用统一环境配置于 {self.__class__.__name__}...")
+            
+            # 覆盖终止条件
+            if 'termination' in unified_env_cfg:
+                self.term_cfg.update(unified_env_cfg['termination'])
+                # DDPG 环境可能没有 time_limit，我们将其映射到 step_count
+                # max_steps = max_elapsed_time_sec / step_duration
+                if 'max_elapsed_time_sec' in unified_env_cfg['termination'] and self.step_duration > 0:
+                    calculated_steps = int(unified_env_cfg['termination']['max_elapsed_time_sec'] / self.step_duration)
+                    self.reward_config.max_steps = calculated_steps
+                print(f"  • 终止条件已更新 (MaxSteps={self.reward_config.max_steps})")
+
+            # 覆盖电量阈值
+            if 'battery' in unified_env_cfg:
+                b_cfg = unified_env_cfg['battery']
+                self.reward_config.battery_low_threshold = float(b_cfg.get('low_threshold', self.reward_config.battery_low_threshold))
+                self.reward_config.battery_optimal_min = float(b_cfg.get('optimal_min', self.reward_config.battery_optimal_min))
+                self.reward_config.battery_optimal_max = float(b_cfg.get('optimal_max', self.reward_config.battery_optimal_max))
+                print(f"  • 电量阈值已对齐: Low<{self.reward_config.battery_low_threshold}V")
+
+            # 覆盖基础奖励系数
+            if 'base_rewards' in unified_env_cfg:
+                base_rewards = unified_env_cfg['base_rewards']
+                reward_map = {
+                    'scan_reward': 'scan_reward',
+                    'out_of_range_penalty': 'out_of_range_penalty',
+                    'battery_low_penalty': 'battery_low_penalty',
+                    'battery_optimal_reward': 'battery_optimal_reward'
+                }
+                for u_key, local_attr in reward_map.items():
+                    if u_key in base_rewards:
+                        val = abs(float(base_rewards[u_key]))
+                        setattr(self.reward_config, local_attr, val)
+                print(f"  • 奖励系数已对齐: Scan={self.reward_config.scan_reward}")
+
     def reset(self):
         """重置环境"""
         import time

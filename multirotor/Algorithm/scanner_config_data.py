@@ -35,6 +35,9 @@ class ScannerConfigData:
     name: str
     hideFlags: int
 
+    # 新增字段：统一环境配置（物理规则与RL解耦）
+    env_config: Dict[str, Any]
+
     def __init__(self, config_file: str = None):
         # 设置默认值
         self._set_default_values()
@@ -76,6 +79,29 @@ class ScannerConfigData:
         self.name = "ScannerConfigData"
         self.hideFlags = 0
 
+        # 统一环境配置默认值
+        self.env_config = {
+            "termination": {
+                "target_scan_ratio": 0.95,
+                "max_collision_count": 1,
+                "max_elapsed_time_sec": 300.0,
+                "stagnation_timeout_sec": 30.0
+            },
+            "battery": {
+                "low_threshold": 3.5,
+                "optimal_min": 3.7,
+                "optimal_max": 4.1
+            },
+            "base_rewards": {
+                "scan_reward": 10.0,
+                "out_of_range_penalty": -30.0,
+                "battery_low_penalty": -10.0,
+                "battery_optimal_reward": 2.0,
+                "collision_penalty": -50.0,
+                "step_penalty": -0.1
+            }
+        }
+
     def parse_json_data(self, json_data: Dict[str, Any]) -> None:
         """从JSON字典解析数据到对象属性"""
         # 解析基础参数
@@ -110,6 +136,9 @@ class ScannerConfigData:
         
         self.name = json_data.get('name', "ScannerConfigData")
         self.hideFlags = self._get_int(json_data, 'hideFlags', 0)
+
+        # 解析统一环境配置
+        self.env_config = json_data.get('env_config', self.env_config)
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:
@@ -159,7 +188,8 @@ class ScannerConfigData:
             # 新增字段
             'droneSettings': self.droneSettings,
             'name': self.name,
-            'hideFlags': self.hideFlags
+            'hideFlags': self.hideFlags,
+            'env_config': self.env_config
         }
 
     def to_json(self) -> str:

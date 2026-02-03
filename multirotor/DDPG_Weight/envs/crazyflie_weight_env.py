@@ -315,7 +315,47 @@ class CrazyflieLogEnv(gym.Env):
         self.index = 0  # 当前日志索引
         self.step_count = 0  # 当前步数计数
         self.last_action = np.zeros(5, dtype=np.float32)  # 上一次的动作（权重）
-
+            
+        # 应用统一环境配置（方案 B：对齐奖励系数）
+        self._apply_unified_config()
+    
+    def _apply_unified_config(self):
+        """应用统一环境配置，确保奖励系数一致性（方案 B）"""
+        unified_env_cfg = None
+        # 离线环境通常没有 server，直接读本地 scanner_config.json
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+            if os.path.exists(config_path):
+                import json
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    full_cfg = json.load(f)
+                    unified_env_cfg = full_cfg.get('env_config')
+        except Exception as e:
+            print(f"[Warning] 离线环境加载本地统一配置失败: {e}")
+    
+        if unified_env_cfg:
+            print(f"[UnifiedConfig] 正在应用统一环境配置于 {self.__class__.__name__} (离线模式)...")
+            # 覆盖电量阈值
+            if 'battery' in unified_env_cfg:
+                b_cfg = unified_env_cfg['battery']
+                self.config.battery_low_threshold = float(b_cfg.get('low_threshold', self.config.battery_low_threshold))
+                self.config.battery_optimal_min = float(b_cfg.get('optimal_min', self.config.battery_optimal_min))
+                self.config.battery_optimal_max = float(b_cfg.get('optimal_max', self.config.battery_optimal_max))
+                
+            # 覆盖基础奖励系数
+            if 'base_rewards' in unified_env_cfg:
+                base_rewards = unified_env_cfg['base_rewards']
+                reward_map = {
+                    'scan_reward': 'scan_reward',
+                    'out_of_range_penalty': 'out_of_range_penalty',
+                    'battery_low_penalty': 'battery_low_penalty',
+                    'battery_optimal_reward': 'battery_optimal_reward'
+                }
+                for u_key, local_attr in reward_map.items():
+                    if u_key in base_rewards:
+                        val = abs(float(base_rewards[u_key]))
+                        setattr(self.config, local_attr, val)
+    
     def reset(self):
         """
         重置环境到初始状态
@@ -546,7 +586,72 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         self.prev_scanned_cells = 0  # 上一次扫描的网格单元数量
         self.last_action = np.zeros(5, dtype=np.float32)  # 上一次的动作（权重）
         self._has_initial_action = False  # 是否已设置初始动作（用于安全限制）
+        self.collision_count = 0  # 新增碰撞计数
         
+        # 统一终止配置
+        self.term_cfg = {
+            "target_scan_ratio": 0.95,
+            "max_collision_count": 1,
+            "max_elapsed_time_sec": 300.0
+        }
+        
+        # 应用统一环境配置（方案 B：解耦物理规则与训练参数）
+        self._apply_unified_config()
+        
+    def _apply_unified_config(self):
+        """应用统一环境配置，确保物理规则一致性（方案 B）"""
+        unified_env_cfg = None
+        
+        # 1. 优先从 server 获取
+        if hasattr(self, 'server') and self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
+            unified_env_cfg = self.server.config_data.env_config
+        
+        # 2. 如果没有 server，尝试从本地 scanner_config.json 加载
+        if unified_env_cfg is None:
+            try:
+                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scanner_config.json")
+                if os.path.exists(config_path):
+                    import json
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        full_cfg = json.load(f)
+                        unified_env_cfg = full_cfg.get('env_config')
+            except Exception as e:
+                print(f"[Warning] 加载本地统一配置失败: {e}")
+
+        if unified_env_cfg:
+            print(f"[UnifiedConfig] 正在应用统一环境配置于 {self.__class__.__name__}...")
+            
+            # 覆盖终止条件
+            if 'termination' in unified_env_cfg:
+                self.term_cfg.update(unified_env_cfg['termination'])
+                if 'max_elapsed_time_sec' in unified_env_cfg['termination'] and self.step_duration > 0:
+                    calculated_steps = int(unified_env_cfg['termination']['max_elapsed_time_sec'] / self.step_duration)
+                    self.config.max_steps = calculated_steps
+                print(f"  • 终止条件已更新 (MaxSteps={self.config.max_steps})")
+
+            # 覆盖电量阈值
+            if 'battery' in unified_env_cfg:
+                b_cfg = unified_env_cfg['battery']
+                self.config.battery_low_threshold = float(b_cfg.get('low_threshold', self.config.battery_low_threshold))
+                self.config.battery_optimal_min = float(b_cfg.get('optimal_min', self.config.battery_optimal_min))
+                self.config.battery_optimal_max = float(b_cfg.get('optimal_max', self.config.battery_optimal_max))
+                print(f"  • 电量阈值已对齐: Low<{self.config.battery_low_threshold}V")
+
+            # 覆盖基础奖励系数
+            if 'base_rewards' in unified_env_cfg:
+                base_rewards = unified_env_cfg['base_rewards']
+                reward_map = {
+                    'scan_reward': 'scan_reward',
+                    'out_of_range_penalty': 'out_of_range_penalty',
+                    'battery_low_penalty': 'battery_low_penalty',
+                    'battery_optimal_reward': 'battery_optimal_reward'
+                }
+                for u_key, local_attr in reward_map.items():
+                    if u_key in base_rewards:
+                        val = abs(float(base_rewards[u_key]))
+                        setattr(self.config, local_attr, val)
+                print(f"  • 奖励系数已对齐: Scan={self.config.scan_reward}")
+
     def reset(self):
         """
         重置环境到初始状态
@@ -565,6 +670,7 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         self.total_episode_reward = 0.0
         self.last_action = np.zeros(5, dtype=np.float32)
         self._has_initial_action = False
+        self.collision_count = 0 # 重置碰撞计数
                 
         # 如果配置了重置Unity环境，则执行重置
         if self.reset_unity and self.server:
@@ -648,8 +754,26 @@ class CrazyflieOnlineWeightEnv(gym.Env):
                 total_reward=float(self.total_episode_reward)
             )
 
-        # 判断是否结束：达到最大步数
-        done = self.step_count >= self.config.max_steps
+        # 判断是否结束 (统一终止逻辑)
+        done = False
+        elapsed_time = self.step_count * self.step_duration
+        
+        if self.step_count >= self.config.max_steps:
+            print(f"[终止] 达到最大步数: {self.step_count}")
+            done = True
+        elif self.collision_count >= self.term_cfg['max_collision_count']:
+            print(f"[终止] 发生碰撞: {self.collision_count}")
+            done = True
+        else:
+            # 检查覆盖率
+            if self.server and self.server.grid_data and self.server.grid_data.cells:
+                total_cells = len(self.server.grid_data.cells)
+                if total_cells > 0:
+                    scanned_cells = self._count_scanned_cells()
+                    scan_ratio = scanned_cells / total_cells
+                    if scan_ratio >= self.term_cfg['target_scan_ratio']:
+                        print(f"[终止] 覆盖率达成: {scan_ratio:.2%}")
+                        done = True
 
         info = {"weights": weights}
         return next_state, reward, done, info
