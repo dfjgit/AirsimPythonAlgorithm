@@ -49,7 +49,7 @@ class MultiDroneAlgorithmServer:
     功能：连接AirSim模拟器与Unity客户端，处理数据交互，执行扫描算法，控制多无人机协同作业
     """
 
-    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False, control_mode: str = 'apf'):
+    def __init__(self, config_file: Optional[str] = None, drone_names: Optional[List[str]] = None, use_learned_weights: bool = False, model_path: Optional[str] = None, enable_visualization: bool = True, enable_data_collection_print: bool = False, control_mode: str = 'apf', max_episode_seconds: int = 300):
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用apf_algorithm_config.json）
@@ -99,12 +99,21 @@ class MultiDroneAlgorithmServer:
         self.grid_data = HexGridDataModel()
 
         # 线程与状态管理
+        self.max_episode_seconds = max_episode_seconds  # 单轮训练最大时长（秒）
+        self._episode_start_time = time.time()
+        self.ready_event = threading.Event()  # 同步所有无人机首帧runtime到位
+        self.resetting = False  # 正在重置标志
         self.running = False
+        self.resetting = True
         self.drone_threads: Dict[str, Optional[threading.Thread]] = {
             name: None for name in self.drone_names
         }
         self.data_lock = threading.Lock()  # 运行时数据锁
         self.grid_lock = threading.Lock()  # 网格数据锁
+        self.timeout_lock = threading.Lock()  # 超时重置锁
+
+        # 记录每台无人机起飞后的初始位置（用于 reset_environment 水平偏移判定）
+        self.home_positions: Dict[str, Tuple[float, float]] = {}
 
         # 熵值记录
         self.entropy_history: List[Tuple[float, float]] = []
@@ -442,6 +451,25 @@ class MultiDroneAlgorithmServer:
                     all_success = False
         return all_success
 
+    def _wait_for_takeoff(self, timeout: float = 20.0) -> bool:
+        """等待所有虚拟无人机 flying=True"""
+        start = time.time()
+        while time.time() - start < timeout:
+            all_ready = True
+            for name in self.drone_names:
+                if self.drones_config.is_crazyflie_mirror(name):
+                    continue
+                state = self.drone_controller.get_vehicle_state(name)
+                if not state.get("flying", False):
+                    all_ready = False
+                    break
+            if all_ready:
+                logger.info("所有虚拟无人机已稳定在空中")
+                return True
+            time.sleep(0.3)
+        logger.warning("[起飞检测] 超时，仍有无人机未飞起")
+        return False
+
     def start_mission(self) -> bool:
         """开始任务：控制所有无人机起飞并启动算法线程"""
         if not self.running:
@@ -452,9 +480,21 @@ class MultiDroneAlgorithmServer:
             if not self._takeoff_all():
                 return False
             
-            # 起飞后等待更长时间，确保无人机稳定
-            logger.info("无人机起飞完成，等待稳定...")
-            time.sleep(3)
+            # 等待所有虚拟无人机确认 flying=True 再开始仿真
+            logger.info("无人机起飞完成，等待所有无人机稳定...")
+            self._wait_for_takeoff()
+
+            # 记录每台无人机起飞后的初始位置（AirSim NED: x,y 为水平）
+            for name in self.drone_names:
+                if self.drones_config.is_crazyflie_mirror(name):
+                    continue
+                try:
+                    state = self.drone_controller.get_vehicle_state(name)
+                    pos = state.get("position", (0.0, 0.0, 0.0))
+                    self.home_positions[name] = (float(pos[0]), float(pos[1]))
+                    logger.info(f"[Home] {name} home_xy=({self.home_positions[name][0]:.2f},{self.home_positions[name][1]:.2f})")
+                except Exception as e:
+                    logger.warning(f"[Home] 记录{name} home位置失败: {e}")
             
             # 2. 发送开始仿真指令到Unity（让领导者开始移动）
             if self.unity_socket and self.unity_socket.is_connected():
@@ -462,9 +502,14 @@ class MultiDroneAlgorithmServer:
                 self.unity_socket.send_start_simulation_command()
                 time.sleep(0.5)  # 等待Unity处理指令
             
+            # 在启动算法线程前清空同步事件
+            self.ready_event.clear()
+            logger.info("首帧同步事件已清空，等待Unity推送首帧runtime数据")
             # 3. 启动算法处理线程
             logger.info("启动算法处理线程...")
             self.running = True
+            # 记录Episode开始时间
+            self._episode_start_time = time.time()
             for drone_name in self.drone_names:
                 self.drone_threads[drone_name] = threading.Thread(
                     target=self._process_drone,
@@ -522,6 +567,8 @@ class MultiDroneAlgorithmServer:
 
                 # 检查是否包含runtime_data字段
                 if 'runtime_data' in received_data:
+                    # 收集首帧同步
+
                     runtime_data_list = received_data['runtime_data']
                     if isinstance(runtime_data_list, list):
                         # logger.info(f"收到运行时数据，包含{len(runtime_data_list)}个无人机数据")
@@ -545,6 +592,19 @@ class MultiDroneAlgorithmServer:
                                     logger.error(f"原始数据: {runtime_data}")
                             else:
                                 logger.warning(f"无效的运行时数据或无人机名称: {drone_name}")
+
+                        # ---- 首帧同步检查 ----
+                        if not self.ready_event.is_set():
+                            # 确保本次包里包含全部无人机，且每机都有有效位置
+                            received_names = {runtime_data.get('uavname') for runtime_data in runtime_data_list if runtime_data.get('uavname') in self.unity_runtime_data}
+                            all_valid = all(
+                                (self.unity_runtime_data[n].position is not None)
+                                for n in self.drone_names
+                            )
+                            if received_names == set(self.drone_names) and all_valid:
+                                logger.info(f"首帧 runtime_data 收齐（{len(received_names)}台），解除同步锁")
+                                self.ready_event.set()
+                        # ---------------------
 
                 # 检查是否包含grid_data字段
                 elif 'grid_data' in received_data:
@@ -835,8 +895,15 @@ class MultiDroneAlgorithmServer:
     def _process_drone(self, drone_name: str) -> None:
         """无人机算法处理线程：计算移动方向并控制无人机"""
         logger.info(f"无人机{drone_name}算法线程启动 (控制模式: {self.control_mode.upper()})")
+        # 等待所有无人机接收首帧runtime数据后同步开始决策
+        logger.debug(f"[{drone_name}] 等待首帧同步...")
+        self.ready_event.wait()
+        logger.info(f"[{drone_name}] 首帧同步完成，开始决策循环")
         while self.running:
             try:
+                # 训练模式下 episode/step 由训练端环境统一管理：
+                # AlgorithmServer 不再在循环内基于超时自动 reset。
+                # 如果需要超时终止，请在 Gym Env 中判断并调用 server.reset_environment()。
                 # 检查数据就绪状态
                 has_grid = bool(self.grid_data.cells)
                 has_runtime = bool(self.unity_runtime_data[drone_name].position)
@@ -1086,6 +1153,19 @@ class MultiDroneAlgorithmServer:
         """重置运行环境（网格熵值、无人机位置、Leader等）"""
         logger.info("[重置] 正在重置运行环境...")
         
+        # 0. 立即刹车/悬停，防止上一帧速度延续
+        for d_name in self.drone_names:
+            try:
+                if not self.drones_config.is_crazyflie_mirror(d_name):
+                    # AirSim 虚拟无人机：发 0 速度短指令，相当于 hover
+                    self.drone_controller.move_by_velocity(0, 0, 0, 0.1, d_name)
+                else:
+                    # Crazyflie 镜像：直接发送悬停
+                    self.crazyswarm.hover(d_name)
+            except Exception:
+                pass
+        time.sleep(0.2)  # 等待刹车生效
+        
         # 智能重置判断：检查无人机是否已经在起点且处于飞行状态
         need_physical_reset = False
         
@@ -1099,17 +1179,20 @@ class MultiDroneAlgorithmServer:
                     api_enabled = state.get("api_enabled", False)
                     flying = state.get("flying", False)
                     
-                    # 计算水平距离 (x, y) 距离起点的偏移
-                    horizontal_dist = math.sqrt(pos[0]**2 + pos[1]**2)
+                    # 计算水平距离：使用 AirSim NED 的水平面 (x,y)，并以记录的 home_xy 作为参考点
+                    home_xy = self.home_positions.get(drone_name, (0.0, 0.0))
+                    dx = float(pos[0]) - float(home_xy[0])
+                    dy = float(pos[1]) - float(home_xy[1])
+                    horizontal_dist = math.sqrt(dx**2 + dy**2)
                     
                     # 记录详细日志以便排查
                     logger.info(f"[重置检测] 无人机:{drone_name}, 位置:({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
-                                f"水平距离:{horizontal_dist:.2f}m, API启用:{api_enabled}, 飞行状态:{flying}")
+                                f"home_xy:({home_xy[0]:.2f},{home_xy[1]:.2f}), 水平偏移:{horizontal_dist:.2f}m, API启用:{api_enabled}, 飞行状态:{flying}")
                     
-                    # 只要无人机在飞（只要不在地面，flying即为True）且距离起点不远，就跳过物理重置
-                    if horizontal_dist > 3.0 or not flying:
+                    # 放宽水平距离阈值，允许起飞后漂移；仅当不在飞行状态或距离过远（>10m）时才物理重置
+                    if not flying or horizontal_dist > 10.0:
                         need_physical_reset = True
-                        reason = "距离过远" if horizontal_dist > 3.0 else "未处于飞行状态"
+                        reason = "距离过远" if horizontal_dist > 10.0 else "未处于飞行状态"
                         logger.info(f"[重置检测] 判定需要物理重置，原因: {reason}")
                         break
                 except Exception as e:
@@ -1140,6 +1223,25 @@ class MultiDroneAlgorithmServer:
                 self._init_drones()
                 
                 # 重置所有无人机电量数据
+                # 清空本地缓存，防止旧决策影响新一轮训练
+                self._clear_local_data()
+                # 清零 DQN 指令缓存
+                with self.dqn_command_lock:
+                    for k in self.dqn_commands:
+                        self.dqn_commands[k] = Vector3(0, 0, 0)
+                # 告知 Unity 覆盖旧 runtime（moveDir 归零）
+                if self.unity_socket and self.unity_socket.is_connected():
+                    empty_rts = []
+                for n in self.drone_names:
+                        rt = ScannerRuntimeData()
+                        rt.uavname = n
+                        empty_rts.append(rt)
+                try:
+                    self.unity_socket.send_runtime(empty_rts)
+                except Exception:
+                    pass
+
+                
                 for drone_name in self.drone_names:
                     self.reset_battery_voltage(drone_name)
                 
@@ -1152,6 +1254,23 @@ class MultiDroneAlgorithmServer:
             # 即使跳过物理重置，也总是重置电量数据以保证统计准确
             for drone_name in self.drone_names:
                 self.reset_battery_voltage(drone_name)
+            # 清空本地缓存，防止旧决策影响新一轮训练
+            self._clear_local_data()
+            # 清零 DQN 指令缓存
+            with self.dqn_command_lock:
+                for k in self.dqn_commands:
+                    self.dqn_commands[k] = Vector3(0, 0, 0)
+            # 告知 Unity 覆盖旧 runtime（moveDir 归零）
+            if self.unity_socket and self.unity_socket.is_connected():
+                empty_rts = []
+                for n in self.drone_names:
+                        rt = ScannerRuntimeData()
+                        rt.uavname = n
+                        empty_rts.append(rt)
+                try:
+                    self.unity_socket.send_runtime(empty_rts)
+                except Exception:
+                    pass
 
         # 2. 发送重置命令到Unity（重置网格数据、Leader状态等）
         if self.unity_socket and self.unity_socket.is_connected():
@@ -1208,7 +1327,6 @@ class MultiDroneAlgorithmServer:
         self.unity_socket.stop()
         logger.info("服务已完全停止")
 
-
     def _land_all(self) -> None:
         """控制所有无人机降落"""
         logger.info("开始所有无人机降落流程")
@@ -1257,6 +1375,17 @@ class MultiDroneAlgorithmServer:
             if was_running:
                 logger.info("[步骤1/8] 停止算法处理线程...")
                 self.running = False
+                # 立即发送刹车指令，防止上一帧速度延续导致无控飘移
+                for d_name in self.drone_names:
+                    try:
+                        if not self.drones_config.is_crazyflie_mirror(d_name):
+                            # AirSim 虚拟无人机：发 0 速度短指令，相当于 hover
+                            self.drone_controller.move_by_velocity(0, 0, 0, 0.1, d_name)
+                        else:
+                            # Crazyflie 镜像：直接发送悬停
+                            self.crazyswarm.hover(d_name)
+                    except Exception:
+                        pass
                 
                 # 等待所有线程结束
                 logger.info("等待算法线程结束...")

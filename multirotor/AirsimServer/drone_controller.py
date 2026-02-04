@@ -2,6 +2,7 @@ import setup_path
 import airsim
 import numpy as np
 import math
+import time
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 from collections import defaultdict

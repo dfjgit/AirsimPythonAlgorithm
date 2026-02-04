@@ -282,6 +282,116 @@ class HierarchicalVisualizer:
         except Exception as e:
             print(f"绘制无人机目标时出错: {str(e)}")
     
+    def _draw_goal_arrow(self, drone_name: str, drone_screen_pos: Tuple[int, int], color: Tuple[int, int, int]):
+        """
+        绘制无人机前往高层目标的指引箭头
+        
+        Args:
+            drone_name: 无人机名称
+            drone_screen_pos: 无人机屏幕坐标
+            color: 箭头颜色
+        """
+        try:
+            # 获取该无人机的当前高层目标
+            goal = None
+            
+            # 判断是单机还是多机环境
+            if hasattr(self.env, 'envs'):
+                # 多机环境
+                sub_env = self.env.envs.get(drone_name)
+                if sub_env and hasattr(sub_env, 'current_hl_goal'):
+                    goal = sub_env.current_hl_goal
+            else:
+                # 单机环境
+                if self.env.drone_name == drone_name and hasattr(self.env, 'current_hl_goal'):
+                    goal = self.env.current_hl_goal
+            
+            if not goal:
+                return
+            
+            # 获取无人机当前位置
+            drone_pos = None
+            if self.server:
+                with self.server.data_lock:
+                    rd = self.server.unity_runtime_data.get(drone_name)
+                    if rd and rd.position:
+                        drone_pos = rd.position
+            
+            if not drone_pos:
+                return
+            
+            # 计算方向向量（世界坐标）
+            direction = Vector3(
+                goal.x - drone_pos.x,
+                goal.y - drone_pos.y,
+                goal.z - drone_pos.z
+            )
+            
+            distance = direction.magnitude()
+            if distance < 0.1:  # 已经到达目标
+                return
+            
+            # 归一化方向
+            direction = Vector3(
+                direction.x / distance,
+                direction.y / distance,
+                direction.z / distance
+            )
+            
+            # 计算箭头的屏幕坐标（在X-Z平面上）
+            arrow_length = 50  # 箭头长度（像素）
+            arrow_end = (
+                int(drone_screen_pos[0] + direction.x * arrow_length),
+                int(drone_screen_pos[1] - direction.z * arrow_length)  # Z轴反向
+            )
+            
+            # 绘制主箭头线（加粗、高亮）
+            pygame.draw.line(self.screen, color, drone_screen_pos, arrow_end, 5)
+            
+            # 计算箭头三角形（在箭头的末端）
+            arrow_size = 12
+            angle = np.arctan2(-direction.z, direction.x)  # Z轴反向
+            
+            # 箭头两侧的点
+            left_angle = angle + np.pi * 0.75
+            right_angle = angle - np.pi * 0.75
+            
+            arrow_left = (
+                int(arrow_end[0] + arrow_size * np.cos(left_angle)),
+                int(arrow_end[1] + arrow_size * np.sin(left_angle))
+            )
+            arrow_right = (
+                int(arrow_end[0] + arrow_size * np.cos(right_angle)),
+                int(arrow_end[1] + arrow_size * np.sin(right_angle))
+            )
+            
+            # 绘制箭头三角形（填充）
+            pygame.draw.polygon(self.screen, color, [arrow_end, arrow_left, arrow_right])
+            
+            # 绘制外边框（白色，更明显）
+            pygame.draw.line(self.screen, self.WHITE, drone_screen_pos, arrow_end, 2)
+            pygame.draw.polygon(self.screen, self.WHITE, [arrow_end, arrow_left, arrow_right], 2)
+            
+            # 显示距离信息
+            if self._small_font and distance > 1:
+                dist_text = self._small_font.render(f"{distance:.1f}m", True, self.YELLOW)
+                # 将文字放在箭头中间
+                mid_x = int((drone_screen_pos[0] + arrow_end[0]) / 2)
+                mid_y = int((drone_screen_pos[1] + arrow_end[1]) / 2)
+                
+                # 绘制文字背景（半透明黑色）
+                text_rect = dist_text.get_rect(center=(mid_x, mid_y - 10))
+                s = pygame.Surface((text_rect.width + 6, text_rect.height + 4))
+                s.set_alpha(180)
+                s.fill(self.BLACK)
+                self.screen.blit(s, (text_rect.x - 3, text_rect.y - 2))
+                
+                # 绘制文字
+                self.screen.blit(dist_text, text_rect)
+                
+        except Exception as e:
+            print(f"绘制目标箭头时出错: {str(e)}")
+    
     def draw_drones(self):
         """绘制所有无人机"""
         try:
@@ -309,6 +419,9 @@ class HierarchicalVisualizer:
                             screen_pos[1] - rd.finalMoveDir.z * 25
                         )
                         pygame.draw.line(self.screen, color, screen_pos, dir_end, 3)
+                    
+                    # ⭐ 绘制前往高层目标的指引箭头
+                    self._draw_goal_arrow(drone_name, screen_pos, color)
                     
                     # 绘制无人机名称
                     if self._small_font:

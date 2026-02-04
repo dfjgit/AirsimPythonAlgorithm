@@ -75,8 +75,8 @@ class HierarchicalMovementEnv(gym.Env):
         )
         
         # --- 底层 (LL) 参数 ---
-        self.ll_steps_per_hl = 30  # 最大 15s / 0.5s = 30步 (按需触发)
-        self.ll_step_duration = 0.5
+        self.ll_steps_per_hl = self.config.get('movement', {}).get('ll_steps_per_hl', 30)
+        self.ll_step_duration = self.config.get('movement', {}).get('ll_step_duration', 0.5)
         self.arrival_threshold = 2.0 # 到达阈值 2米
         
         # LL 动作映射 (修正映射：0/1对应高度Y，2/3对应左右Z，4/5对应前后X)
@@ -93,6 +93,8 @@ class HierarchicalMovementEnv(gym.Env):
         # 内部状态
         self.current_hl_goal = None
         self.step_count = 0
+        # 新增：累计底层步数，用于准确计算已消耗物理时间
+        self.total_ll_steps = 0
         self.episode_reward = 0
         self.collision_count = 0
         self.out_of_range_count = 0
@@ -318,6 +320,7 @@ class HierarchicalMovementEnv(gym.Env):
         
         # 3. 高层统计与奖励
         self.step_count += 1
+        self.total_ll_steps += actual_steps
         hl_reward = self._calculate_hl_reward(hl_action, total_ll_reward)
         self.episode_reward += hl_reward
         
@@ -341,7 +344,17 @@ class HierarchicalMovementEnv(gym.Env):
         # 检查是否结束
         if not terminated:
             terminated = self._check_done()
+        # 硬性高层步数兜底终止（防止极端情况下 episode 无法结束）
+        max_hl_steps = self.config.get('movement', {}).get('max_steps', 150)
+        if not terminated and self.step_count >= max_hl_steps:
+            print(f"[终止] 达到最大高层步数: {self.step_count} >= {max_hl_steps}")
+            terminated = True
             
+        if terminated and self.server:
+            self.server.reset_environment()
+            if hasattr(self.server, 'reset_battery_voltage'):
+                self.server.reset_battery_voltage(self.drone_name)
+            time.sleep(1.0)
         return self._get_hl_observation(), hl_reward, terminated, False, {}
 
     def ll_step(self, action):
@@ -730,7 +743,7 @@ class HierarchicalMovementEnv(gym.Env):
         """判断Episode是否结束 (统一终止逻辑)"""
         # 计算高层对应的累计物理时间
         # self.step_count 是高层步数，每步包含 ll_steps_per_hl 个底层步
-        elapsed_time = self.step_count * self.ll_steps_per_hl * self.ll_step_duration
+        elapsed_time = self.total_ll_steps * self.ll_step_duration
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
@@ -1029,6 +1042,11 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         
         # 检查整体是否结束（使用统一终止逻辑）
         done = self._check_done()
+        # 硬性高层步数兜底终止（防止极端情况下 episode 无法结束）
+        max_hl_steps = self.config.get('movement', {}).get('max_steps', 150)
+        if not done and self.step_count >= max_hl_steps:
+            print(f"[终止] 达到最大高层步数: {self.step_count} >= {max_hl_steps}")
+            done = True
         
         next_obs = self.envs[next_drone]._get_hl_observation()
         
@@ -1039,6 +1057,12 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             'step_count': self.step_count
         }
         
+        if done and self.server:
+            self.server.reset_environment()
+            if hasattr(self.server, 'reset_battery_voltage'):
+                for name in self.drone_names:
+                    self.server.reset_battery_voltage(name)
+            time.sleep(1.0)
         return next_obs, hl_reward, done, False, info
 
     def set_ll_policy(self, policy):
@@ -1052,7 +1076,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         # 每个高层步对应多个底层步，每个底层步有固定时长
         # 使用第一个环境的配置作为参考
         first_env = self.envs[self.drone_names[0]]
-        elapsed_time = self.step_count * first_env.ll_steps_per_hl * first_env.ll_step_duration
+        elapsed_time = sum(env.total_ll_steps for env in self.envs.values()) * first_env.ll_step_duration
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:

@@ -17,6 +17,8 @@ AirsimAlgorithmPython 是无人机仿真系统的算法核心，提供智能控�
 - ✅ **虚实融合训练**：支持虚拟仿真与实体无人机数据的混合实时训练（Hybrid Training）。
 - ✅ **跨格式透明分析**：无缝对比 JSON（实体机）与 CSV（仿真）数据，自动字段对齐，支持 DDPG vs DQN 算法性能对比。
 - ✅ **多无人机协同**：支持 1-10 台无人机集群控制，提供协同效能量化评估。
+- ✅ **统一可视化框架** ⭐ NEW：可插拔式面板系统，支持多种算法场景，代码复用率高，易于扩展。
+- ✅ **配置架构优化** ⭐ NEW：统一无人机配置管理，避免配置冗余，支持虚拟/实体/混合模式灵活切换。
 
 ---
 
@@ -51,7 +53,41 @@ pip install -e .
 
 ### 2. 配置参数
 
-编辑 `multirotor/scanner_config.json`：
+#### 无人机配置（统一配置源）⭐
+
+编辑 `multirotor/drones_config.json` 配置所有无人机：
+
+```json
+{
+  "drones": {
+    "UAV1": {
+      "enabled": true,
+      "type": "virtual",
+      "isCrazyflieMirror": false,
+      "description": "虚拟无人机1（AirSim）"
+    },
+    "UAV2": {
+      "enabled": true,
+      "type": "physical",
+      "isCrazyflieMirror": true,
+      "description": "实体无人机（Crazyflie）"
+    }
+  },
+  "training": {
+    "dqn": {
+      "use_all_drones": false,
+      "drone_list": ["UAV1"]
+    },
+    "ddpg": {
+      "use_all_drones": true
+    }
+  }
+}
+```
+
+#### APF 算法配置
+
+编辑 `multirotor/apf_algorithm_config.json`：
 
 ```json
 {
@@ -122,14 +158,16 @@ AirsimAlgorithmPython/
 │
 ├── multirotor/                      # 多旋翼控制核心
 │   ├── AlgorithmServer.py           # 主服务器入口 ⭐
-│   ├── scanner_config.json          # 算法配置文件
+│   ├── drones_config.json           # 无人机配置文件（统一配置源）⭐
+│   ├── apf_algorithm_config.json    # APF 算法配置文件
 │   │
 │   ├── Algorithm/                   # 算法实现模块
 │   │   ├── scanner_algorithm.py     # APF 算法核心
 │   │   ├── data_collector.py        # 数据采集模块
+│   │   ├── drones_config.py         # 无人机配置管理类 ⭐
 │   │   ├── HexGridDataModel.py      # 网格数据模型
 │   │   ├── battery_data.py          # 电池状态模型
-│   │   ├── simple_visualizer.py     # 2D 实时可视化
+│   │   ├── simple_visualizer.py     # 2D 实时可视化（别名，推荐使用 Visualization 模块）
 │   │   ├── visualize_scan_csv.py    # CSV 数据分布可视化
 │   │   └── visualize_training_data.py # 科学论证分析工具 (PoC) ✨
 │   │
@@ -155,15 +193,49 @@ AirsimAlgorithmPython/
 │   │   └── training_visualizer.py   # 训练实时可视化
 │   │
 │   ├── DQN_Movement/                 # DQN 移动控制模块 ⭐
-│   │   ├── models/                  # 训练好的模型
+│   │   ├── configs/                 # 配置文件目录 ⭐
+│   │   │   ├── movement_dqn_config.json        # DQN移动控制配置
+│   │   │   └── hierarchical_dqn_config.json    # 分层DQN配置
+│   │   ├── envs/                    # 环境文件 ⭐
+│   │   │   ├── movement_env.py                 # DQN移动环境
+│   │   │   └── hierarchical_movement_env.py    # 分层移动环境
+│   │   ├── scripts/                 # 训练脚本 ⭐
+│   │   │   ├── train_movement_dqn.py           # DQN移动训练（基础）
+│   │   │   ├── train_movement_with_airsim.py   # DQN移动训练（AirSim集成）
+│   │   │   ├── train_hierarchical_dqn.py       # 分层DQN训练（基础）
+│   │   │   └── train_hierarchical_with_airsim.py # 分层DQN训练（AirSim集成）
+│   │   ├── tests/                   # 测试文件 ⭐
+│   │   │   ├── test_movement_dqn.py            # 测试DQN移动模型
+│   │   │   ├── test_hierarchical_dqn.py        # 测试分层DQN
+│   │   │   ├── test_multi_drone_env.py         # 测试多无人机环境
+│   │   │   └── diagnose_dqn_env.py             # 环境诊断工具
+│   │   ├── visualizers/             # 可视化工具 ⭐
+│   │   │   └── hierarchical_visualizer.py      # 分层训练可视化器
+│   │   ├── docs/                    # 文档说明 ⭐
+│   │   │   └── HIERARCHICAL_VISUALIZATION.md   # 分层可视化使用说明
+│   │   ├── models/                  # 训练好的模型（自动生成）
 │   │   ├── logs/                    # 训练日志（自动生成）
-│   │   ├── movement_env.py          # 移动环境定义
-│   │   ├── train_movement_dqn.py    # DQN 训练脚本
-│   │   ├── train_movement_with_airsim.py  # AirSim 环境训练
-│   │   ├── test_movement_dqn.py     # DQN 模型测试
-│   │   └── movement_dqn_config.json # DQN 配置文件
+│   │   ├── README.md                # 目录结构说明 ⭐
+│   │   └── requirements_movement.txt  # 依赖包列表
+│   │
+│   ├── Visualization/               # 统一可视化模块 ⭐ NEW
+│   │   ├── panels/                  # 可插拔面板组件
+│   │   │   ├── environment_panel.py        # 环境状态面板
+│   │   │   ├── training_stats_panel.py     # 训练统计面板
+│   │   │   └── reward_curve_panel.py       # 奖励曲线面板
+│   │   ├── base_visualizer.py       # 可视化器基类
+│   │   ├── runtime_visualizer.py    # 运行时可视化器
+│   │   ├── ddpg_training_visualizer.py      # DDPG 训练可视化器
+│   │   ├── dqn_movement_visualizer.py      # DQN 移动可视化器
+│   │   ├── hierarchical_training_visualizer.py # 分层训练可视化器
+│   │   ├── panel_system.py          # 面板管理系统
+│   │   ├── ARCHITECTURE.md          # 架构设计文档
+│   │   ├── QUICKSTART.md            # 快速开始指南
+│   │   ├── SUMMARY.md               # 详细使用说明
+│   │   └── README.md                # 模块说明文档
 │   │
 │   ├── setup_path.py                # 路径设置工具
+│   ├── 配置文件架构说明.md          # 配置文件架构说明文档 ⭐ NEW
 │   └── DDPG与DQN介绍.md              # 强化学习模块说明
 │
 ├── scripts/                          # 批处理脚本
@@ -243,6 +315,8 @@ AirsimAlgorithmPython/
 
 ### 4. SimpleVisualizer（可视化）
 
+> ⚠️ **注意**：`SimpleVisualizer` 已迁移至统一可视化模块，推荐使用 `RuntimeVisualizer`。
+
 **功能**：2D 实时可视化
 
 **显示内容**：
@@ -253,6 +327,78 @@ AirsimAlgorithmPython/
 - 权重值变化曲线
 
 **启动**：系统自动启动（可通过 `--no-visualization` 禁用）
+
+**新版使用方式**：
+```python
+from multirotor.Visualization.runtime_visualizer import RuntimeVisualizer
+
+visualizer = RuntimeVisualizer(server=algorithm_server)
+visualizer.start_visualization()
+```
+
+### 5. 统一可视化模块 ⭐ NEW
+
+**位置**：`multirotor/Visualization/`
+
+**特性**：
+- 🎨 **统一UI风格**：所有可视化器共享一致的外观
+- 🔌 **可插拔面板**：按需注册，灵活组合
+- 🚀 **易于扩展**：添加新算法只需继承基类
+- 💾 **代码复用**：公共功能不再重复实现
+- 🧵 **线程安全**：内置线程管理和数据缓存
+
+**预置可视化器**：
+- `RuntimeVisualizer` - 运行时监控
+- `DDPGTrainingVisualizer` - DDPG 训练可视化
+- `DQNMovementVisualizer` - DQN 移动可视化
+- `HierarchicalTrainingVisualizer` - 分层DQN训练可视化
+
+**预置面板**：
+- `EnvironmentPanel` - 环境状态
+- `TrainingStatsPanel` - 训练统计
+- `RewardCurvePanel` - 奖励曲线
+- `WeightPanel` - APF权重
+
+**快速开始**：
+```python
+from multirotor.Visualization.runtime_visualizer import RuntimeVisualizer
+
+# 创建可视化器
+visualizer = RuntimeVisualizer(server=your_algorithm_server)
+
+# 启动（独立线程）
+visualizer.start_visualization()
+
+# 停止
+visualizer.stop_visualization()
+```
+
+**自定义可视化器**：
+```python
+from multirotor.Visualization.base_visualizer import BaseVisualizer
+from multirotor.Visualization.panels import EnvironmentPanel, TrainingStatsPanel
+
+class MyVisualizer(BaseVisualizer):
+    def __init__(self, server, env):
+        super().__init__(server, env, window_title="我的算法")
+    
+    def setup_panels(self):
+        self.panel_manager.register_panel(EnvironmentPanel())
+        self.panel_manager.register_panel(TrainingStatsPanel())
+    
+    def get_visualization_data(self):
+        return {
+            'episode_count': self.episode_count,
+            'total_steps': self.total_steps,
+        }
+```
+
+**文档**：
+- [ARCHITECTURE.md](multirotor/Visualization/ARCHITECTURE.md) - 架构设计
+- [QUICKSTART.md](multirotor/Visualization/QUICKSTART.md) - 快速开始
+- [SUMMARY.md](multirotor/Visualization/SUMMARY.md) - 详细说明
+
+**向后兼容**：旧代码无需修改，新旧路径均可使用。
 
 ### 5. UnitySocketServer（通信服务）
 
@@ -273,7 +419,51 @@ AirsimAlgorithmPython/
 
 ## ⚙️ 配置说明
 
-### 算法配置（scanner_config.json）
+### 无人机配置（drones_config.json）⭐
+
+**作用**：统一管理所有无人机的配置，作为 DQN、DDPG、APF 算法的唯一配置源。
+
+**配置项**：
+```json
+{
+  "drones": {
+    "UAV1": {
+      "enabled": true,              // 是否启用该无人机
+      "type": "virtual",            // 类型: virtual (虚拟) 或 physical (实体)
+      "isCrazyflieMirror": false,   // 是否为实体无人机镜像
+      "description": "虚拟无人机1"
+    }
+  },
+  "training": {
+    "dqn": {
+      "use_all_drones": false,      // true=使用所有启用的无人机
+      "drone_list": ["UAV1"]        // 指定使用的无人机列表
+    },
+    "ddpg": {
+      "use_all_drones": true        // DDPG 使用所有启用的无人机
+    }
+  }
+}
+```
+
+**使用方式**：
+```python
+from Algorithm.drones_config import DronesConfig
+
+drones_config = DronesConfig()
+dqn_drones = drones_config.get_training_drones('dqn')  # 获取 DQN 训练使用的无人机
+ddpg_drones = drones_config.get_training_drones('ddpg')  # 获取 DDPG 训练使用的无人机
+```
+
+**配置优势**：
+- ✅ 职责清晰：无人机配置与算法配置分离
+- ✅ 避免冗余：所有训练脚本共享同一配置源
+- ✅ 易于扩展：添加新无人机只需修改一个文件
+- ✅ 灵活切换：支持虚拟/实体/混合模式
+
+详见：`multirotor/配置文件架构说明.md`
+
+### APF 算法配置（apf_algorithm_config.json）
 
 ```json
 {
@@ -1013,12 +1203,28 @@ python -c "from Algorithm.data_collector import DataCollector; print('OK')"
 
 ---
 
-## 📖 相关文档
+## 📚 相关文档
 
 ### 项目文档
 - **DDPG 与 DQN 介绍**：`multirotor/DDPG与DQN介绍.md`
 - **Episode 循环说明**：`multirotor/DDPG_Weight/docs/Episode循环说明.md`
 - **图表预览与分析指南**：`multirotor/DDPG_Weight/docs/CHART_PREVIEW_USAGE.md`
+
+### 配置文件架构 ⭐ NEW
+- **配置文件架构说明**：`multirotor/配置文件架构说明.md`
+  - 无人机配置统一管理
+  - DQN/DDPG 配置分离
+  - 配置优势和迁移指南
+
+### 统一可视化模块 ⭐ NEW
+- **模块说明**：`multirotor/Visualization/README.md`
+- **架构设计**：`multirotor/Visualization/ARCHITECTURE.md`
+- **快速开始**：`multirotor/Visualization/QUICKSTART.md`
+- **详细说明**：`multirotor/Visualization/SUMMARY.md`
+
+### DQN_Movement 模块 ⭐ NEW
+- **目录结构说明**：`multirotor/DQN_Movement/README.md`
+- **分层可视化使用说明**：`multirotor/DQN_Movement/docs/HIERARCHICAL_VISUALIZATION.md`
 
 ---
 
@@ -1051,11 +1257,36 @@ backports.ssl_match_hostname  # SSL 支持
 
 ## 🔄 版本信息
 
-- **当前版本**：1.2.3
+- **当前版本**：1.3.0
 - **Python 版本**：3.7+
-- **最后更新**：2026-01-29 (算法对比完善版)
+- **最后更新**：2026-02-03 (架构优化与可视化重构版)
 
 ### 更新日志
+
+- **v1.3.0**（2026-02-03）⭐ **架构重大升级**
+  - ✨ **统一可视化模块**：全新的可插拔式可视化底座，支持多种算法和训练场景的可视化需求。
+    - 🎨 统一UI风格，所有可视化器共享一致的外观
+    - 🔌 可插拔面板系统，按需注册组合
+    - 🚀 易于扩展，添加新算法只需继承基类
+    - 💾 代码复用率提升，公共功能不再重复实现
+    - 🧵 线程安全，内置线程管理和数据缓存
+  - 🏗️ **DQN_Movement 目录重构**：按功能分类组织，提升可维护性
+    - 📂 configs/ - 配置文件集中管理
+    - 📂 envs/ - 环境文件独立存放
+    - 📂 scripts/ - 训练脚本统一入口
+    - 📂 tests/ - 测试文件完整覆盖
+    - 📂 visualizers/ - 可视化工具模块化
+    - 📂 docs/ - 文档说明详尽规范
+  - 🔧 **配置文件架构优化**：统一无人机配置管理
+    - 新增 `drones_config.json` 作为无人机配置的唯一来源
+    - 所有训练脚本（DQN/DDPG）共享同一配置
+    - 避免配置冗余和不一致问题
+    - 支持虚拟/实体/混合模式灵活切换
+  - 📚 **文档体系完善**：
+    - 新增统一可视化模块文档（ARCHITECTURE.md, QUICKSTART.md, SUMMARY.md）
+    - 新增配置文件架构说明文档
+    - 新增 DQN_Movement 目录结构说明
+  - 🔌 **向后兼容性**：旧代码无需修改，新旧路径均可使用
 
 - **v1.2.3**（2026-01-29）
   - ✨ **全方位算法对比**：扩展 DDPG vs DQN 对比分析，新增学习稳定性、最终性能、参数敏感性等 6 维度深度对比。
@@ -1133,7 +1364,19 @@ backports.ssl_match_hostname  # SSL 支持
 3. **Unity 连接**：Unity 项目必须在 Python 服务器启动后运行
 4. **端口占用**：确保端口 41451 未被占用
 5. **模型文件**：DDPG 模型文件较大，需要足够的存储空间
-6. **目录命名**：确保使用 `DDPG_Weight` 而非 `DQN_Weight`（已重命名）
+6. **配置文件架构** ⭐：
+   - 使用 `drones_config.json` 统一管理所有无人机配置
+   - APF 算法配置已重命名为 `apf_algorithm_config.json`（旧名 `scanner_config.json` 已废弃）
+   - DQN/DDPG 配置文件中不再包含无人机配置
+   - 详见 `multirotor/配置文件架构说明.md`
+7. **可视化模块** ⭐：
+   - 推荐使用新的统一可视化模块 `multirotor/Visualization/`
+   - 旧路径 `Algorithm/simple_visualizer.py` 仍可用但已标记为别名
+   - 详见 `multirotor/Visualization/README.md`
+8. **DQN_Movement 目录结构** ⭐：
+   - 已按功能重构，配置文件位于 `configs/`，环境文件位于 `envs/`
+   - 训练脚本位于 `scripts/`，测试文件位于 `tests/`
+   - 详见 `multirotor/DQN_Movement/README.md`
 
 ---
 

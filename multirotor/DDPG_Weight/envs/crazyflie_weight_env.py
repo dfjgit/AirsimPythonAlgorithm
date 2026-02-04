@@ -758,21 +758,23 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         done = False
         elapsed_time = self.step_count * self.step_duration
         
-        if self.step_count >= self.config.max_steps:
-            print(f"[终止] 达到最大步数: {self.step_count}")
+        # 1. 达到最大物理仿真时间
+        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
+            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
             done = True
+        # 2. 碰撞次数达到阈值
         elif self.collision_count >= self.term_cfg['max_collision_count']:
-            print(f"[终止] 发生碰撞: {self.collision_count}")
+            print(f"[终止] 发生碰撞: {self.collision_count} / {self.term_cfg['max_collision_count']}")
             done = True
+        # 3. 检查覆盖率
         else:
-            # 检查覆盖率
             if self.server and self.server.grid_data and self.server.grid_data.cells:
                 total_cells = len(self.server.grid_data.cells)
                 if total_cells > 0:
                     scanned_cells = self._count_scanned_cells()
                     scan_ratio = scanned_cells / total_cells
                     if scan_ratio >= self.term_cfg['target_scan_ratio']:
-                        print(f"[终止] 覆盖率达成: {scan_ratio:.2%}")
+                        print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
                         done = True
 
         info = {"weights": weights}

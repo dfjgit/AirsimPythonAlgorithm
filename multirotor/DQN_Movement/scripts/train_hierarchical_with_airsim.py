@@ -242,10 +242,23 @@ def train_hrl_with_airsim(enable_visualization=True):
         
     except KeyboardInterrupt:
         print("\n训练被用户中断")
+        # 保存中断时的模型（固定名称，避免一直生成多个文件）
+        interrupted_model_path = os.path.join(model_dir, 'hrl_hl_airsim_interrupted')
+        model.save(interrupted_model_path)
+        print(f"✓ 中断时的模型已保存(已覆盖): {interrupted_model_path}.zip")
+        print(f"💡 提示: 可以使用此模型继续训练或用于测试")
     except Exception as e:
         print(f"\n✗ 训练出错: {str(e)}")
         import traceback
         traceback.print_exc()
+        # 出错时也尝试保存模型
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        error_model_path = os.path.join(model_dir, f'hrl_hl_airsim_error_{timestamp}')
+        try:
+            model.save(error_model_path)
+            print(f"✓ 出错时的模型已保存: {error_model_path}.zip")
+        except Exception as save_error:
+            print(f"✗ 保存出错模型失败: {str(save_error)}")
     finally:
         # 停止可视化
         if visualizer:

@@ -61,31 +61,6 @@ class HierarchicalGridPanel(BasePanel):
             text = self._font.render("等待高层决策...", True, self.GRAY)
             screen.blit(text, (text_x, y))
             y += 20
-        
-        # 绘制网格示意图(简化版)
-        y += 10
-        grid_size = 40
-        grid_start_x = text_x + 10
-        grid_start_y = y
-        
-        # 绘制5x5小格子
-        for row in range(5):
-            for col in range(5):
-                rect_x = grid_start_x + col * grid_size
-                rect_y = grid_start_y + row * grid_size
-                
-                # 绘制格子
-                pygame.draw.rect(screen, self.DARK_GRAY, 
-                               (rect_x, rect_y, grid_size-2, grid_size-2))
-                pygame.draw.rect(screen, self.YELLOW,
-                               (rect_x, rect_y, grid_size-2, grid_size-2), 1)
-                
-                # 绘制格子编号
-                action_id = row * 5 + col
-                text = self._small_font.render(str(action_id), True, self.LIGHT_GRAY)
-                text_rect = text.get_rect(center=(rect_x + grid_size//2 - 1, 
-                                                  rect_y + grid_size//2 - 1))
-                screen.blit(text, text_rect)
     
     def _get_drone_color(self, drone_name: str) -> Tuple[int, int, int]:
         """为无人机分配颜色"""
