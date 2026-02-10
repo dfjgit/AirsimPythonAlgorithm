@@ -129,7 +129,8 @@ class BaseVisualizer(ABC):
         Args:
             grid_data: HexGridDataModel实例
         """
-        if not grid_data or not hasattr(grid_data, 'cells'):
+        # 如果没有网格数据或网格被清空，直接返回（Pygame主循环每帧会fill BLACK，所以不需要额外操作）
+        if not grid_data or not hasattr(grid_data, 'cells') or len(grid_data.cells) == 0:
             return
         
         # 缓存小字体
@@ -323,6 +324,15 @@ class BaseVisualizer(ABC):
         if not self.server:
             return None, {}
         
+        # 如果服务端显式要求刷新（例如reset_environment后），跳过缓存并清空
+        try:
+            if self.server and getattr(self.server, '_vis_snapshot_cache', None) is None:
+                self._cached_grid_data = None
+                self._cached_runtime_data = {}
+                self._last_data_update = 0
+        except Exception:
+            pass
+
         current_time = time.time()
         if current_time - self._last_data_update < self._data_update_interval:
             return self._cached_grid_data, self._cached_runtime_data
@@ -428,11 +438,11 @@ class BaseVisualizer(ABC):
                 self.setup_panels()
                 
                 print("="  * 60)
-                print(f"✅ {self.window_title} 已启动")
-                print("💡 按ESC键关闭窗口")
+                print(f"[OK] {self.window_title} 已启动")
+                print("按ESC键关闭窗口")
                 print("=" * 60)
         except Exception as e:
-            print(f"❌ Pygame初始化失败: {str(e)}")
+            print(f"[ERROR] Pygame初始化失败: {str(e)}")
             self.running = False
             return
         

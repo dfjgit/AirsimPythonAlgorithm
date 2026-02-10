@@ -10,6 +10,7 @@ from datetime import datetime
 import threading
 import time
 import argparse
+import subprocess
 
 # 添加项目路径
 # scripts -> DQN_Movement -> multirotor -> 项目根目录
@@ -32,6 +33,14 @@ from stable_baselines3.common.monitor import Monitor
 from envs.hierarchical_movement_env import HierarchicalMovementEnv, MultiDroneHierarchicalMovementEnv
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.drones_config import DronesConfig
+
+# 独立进程可视化 (pygame 不与训练进程共享)
+try:
+    from multirotor.Visualization.visualization_ipc import VisualizationIPCServer
+    HAS_EXT_VIS = True
+except Exception:
+    HAS_EXT_VIS = False
+    print("警告: 无法导入 VisualizationIPCServer，独立可视化将被禁用")
 
 # 导入可视化器
 try:
@@ -99,7 +108,7 @@ def train_hrl_with_airsim(enable_visualization=True):
     with open(hrl_config_path, 'r', encoding='utf-8') as f:
         hrl_config = json.load(f)
 
-    config_file = os.path.join(os.path.dirname(__file__), "..", "apf_algorithm_config.json")
+    config_file = os.path.join(os.path.dirname(__file__), "..", "..", "apf_algorithm_config.json")
 
     # 2. 启动 AirSim 服务器（禁用SimpleVisualizer，使用HierarchicalVisualizer代替）
     print(f"正在启动服务器 (DQN控制模式)...")
@@ -122,6 +131,70 @@ def train_hrl_with_airsim(enable_visualization=True):
         sys.exit(1)
 
     print(f"✓ 无人机任务启动成功")
+
+    # 启动独立进程可视化（默认启用，可通过 --no-visualization 或环境变量 NO_VIS=1 禁用）
+    ipc_server = None
+    vis_process = None
+    vis_log_f = None
+    vis_log_path = None
+
+    _disable_vis = (not enable_visualization) or (os.environ.get('NO_VIS', '0') == '1')
+    if HAS_EXT_VIS and (not _disable_vis):
+        try:
+            ipc_server = VisualizationIPCServer(
+                snapshot_provider=server.get_visualization_snapshot,
+                host='127.0.0.1',
+                port=0,
+                hz=10.0,
+                compress_level=1
+            )
+            ipc_server.start()
+            port = ipc_server.bound_port
+
+            # 外部可视化日志
+            os.makedirs(log_dir, exist_ok=True)
+            vis_log_path = os.path.join(log_dir, 'external_vis.log')
+            vis_log_f = open(vis_log_path, 'w', encoding='utf-8')
+
+            python_exe = sys.executable
+            vis_entry = os.path.join(project_root, 'multirotor', 'Visualization', 'external_visualizer_client.py')
+            vis_cmd = [python_exe, vis_entry, '--mode', 'hrl', '--host', '127.0.0.1', '--port', str(port)]
+
+            vis_env = os.environ.copy()
+            vis_env['PYTHONIOENCODING'] = 'utf-8'
+            vis_env['PYTHONUTF8'] = '1'
+
+            creationflags = 0
+            if os.name == 'nt' and os.environ.get('VIS_NEW_CONSOLE', '0') == '1':
+                creationflags = subprocess.CREATE_NEW_CONSOLE
+
+            vis_process = subprocess.Popen(
+                vis_cmd,
+                stdout=vis_log_f,
+                stderr=vis_log_f,
+                creationflags=creationflags,
+                env=vis_env
+            )
+
+            time.sleep(0.5)
+            rc = vis_process.poll()
+            if rc is not None:
+                print(f"! 独立可视化进程启动后立即退出 (returncode={rc})")
+                print(f"  - 请查看: {vis_log_path}")
+            else:
+                print(f"✓ 已启动独立可视化进程 (port={port})")
+                print(f"  - 外部可视化日志: {vis_log_path}")
+        except Exception as e:
+            print(f"! 启动独立可视化失败: {e}")
+            if vis_log_path:
+                print(f"  - 外部可视化日志(若已生成): {vis_log_path}")
+            try:
+                if ipc_server:
+                    ipc_server.stop()
+            except Exception:
+                pass
+            ipc_server = None
+            vis_process = None
 
     # 2.5 设置实验元数据 (用于跨方案数据对比)
     if hasattr(server, 'set_experiment_meta'):

@@ -41,7 +41,7 @@ class DDPGTrainingVisualizer(BaseVisualizer):
         super().__init__(
             server=server,
             env=env,
-            window_title="🎯 DDPG训练实时可视化"
+            window_title="DDPG训练实时可视化"
         )
         
         # 训练统计数据

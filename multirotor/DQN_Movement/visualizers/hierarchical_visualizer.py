@@ -87,6 +87,9 @@ class HierarchicalVisualizer:
         self.total_steps = 0
         self.current_episode_reward = 0
         self._entropy_stats = {}  # 熵值统计
+        self.episode_start_time = None
+        self.last_episode_duration = 0.0
+        self.total_training_time = 0.0
         
     def _update_scale(self):
         """根据Leader扫描范围自动调整缩放比例"""
@@ -595,6 +598,20 @@ class HierarchicalVisualizer:
                 (f"Total Steps: {self.total_steps}", self.WHITE),
                 (f"Episode Reward: {self.current_episode_reward:.2f}", self.WHITE),
             ]
+
+            # Episode 时间信息
+            # 当前正在进行的episode耗时（实时）
+            if self.episode_start_time is not None:
+                current_ep_time = time.time() - self.episode_start_time
+                stats.append((f"Current Episode Time: {current_ep_time:.1f} s", self.WHITE))
+            else:
+                # 若当前没有在运行的episode，则展示上一轮最终耗时
+                if self.last_episode_duration > 0:
+                    stats.append((f"Last Episode Time: {self.last_episode_duration:.1f} s", self.WHITE))
+
+            # 累计所有episode训练总时长
+            if self.total_training_time > 0:
+                stats.append((f"Total Training Time: {self.total_training_time:.1f} s", self.WHITE))
             
             # 添加环境统计
             if hasattr(self.env, 'step_count'):
@@ -793,6 +810,10 @@ class HierarchicalVisualizer:
     
     def update_training_data(self, step: int, action: int, reward: float, drone_name: str = "UAV1"):
         """更新训练数据（由训练脚本调用）"""
+        # 若当前没有记录episode开始时间，则认为是新的一轮episode开始
+        if self.episode_start_time is None:
+            self.episode_start_time = time.time()
+        
         self.total_steps = step
         self.current_episode_reward += reward
         self.hl_action_history.append((step, action, drone_name))
@@ -800,6 +821,12 @@ class HierarchicalVisualizer:
     
     def on_episode_end(self, episode: int):
         """Episode结束时调用"""
+        # 计算本轮episode耗时并累加到总训练时长
+        if self.episode_start_time is not None:
+            self.last_episode_duration = time.time() - self.episode_start_time
+            self.total_training_time += self.last_episode_duration
+            self.episode_start_time = None
+        
         self.episode_count = episode
         self.current_episode_reward = 0
     

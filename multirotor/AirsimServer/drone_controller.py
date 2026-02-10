@@ -305,8 +305,8 @@ class DroneController:
         
         # 1. 更新飞行状态
         # LandedState: 0=Landed, 1=Flying, 2=TakingOff, 3=Landing
-        # 我们认为只要不是处于完全降落状态，都属于“广义飞行”中
-        flying_status = (state.landed_state != airsim.LandedState.Landed)
+        # 严格同步：只有处于 Flying (1) 状态才认为起飞稳定完成
+        flying_status = (state.landed_state == airsim.LandedState.Flying)
         self._update_state_field(vehicle_name, "flying", flying_status)
         
         # 2. 更新位置

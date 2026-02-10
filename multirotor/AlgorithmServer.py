@@ -102,9 +102,9 @@ class MultiDroneAlgorithmServer:
         self.max_episode_seconds = max_episode_seconds  # 单轮训练最大时长（秒）
         self._episode_start_time = time.time()
         self.ready_event = threading.Event()  # 同步所有无人机首帧runtime到位
+        self.reset_ack_event = threading.Event()  # 用于重置闭环同步
         self.resetting = False  # 正在重置标志
         self.running = False
-        self.resetting = True
         self.drone_threads: Dict[str, Optional[threading.Thread]] = {
             name: None for name in self.drone_names
         }
@@ -127,6 +127,10 @@ class MultiDroneAlgorithmServer:
         # 可视化组件
         self.visualizer = None
         self.enable_visualization = enable_visualization
+
+        # 可视化快照缓存（供独立可视化进程读取）
+        self._vis_snapshot_cache = None
+        self._vis_snapshot_cache_time = 0.0
 
         # 数据采集系统（根据控制模式选择不同的数据目录）
         if control_mode.lower() == 'dqn':
@@ -597,13 +601,24 @@ class MultiDroneAlgorithmServer:
                         if not self.ready_event.is_set():
                             # 确保本次包里包含全部无人机，且每机都有有效位置
                             received_names = {runtime_data.get('uavname') for runtime_data in runtime_data_list if runtime_data.get('uavname') in self.unity_runtime_data}
-                            all_valid = all(
-                                (self.unity_runtime_data[n].position is not None)
-                                for n in self.drone_names
-                            )
+                            
+                            # 严格检查：必须在 unity_runtime_data 中有值，且 position 不能为 None (None 表示重置后尚未收到新包)
+                            all_valid = True
+                            for n in self.drone_names:
+                                if n not in self.unity_runtime_data or self.unity_runtime_data[n].position is None:
+                                    all_valid = False
+                                    break
+                                    
                             if received_names == set(self.drone_names) and all_valid:
-                                logger.info(f"首帧 runtime_data 收齐（{len(received_names)}台），解除同步锁")
-                                self.ready_event.set()
+                                # 关键逻辑：重置期间禁止自动解锁 ready_event
+                                if not self.resetting:
+                                    logger.info(f"首帧 runtime_data 收齐（{len(received_names)}台），解除同步锁")
+                                    self.ready_event.set()
+                                else:
+                                    # 重置期间只触发 ACK 信号，由 reset_environment 流程控制最终解锁
+                                    if not self.reset_ack_event.is_set():
+                                        logger.info("[重置] 收到重置后的首帧有效数据，触发 ACK (ready_event保持阻塞)")
+                                        self.reset_ack_event.set()
                         # ---------------------
 
                 # 检查是否包含grid_data字段
@@ -900,6 +915,11 @@ class MultiDroneAlgorithmServer:
         self.ready_event.wait()
         logger.info(f"[{drone_name}] 首帧同步完成，开始决策循环")
         while self.running:
+            # 重置/同步期间需要再次阻塞，避免起飞未完成就开始执行动作
+            if not self.ready_event.is_set():
+                logger.debug(f"[{drone_name}] 等待重置后同步...")
+                self.ready_event.wait()
+                logger.info(f"[{drone_name}] 重置后同步完成，继续决策")
             try:
                 # 训练模式下 episode/step 由训练端环境统一管理：
                 # AlgorithmServer 不再在循环内基于超时自动 reset。
@@ -1149,150 +1169,176 @@ class MultiDroneAlgorithmServer:
         logger.debug(f"DQN设置移动指令: {drone_name} -> {direction}")
 
 
-    def reset_environment(self) -> None:
-        """重置运行环境（网格熵值、无人机位置、Leader等）"""
-        logger.info("[重置] 正在重置运行环境...")
+    def get_visualization_snapshot(self) -> Dict[str, Any]:
+        """为独立可视化进程提取数据快照（非阻塞）"""
+        now = time.time()
+        # 频率限制，避免过度消耗 CPU 序列化大数据
+        if self._vis_snapshot_cache and (now - self._vis_snapshot_cache_time < 0.05):
+            return self._vis_snapshot_cache
+
+        snapshot = {
+            'timestamp': now,
+            'drone_names': self.drone_names,
+            'control_mode': self.control_mode,
+            'config_data': {
+                'scanRadius': self.config_data.scanRadius,
+                'moveSpeed': self.config_data.moveSpeed,
+                'updateInterval': self.config_data.updateInterval
+            }
+        }
+
+        # 0. 提取电量数据（供外部可视化进程显示）
+        try:
+            snapshot['battery_data'] = self.get_all_battery_data()
+        except Exception:
+            pass
+
+        # 1. 尝试提取网格数据 (带极短超时)
+        if self.grid_lock.acquire(timeout=0.01):
+            try:
+                if self.grid_data and hasattr(self.grid_data, 'cells') and len(self.grid_data.cells) > 0:
+                    snapshot['grid_data'] = {
+                        'cells': [
+                            {
+                                'x': c.center.x, 
+                                'y': c.center.y, 
+                                'z': c.center.z, 
+                                'entropy': c.entropy
+                            } for c in self.grid_data.cells
+                        ]
+                    }
+                else:
+                    # 显式返回空列表，强制外部可视化刷新清空旧热力图
+                    snapshot['grid_data'] = {'cells': []}
+            finally:
+                self.grid_lock.release()
+        else:
+            # 获取锁失败时，如果不为空则延用上一帧（如果是重置期间，则强制为空）
+            if self.resetting:
+                snapshot['grid_data'] = {'cells': []}
         
-        # 0. 立即刹车/悬停，防止上一帧速度延续
+        # 2. 尝试提取运行时数据
+        if self.data_lock.acquire(timeout=0.01):
+            try:
+                runtimes = {}
+                for name, rd in self.unity_runtime_data.items():
+                    runtimes[name] = {
+                        'position': {'x': rd.position.x, 'y': rd.position.y, 'z': rd.position.z} if rd.position else None,
+                        'forward': {'x': rd.forward.x, 'y': rd.forward.y, 'z': rd.forward.z} if rd.forward else None,
+                        'finalMoveDir': {'x': rd.finalMoveDir.x, 'y': rd.finalMoveDir.y, 'z': rd.finalMoveDir.z} if rd.finalMoveDir else None,
+                        'leader_position': {'x': rd.leader_position.x, 'y': rd.leader_position.y, 'z': rd.leader_position.z} if rd.leader_position else None,
+                        'leader_scan_radius': rd.leader_scan_radius
+                    }
+                snapshot['unity_runtime_data'] = runtimes
+            finally:
+                self.data_lock.release()
+
+        # 3. 提取训练统计 (如果有)
+        if hasattr(self, 'data_collector') and self.data_collector:
+            snapshot['training_stats'] = self.data_collector.external_data
+        
+        # 增加额外的训练实时统计（用于 DQN 面板）
+        if hasattr(self, 'current_training_stats'):
+            snapshot['current_training_stats'] = self.current_training_stats
+
+        self._vis_snapshot_cache = snapshot
+        self._vis_snapshot_cache_time = now
+        return snapshot
+
+    def reset_environment(self, reason: str = "Unknown") -> None:
+        """重置运行环境（严格闭合流程：停止-物理重置-起飞-清空数据-Unity重置-等待反馈-启动）"""
+        logger.info(f"[重置] 🔄 开始严格重置流程... (原因: {reason})")
+        self.resetting = True
+        self.reset_ack_event.clear()
+        self.ready_event.clear()  # 确保算法线程在重置期间阻塞
+        
+        # 0. 立即停止仿真并刹车
         for d_name in self.drone_names:
             try:
                 if not self.drones_config.is_crazyflie_mirror(d_name):
-                    # AirSim 虚拟无人机：发 0 速度短指令，相当于 hover
                     self.drone_controller.move_by_velocity(0, 0, 0, 0.1, d_name)
                 else:
-                    # Crazyflie 镜像：直接发送悬停
                     self.crazyswarm.hover(d_name)
             except Exception:
                 pass
-        time.sleep(0.2)  # 等待刹车生效
+        time.sleep(0.2)
         
-        # 智能重置判断：检查无人机是否已经在起点且处于飞行状态
-        need_physical_reset = False
-        
-        # 如果是实体无人机镜像，我们通常不执行物理重置 (交给外部控制或手动重置)
-        # 仅针对虚拟无人机 (AirSim) 进行智能判断
-        for drone_name in self.drone_names:
-            if not self.drones_config.is_crazyflie_mirror(drone_name):
-                try:
-                    state = self.drone_controller.get_vehicle_state(drone_name)
-                    pos = state.get("position", (0, 0, 0)) # AirSim 坐标: (x, y, z)
-                    api_enabled = state.get("api_enabled", False)
-                    flying = state.get("flying", False)
-                    
-                    # 计算水平距离：使用 AirSim NED 的水平面 (x,y)，并以记录的 home_xy 作为参考点
-                    home_xy = self.home_positions.get(drone_name, (0.0, 0.0))
-                    dx = float(pos[0]) - float(home_xy[0])
-                    dy = float(pos[1]) - float(home_xy[1])
-                    horizontal_dist = math.sqrt(dx**2 + dy**2)
-                    
-                    # 记录详细日志以便排查
-                    logger.info(f"[重置检测] 无人机:{drone_name}, 位置:({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
-                                f"home_xy:({home_xy[0]:.2f},{home_xy[1]:.2f}), 水平偏移:{horizontal_dist:.2f}m, API启用:{api_enabled}, 飞行状态:{flying}")
-                    
-                    # 放宽水平距离阈值，允许起飞后漂移；仅当不在飞行状态或距离过远（>10m）时才物理重置
-                    if not flying or horizontal_dist > 10.0:
-                        need_physical_reset = True
-                        reason = "距离过远" if horizontal_dist > 10.0 else "未处于飞行状态"
-                        logger.info(f"[重置检测] 判定需要物理重置，原因: {reason}")
-                        break
-                except Exception as e:
-                    logger.debug(f"[重置] 获取无人机{drone_name}状态失败，默认执行物理重置: {e}")
-                    need_physical_reset = True
-                    break
-        
-        # 1. 重置AirSim模拟器和无人机位置 (仅针对虚拟无人机)
-        if need_physical_reset and hasattr(self, 'drone_controller') and self.drone_controller.connection_status:
+        # 1. 强制执行 AirSim 物理重置 (回到地面未起飞状态)
+        # 不再进行水平距离和飞行状态判断，为了实验严谨性，每轮都重新开始
+        if hasattr(self, 'drone_controller') and self.drone_controller.connection_status:
             try:
-                logger.info("[重置] 检测到无人机偏移或未就绪，执行 AirSim 物理重置...")
+                logger.info("[重置] 1/5 执行 AirSim 物理重置 (强制回到地面)...")
                 
-                # 检查所有无人机的碰撞状态
+                # 检查碰撞状态并安全恢复（避免重置后卡在地面）
                 for drone_name in self.drone_names:
                     if not self.drones_config.is_crazyflie_mirror(drone_name):
                         collision = self.drone_controller.check_collision(drone_name)
                         if collision['has_collided']:
-                            logger.warning(f"[重置] 无人机{drone_name}处于碰撞状态，将执行安全恢复")
-                            # 先尝试悬停恢复
                             self.drone_controller.recover_from_collision(drone_name)
                 
-                # 执行安全重置(带防穿地保护)
+                # 执行模拟器 reset
                 self.drone_controller.reset()
+                time.sleep(1.0)
                 
-                # 重置后需要重新初始化无人机并起飞
-                time.sleep(1)
-                logger.info("[重置] 重新初始化无人机并重置电量...")
-                self._init_drones()
+                # 重新初始化 API 控制和解锁
+                logger.info("[重置] 重新初始化无人机控制权...")
+                if not self._init_drones():
+                    logger.error("[重置] 无人机重新初始化失败")
                 
-                # 重置所有无人机电量数据
-                # 清空本地缓存，防止旧决策影响新一轮训练
-                self._clear_local_data()
-                # 清零 DQN 指令缓存
-                with self.dqn_command_lock:
-                    for k in self.dqn_commands:
-                        self.dqn_commands[k] = Vector3(0, 0, 0)
-                # 告知 Unity 覆盖旧 runtime（moveDir 归零）
-                if self.unity_socket and self.unity_socket.is_connected():
-                    empty_rts = []
-                for n in self.drone_names:
-                        rt = ScannerRuntimeData()
-                        rt.uavname = n
-                        empty_rts.append(rt)
-                try:
-                    self.unity_socket.send_runtime(empty_rts)
-                except Exception:
-                    pass
-
+                # 重新执行起飞流程
+                logger.info("[重置] 无人机重新起飞...")
+                if not self._takeoff_all():
+                    logger.error("[重置] 无人机重新起飞失败")
                 
-                for drone_name in self.drone_names:
-                    self.reset_battery_voltage(drone_name)
+                # 等待起飞稳定
+                self._wait_for_takeoff()
                 
-                logger.info("[重置] 所有无人机重新起飞...")
-                self._takeoff_all()
             except Exception as e:
-                logger.error(f"[重置] AirSim重置失败: {str(e)}")
-        else:
-            logger.info("[重置] 🚀 无人机已在起点并处于飞行状态，跳过 AirSim 物理重置(降落/起飞)")
-            # 即使跳过物理重置，也总是重置电量数据以保证统计准确
-            for drone_name in self.drone_names:
-                self.reset_battery_voltage(drone_name)
-            # 清空本地缓存，防止旧决策影响新一轮训练
-            self._clear_local_data()
-            # 清零 DQN 指令缓存
-            with self.dqn_command_lock:
-                for k in self.dqn_commands:
-                    self.dqn_commands[k] = Vector3(0, 0, 0)
-            # 告知 Unity 覆盖旧 runtime（moveDir 归零）
-            if self.unity_socket and self.unity_socket.is_connected():
-                empty_rts = []
-                for n in self.drone_names:
-                        rt = ScannerRuntimeData()
-                        rt.uavname = n
-                        empty_rts.append(rt)
-                try:
-                    self.unity_socket.send_runtime(empty_rts)
-                except Exception:
-                    pass
+                logger.error(f"[重置] AirSim 物理重置流程异常: {e}")
 
-        # 2. 发送重置命令到Unity（重置网格数据、Leader状态等）
+        # 2. 清理本地数据状态与电量
+        logger.info("[重置] 2/5 清理本地算法与统计数据...")
+        with self.grid_lock:
+            # 修正：使用 reset_entropy() 保持对象引用和全量单元格列表，仅重置数值
+            # 这样能确保外部可视化快照始终包含完整网格，解决重置后热力图消失/卡死问题
+            self.grid_data.reset_entropy()
+            
+        self._clear_local_data()
+        with self.dqn_command_lock:
+            for k in self.dqn_commands:
+                self.dqn_commands[k] = Vector3(0, 0, 0)
+        
+        # 强制立即刷新可视化快照，清除旧网格缓存
+        self._vis_snapshot_cache = None
+        self._vis_snapshot_cache_time = 0.0
+        
+        # 3. 发送重置命令到 Unity (重置网格和 Leader)
         if self.unity_socket and self.unity_socket.is_connected():
-            logger.info("[重置] 发送重置命令到Unity...")
+            logger.info("[重置] 3/5 发送重置命令到 Unity，等待反馈 (ACK)...")
             self.unity_socket.send_reset_command()
             
-            # 等待较长时间，确保Unity完成重置并发送新数据
-            time.sleep(3.0) 
-            logger.info("[重置] Unity重置指令已发送，等待接收新数据")
+            # 4. 等待 Unity 返回重置完毕的数据 (ACK)
+            wait_start = time.time()
+            success = self.reset_ack_event.wait(timeout=10.0)
             
-            # 关键修复：重置后必须重新发送start_simulation指令，让Leader恢复移动
-            logger.info("[重置] 发送start_simulation指令，让Leader恢复移动...")
+            if success:
+                logger.info(f"[重置] ✅ 收到 Unity 反馈，耗时: {time.time() - wait_start:.2f}s")
+            else:
+                logger.warning("[重置] ⚠️ 等待 Unity 重置反馈超时")
+            
+            # 5. 最后发送启动仿真指令
+            logger.info("[重置] 4/5 发送 start_simulation 指令，Leader 开始移动")
             self.unity_socket.send_start_simulation_command()
-            time.sleep(0.5)  # 等待Unity处理指令
-            logger.info("[重置] Leader已恢复移动")
+            time.sleep(0.5) 
         else:
-            logger.warning("[重置] Unity未连接，仅清空本地网格数据")
-            # 清空Python端的网格数据
+            logger.warning("[重置] Unity 未连接，仅清空本地数据")
             with self.grid_lock:
                 self.grid_data.cells.clear()
         
-        logger.info("[重置] 环境重置流程执行完毕")
+        # 所有重置流程结束后，显式放行算法线程
+        self.resetting = False
+        self.ready_event.set()
+        logger.info("[重置] ✨ 严格重置流程执行完毕，系统已回到初始状态，算法线程已放行")
     
     def stop(self) -> None:
         """停止服务：降落无人机，断开连接，清理资源"""
@@ -1461,19 +1507,23 @@ class MultiDroneAlgorithmServer:
         try:
             # 重置运行时数据
             for drone_name in self.drone_names:
+                # 显式将 position 设为 None，避免默认 Vector3() 触发同步误判
                 self.unity_runtime_data[drone_name] = ScannerRuntimeData()
+                self.unity_runtime_data[drone_name].position = None 
+                
                 self.processed_runtime_data[drone_name] = ScannerRuntimeData()
                 self.last_positions[drone_name] = {}
             
-            # 重置网格数据
-            self.grid_data = HexGridDataModel()
+            # 重置网格数据 (仅重置熵值，保持格子对象引用和列表结构稳定)
+            with self.grid_lock:
+                self.grid_data.reset_entropy()
             
             # 重新创建算法实例
             self.algorithms = {
                 name: ScannerAlgorithm(self.config_data) for name in self.drone_names
             }
             
-            logger.info("本地数据清理完成")
+            logger.info("本地数据清理完成 (Position已置空)")
         except Exception as e:
             logger.error(f"清理本地数据失败: {str(e)}")
 

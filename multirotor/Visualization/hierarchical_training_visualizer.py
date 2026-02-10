@@ -49,7 +49,7 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
         super().__init__(
             server=server,
             env=env,
-            window_title="🎯 Hierarchical DQN Training Visualization"
+            window_title="Hierarchical DQN Training Visualization"
         )
         
         # 数据缓存
@@ -63,6 +63,10 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
         self.total_steps = 0
         self.current_episode_reward = 0
         self._entropy_stats = {}  # 熵值统计
+        # Episode 时间统计
+        self.episode_start_time = None
+        self.last_episode_duration = 0.0
+        self.total_training_time = 0.0
     
     def setup_panels(self):
         """注册分层DQN专用面板"""
@@ -95,6 +99,14 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
         data['total_steps'] = self.total_steps
         data['current_episode_steps'] = getattr(self.env, 'step_count', 0) if self.env else 0
         data['current_episode_reward'] = self.current_episode_reward
+
+        # Episode 时间信息
+        if self.episode_start_time is not None:
+            data['current_episode_time'] = time.time() - self.episode_start_time
+        elif self.last_episode_duration > 0:
+            data['last_episode_duration'] = self.last_episode_duration
+        if self.total_training_time > 0:
+            data['total_training_time'] = self.total_training_time
         
         # 奖励历史
         data['reward_history'] = list(self.reward_history)
@@ -147,6 +159,11 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
             reward: 奖励值
             drone_name: 无人机名称
         """
+        # 若当前没有记录episode开始时间，则认为是新的一轮episode开始
+        if self.episode_start_time is None:
+            import time as _time
+            self.episode_start_time = _time.time()
+
         self.total_steps = step
         self.current_episode_reward += reward
         self.hl_action_history.append((step, action, drone_name))
@@ -159,6 +176,13 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
         Args:
             episode: Episode编号
         """
+        # 计算本轮episode耗时并累加到总训练时间
+        if self.episode_start_time is not None:
+            import time as _time
+            self.last_episode_duration = _time.time() - self.episode_start_time
+            self.total_training_time += self.last_episode_duration
+            self.episode_start_time = None
+
         self.episode_count = episode
         self.current_episode_reward = 0
     
@@ -206,32 +230,37 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
             traceback.print_exc()
     
     def _get_leader_info(self, data: Dict[str, Any]) -> Tuple[Optional[Vector3], float]:
-        """获取Leader位置和扫描半径（使用runtime_data中的leader信息）"""
+        """获取Leader位置和扫描半径（增强兼容性）"""
         try:
-            # 从 runtime_data 获取Leader的实际扫描范围
             runtime_data = data.get('runtime_data', {})
             if runtime_data:
                 first_drone_data = next(iter(runtime_data.values()), None)
                 if first_drone_data:
-                    # runtime_data是字典格式（来自基类的update_data方法）
-                    center = first_drone_data.get('leaderPosition') if isinstance(first_drone_data, dict) else getattr(first_drone_data, 'leader_position', None)
-                    radius = first_drone_data.get('leaderScanRadius') if isinstance(first_drone_data, dict) else getattr(first_drone_data, 'leader_scan_radius', None)
-                    
-                    # 调试日志：打印实际读取的值
-                    # print(f"[DEBUG] Leader信息 - 位置: {center}, 半径: {radius}")
-                    # print(f"[DEBUG] runtime_data类型: {type(first_drone_data)}")
+                    # 优先从字典中获取（base_visualizer.update_data 转换后的格式）
+                    if isinstance(first_drone_data, dict):
+                        center = first_drone_data.get('leaderPosition')
+                        radius = first_drone_data.get('leaderScanRadius')
+                    else:
+                        # 尝试从对象属性获取
+                        center = getattr(first_drone_data, 'leader_position', None)
+                        radius = getattr(first_drone_data, 'leader_scan_radius', None)
                     
                     if center and radius and radius > 0:
-                        return center, radius
-                    else:
-                        print(f"[WARNING] Leader数据异常 - center={center}, radius={radius}, 使用默认值")
+                        return center, float(radius)
             
-            # 默认值：15m 半径（匹配Unity中的实际范围）
+            # 兜底：尝试直接从环境对象获取（如果环境支持）
+            if self.env:
+                # 检查是否是多机环境
+                if hasattr(self.env, 'envs') and self.env.envs:
+                    first_sub_env = next(iter(self.env.envs.values()))
+                    if hasattr(first_sub_env, 'leader_position'):
+                        return first_sub_env.leader_position, getattr(first_sub_env, 'leader_scan_radius', 15.0)
+                # 检查是否是单机环境
+                elif hasattr(self.env, 'leader_position'):
+                    return self.env.leader_position, getattr(self.env, 'leader_scan_radius', 15.0)
+
             return Vector3(0, 8, 0), 15.0
         except Exception as e:
-            print(f"_get_leader_info 错误: {e}")
-            import traceback
-            traceback.print_exc()
             return Vector3(0, 8, 0), 15.0
     
     def _draw_leader(self, screen: pygame.Surface, data: Dict[str, Any]):

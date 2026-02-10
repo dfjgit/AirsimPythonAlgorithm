@@ -9,10 +9,12 @@ import json
 from datetime import datetime
 import threading
 import time
+import subprocess
+
 
 # 添加项目路径
 # scripts -> DQN_Movement -> multirotor -> 项目根目录
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) )
 sys.path.insert(0, project_root)
 
 # 添加 multirotor 目录
@@ -45,6 +47,14 @@ from envs.movement_env import MovementEnv, MultiDroneMovementEnv
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.drones_config import DronesConfig
 
+# 独立进程可视化 (pygame 不与训练进程共享)
+try:
+    from multirotor.Visualization.visualization_ipc import VisualizationIPCServer
+    HAS_EXT_VIS = True
+except Exception:
+    HAS_EXT_VIS = False
+    print("警告: 无法导入 VisualizationIPCServer，独立可视化将被禁用")
+
 print("\n" + "=" * 80)
 print("[步骤2] 加载配置并确定训练无人机")
 print("=" * 80)
@@ -66,7 +76,6 @@ if not drone_names:
 # 显示无人机类型（虚拟/实体）
 print(f"  \n  训练无人机详情:")
 for drone in drone_names:
-    drone_type_str = drones_config.get_drone_type(drone)
     is_crazyflie = drones_config.is_crazyflie_mirror(drone)
     type_display = "实体无人机(Crazyflie)" if is_crazyflie else "虚拟无人机(AirSim)"
     print(f"    - {drone}: {type_display}")
@@ -78,7 +87,7 @@ with open(dqn_config_path, 'r', encoding='utf-8') as f:
 print(f"  ✓ 加载 movement_dqn_config.json")
 
 # apf_algorithm_config.json 路径（AlgorithmServer需要）
-config_file = os.path.join(os.path.dirname(__file__), "..", "apf_algorithm_config.json")
+config_file = os.path.join(os.path.dirname(__file__), "..", "..", "apf_algorithm_config.json")
 if not os.path.exists(config_file):
     print(f"  ✗ apf_algorithm_config.json 不存在: {config_file}")
     sys.exit(1)
@@ -91,9 +100,10 @@ print("=" * 80)
 print(f"  正在启动服务器 (DQN控制模式)...")
 server = MultiDroneAlgorithmServer(
     config_file=config_file,
-    drone_names=drone_names,  # 使用从配置文件读取的无人机列表
+    drone_names=drone_names,
     use_learned_weights=False,
-    control_mode='dqn'  # 关键：使用DQN控制模式
+    control_mode='dqn',
+    enable_visualization=False
 )
 
 # 启动服务器（连接Unity和AirSim）
@@ -112,7 +122,71 @@ if not server.start_mission():
 
 print(f"  ✓ 无人机任务启动成功")
 
-# [步骤3.5] 设置实验元数据 (用于跨方案数据对比)
+# 独立进程可视化（默认启用，可通过环境变量 NO_VIS=1 禁用）
+ipc_server = None
+vis_process = None
+vis_log_f = None
+vis_log_path = None
+# 先用临时目录存日志，避免 log_dir 尚未创建导致失败
+_tmp_vis_log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
+os.makedirs(_tmp_vis_log_dir, exist_ok=True)
+
+if HAS_EXT_VIS and os.environ.get('NO_VIS', '0') != '1':
+    try:
+        ipc_server = VisualizationIPCServer(
+            snapshot_provider=server.get_visualization_snapshot,
+            host='127.0.0.1',
+            port=0,
+            hz=10.0,
+            compress_level=1
+        )
+        ipc_server.start()
+        port = ipc_server.bound_port
+
+        python_exe = sys.executable
+        vis_entry = os.path.join(project_root, 'multirotor', 'Visualization', 'external_visualizer_client.py')
+        vis_cmd = [python_exe, vis_entry, '--mode', 'dqn', '--host', '127.0.0.1', '--port', str(port)]
+
+        vis_log_path = os.path.join(_tmp_vis_log_dir, 'external_vis.log')
+        vis_log_f = open(vis_log_path, 'w', encoding='utf-8')
+
+        creationflags = 0
+        if os.name == 'nt' and os.environ.get('VIS_NEW_CONSOLE', '0') == '1':
+            creationflags = subprocess.CREATE_NEW_CONSOLE
+
+        vis_env = os.environ.copy()
+        vis_env['PYTHONIOENCODING'] = 'utf-8'
+        vis_env['PYTHONUTF8'] = '1'
+
+        vis_process = subprocess.Popen(
+            vis_cmd,
+            stdout=vis_log_f,
+            stderr=vis_log_f,
+            creationflags=creationflags,
+            env=vis_env
+        )
+
+        # 若子进程秒退，给出更明确提示
+        time.sleep(0.5)
+        rc = vis_process.poll()
+        if rc is not None:
+            print(f"  ! 独立可视化进程启动后立即退出 (returncode={rc})")
+            print(f"    - 请查看: {vis_log_path}")
+        else:
+            print(f"  ✓ 已启动独立可视化进程 (port={port})")
+            print(f"    - 外部可视化日志: {vis_log_path}")
+    except Exception as e:
+        print(f"  ! 启动独立可视化失败: {e}")
+        if vis_log_path:
+            print(f"    - 外部可视化日志(若已生成): {vis_log_path}")
+        try:
+            if ipc_server:
+                ipc_server.stop()
+        except Exception:
+            pass
+        ipc_server = None
+        vis_process = None
+
 if hasattr(server, 'set_experiment_meta'):
     server.set_experiment_meta(
         algorithm_type='pure_dqn',
@@ -126,24 +200,17 @@ print("=" * 80)
 
 # 根据无人机数量选择环境类型
 if len(drone_names) == 1:
-    # 单机训练
     training_drone = drone_names[0]
     print(f"  模式: 单机训练")
     print(f"  训练无人机: {training_drone}")
-    
+
     env = MovementEnv(server=server, drone_name=training_drone, config_path=dqn_config_path)
     env = Monitor(env)
-    
 else:
-    # 多机训练（参数共享）
     print(f"  模式: 多机训练（参数共享）")
     print(f"  训练无人机: {drone_names}")
     print(f"  无人机数量: {len(drone_names)}")
-    print(f"  \n  多机训练详情:")
-    for drone in drone_names:
-        drone_type = "实体" if drones_config.is_crazyflie_mirror(drone) else "虚拟"
-        print(f"    - {drone}: {drone_type}无人机")
-    
+
     env = MultiDroneMovementEnv(server=server, drone_names=drone_names, config_path=dqn_config_path)
     env = Monitor(env)
 
@@ -156,11 +223,9 @@ print("\n" + "=" * 80)
 print("[步骤5] 创建或加载DQN模型")
 print("=" * 80)
 
-# 检查是否有预训练模型
 model_dir = os.path.join(os.path.dirname(__file__), 'models')
 os.makedirs(model_dir, exist_ok=True)
 
-# 日志目录（提前创建）
 log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
 os.makedirs(log_dir, exist_ok=True)
 
@@ -171,7 +236,6 @@ if use_pretrained:
     print(f"  ✓ 找到预训练模型: {pretrained_model}")
     print(f"  加载预训练模型继续训练...")
     model = DQN.load(pretrained_model, env=env)
-    # 启用 TensorBoard 日志
     model.tensorboard_log = log_dir
     print(f"  ✓ 预训练模型加载成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")
@@ -192,7 +256,7 @@ else:
         exploration_final_eps=dqn_config['training']['exploration_final_eps'],
         policy_kwargs=dict(net_arch=dqn_config['model']['net_arch']),
         verbose=1,
-        tensorboard_log=log_dir  # 启用 TensorBoard 日志
+        tensorboard_log=log_dir
     )
     print(f"  ✓ 新模型创建成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")
@@ -201,12 +265,9 @@ print("\n" + "=" * 80)
 print("[步骤6] 设置训练回调")
 print("=" * 80)
 
-# 自定义回调
 class AirSimProgressCallback(BaseCallback):
-    """一步一步加载训练进度回调"""
-    
     def __init__(self, total_timesteps, print_freq=500, log_dir=None, verbose=0):
-        super(AirSimProgressCallback, self).__init__(verbose)
+        super().__init__(verbose)
         self.total_timesteps = total_timesteps
         self.print_freq = print_freq
         self.episode_rewards = []
@@ -216,151 +277,127 @@ class AirSimProgressCallback(BaseCallback):
         self.current_episode_length = 0
         self.episode_count = 0
         self.start_time = datetime.now()
-        
-        # CSV 日志记录
         self.log_dir = log_dir
         if self.log_dir:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             self.csv_path = os.path.join(self.log_dir, f'dqn_training_{timestamp}.csv')
-            # 创建 CSV 文件并写入表头
             with open(self.csv_path, 'w', encoding='utf-8') as f:
                 f.write('episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,collision_count,out_of_range_count,scan_efficiency\n')
             print(f"  ✓ CSV 日志: {self.csv_path}")
-        
+
     def _on_step(self) -> bool:
-        # 累计统计
-        self.current_episode_reward += self.locals['rewards'][0]
-        self.current_episode_length += 1
-        
-        # [DEBUG] 打印 self.locals 的键，帮助诊断
-        if self.num_timesteps == 1:
-            print(f"\n[DEBUG] 回调函数首次调用，self.locals 的键: {list(self.locals.keys())}")
-            print(f"[DEBUG] 检查 episode 结束标志:")
-            print(f"  - 'dones' in locals: {'dones' in self.locals}")
-            print(f"  - 'terminations' in locals: {'terminations' in self.locals}")
-            if 'dones' in self.locals:
-                print(f"  - dones 类型: {type(self.locals['dones'])}, 值: {self.locals['dones']}")
-            if 'terminations' in self.locals:
-                print(f"  - terminations 类型: {type(self.locals['terminations'])}, 值: {self.locals['terminations']}")
-            if 'infos' in self.locals:
-                print(f"  - infos[0] 的键: {list(self.locals['infos'][0].keys()) if len(self.locals['infos']) > 0 else 'empty'}")
-        
-        # episode结束检测 - 多种方法
-        is_done = False
-        done_method = None
-        
-        # 方法1: 检查 'dones' (旧版 Gym API)
-        if 'dones' in self.locals and len(self.locals['dones']) > 0:
-            is_done = bool(self.locals['dones'][0])
-            if is_done:
-                done_method = 'dones'
-        
-        # 方法2: 检查 'terminations' 和 'truncations' (新版 Gymnasium API)
-        if not is_done and 'terminations' in self.locals:
-            terminated = bool(self.locals['terminations'][0]) if len(self.locals['terminations']) > 0 else False
-            truncated = bool(self.locals.get('truncations', [False])[0]) if 'truncations' in self.locals and len(self.locals.get('truncations', [])) > 0 else False
-            is_done = terminated or truncated
-            if is_done:
-                done_method = f'terminations({terminated})/truncations({truncated})'
-        
-        # 方法3: 从 infos 中检测 (最可靠的方法)
-        if not is_done and 'infos' in self.locals and len(self.locals['infos']) > 0:
-            info = self.locals['infos'][0]
-            # 检查多种可能的 episode 结束标志
-            if 'TimeLimit.truncated' in info or '_final_observation' in info or 'terminal_observation' in info:
-                is_done = True
-                done_method = 'infos'
-        
-        if is_done:
-            self.episode_count += 1
-            self.episode_rewards.append(self.current_episode_reward)
-            self.episode_lengths.append(self.current_episode_length)
-            
-            print(f"\n[DEBUG] 检测到 episode 结束 (通过 {done_method})")
-            print(f"[DEBUG] Episode {self.episode_count} 完成:")
-            print(f"  - Reward: {self.current_episode_reward:.2f}")
-            print(f"  - Length: {self.current_episode_length}")
-            print(f"  - Timestep: {self.num_timesteps}")
-            
-            # 获取扫描信息和其他指标
-            scanned_cells = 0
-            collision_count = 0
-            out_of_range_count = 0
-            
-            if 'infos' in self.locals and len(self.locals['infos']) > 0:
-                info = self.locals['infos'][0]
-                scanned_cells = info.get('scanned_cells', 0)
-                collision_count = info.get('collision_count', 0)
-                out_of_range_count = info.get('out_of_range_count', 0)
-                
-                self.episode_scanned.append(scanned_cells)
-                print(f"  - Scanned cells: {scanned_cells}")
-                print(f"  - Collisions: {collision_count}")
-                print(f"  - Out of range: {out_of_range_count}")
-            
-            # 计算耗时
-            elapsed_time = (datetime.now() - self.start_time).total_seconds()
-            timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            scan_efficiency = scanned_cells / max(elapsed_time, 1.0)
-            
-            # 写入 CSV 日志
-            if self.log_dir:
-                try:
-                    print(f"[DEBUG] 准备写入 CSV: {self.csv_path}")
-                    with open(self.csv_path, 'a', encoding='utf-8') as f:
-                        line = f'{self.episode_count},{self.current_episode_reward:.2f},{self.current_episode_length},{scanned_cells},{self.num_timesteps},{elapsed_time:.2f},{timestamp_str},{collision_count},{out_of_range_count},{scan_efficiency:.2f}\n'
-                        f.write(line)
-                        f.flush()  # 确保立即写入磁盘
-                        print(f"  [✅] 成功写入 CSV: {line.strip()}")
-                except Exception as e:
-                    print(f"  [❌] 写入 CSV 失败: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print(f"[DEBUG] log_dir 为空，跳过 CSV 写入")
-            
-            self.current_episode_reward = 0
-            self.current_episode_length = 0
-        
-        # 定期打印
         if self.num_timesteps % self.print_freq == 0:
             progress = (self.num_timesteps / self.total_timesteps) * 100
-            
             print(f"\n{'=' * 60}")
             print(f"进度: {progress:.1f}% ({self.num_timesteps}/{self.total_timesteps})")
-            
-            if len(self.episode_rewards) > 0:
-                recent_n = min(10, len(self.episode_rewards))
-                avg_reward = np.mean(self.episode_rewards[-recent_n:])
-                avg_length = np.mean(self.episode_lengths[-recent_n:])
-                
-                print(f"最近{recent_n}个episodes:")
-                print(f"  平均奖励: {avg_reward:.2f}")
-                print(f"  平均步数: {avg_length:.1f}")
-                
-                if len(self.episode_scanned) > 0:
-                    avg_scanned = np.mean(self.episode_scanned[-recent_n:])
-                    print(f"  平均扫描: {avg_scanned:.1f}个单元格")
-            
             print(f"{'=' * 60}")
-        
         return True
 
-# 检查点回调
 checkpoint_callback = CheckpointCallback(
     save_freq=5000,
     save_path=model_dir,
     name_prefix='movement_dqn_airsim'
 )
 
-# 进度回调
 progress_callback = AirSimProgressCallback(
     total_timesteps=dqn_config['training']['total_timesteps'],
     print_freq=500,
-    log_dir=log_dir  # 传入日志目录，启用 CSV 记录
+    log_dir=log_dir
 )
 
-print(f"  ✓ 回调设置完成")
+class DQNVisualizationCallback(BaseCallback):
+    def __init__(self, server, verbose=0):
+        super().__init__(verbose)
+        self.server = server
+        self.episode_reward = 0.0
+        self.action_counts = {i: 0 for i in range(6)}
+        self.last_action = None
+        self.episode_count = 0
+        self.total_steps = 0
+        self.reward_history = []  # 记录每个episode的总奖励
+        self.start_time = time.time()  # 用于计算速率
+
+    def _on_step(self) -> bool:
+        if self.server is None:
+            return True
+        try:
+            action = None
+            if 'actions' in self.locals and len(self.locals['actions']) > 0:
+                action = int(self.locals['actions'][0])
+            reward = float(self.locals.get('rewards', [0.0])[0])
+            self.episode_reward += reward
+            self.total_steps += 1
+            
+            # 计算速率
+            elapsed = time.time() - self.start_time
+            steps_per_sec = self.total_steps / max(elapsed, 0.001)
+            
+            dones = self.locals.get('dones', [False])
+            is_done = bool(dones[0]) if len(dones) > 0 else False
+
+            if action is not None and action in self.action_counts:
+                self.action_counts[action] += 1
+                self.last_action = action
+
+            if is_done:
+                self.episode_count += 1
+                self.reward_history.append(float(self.episode_reward))
+                # 保持奖励历史在合理范围内
+                if len(self.reward_history) > 200:
+                    self.reward_history = self.reward_history[-200:]
+
+            # 写入到server，供IPC外部可视化快照读取
+            self.server.current_training_stats = {
+                'timestep': int(getattr(self, 'num_timesteps', 0)),
+                'total_steps': self.total_steps,
+                'steps_per_sec': float(steps_per_sec),
+                'episode_count': self.episode_count,
+                'current_episode_reward': float(self.episode_reward),
+                'reward_history': list(self.reward_history),
+                'is_done': bool(is_done),
+                'last_action': self.last_action,
+                'action_counts': dict(self.action_counts),
+            }
+            # 强制快照缓存失效
+            try:
+                self.server._vis_snapshot_cache = None
+                self.server._vis_snapshot_cache_time = 0.0
+            except Exception:
+                pass
+
+            if is_done:
+                self.episode_reward = 0.0
+        except Exception:
+            pass
+        return True
+
+visualizer = None
+vis_callback = None
+# 临时禁用可视化以排查卡死问题
+"""
+if HAS_VISUALIZER:
+    try:
+        visualizer = DQNMovementTrainingVisualizer(env.unwrapped, server)
+
+        def start_vis_thread():
+            try:
+                visualizer.start_visualization()
+            except Exception as e:
+                print(f"  ! 可视化窗口运行异常: {e}")
+
+        vis_thread = threading.Thread(target=start_vis_thread, daemon=True)
+        vis_thread.start()
+
+        vis_callback = DQNVisualizationCallback(visualizer)
+        print("  ✓ DQN训练可视化已在独立线程启动", flush=True)
+    except Exception as e:
+        print(f"  ! DQN训练可视化启动失败: {e}", flush=True)
+        visualizer = None
+        vis_callback = None
+"""
+
+print(f"  ✓ 回调设置完成", flush=True)
+sys.stdout.flush()
 
 print("\n" + "=" * 80)
 print("[步骤7] 开始训练")
@@ -373,26 +410,25 @@ print(f"\n⚠ 请确保Unity客户端已连接到服务器")
 print(f"按 Ctrl+C 可以随时中断训练并保存模型\n")
 
 try:
-    # 开始训练
-    print(f"\n[DEBUG] 即将调用 model.learn()...")
-    print(f"[DEBUG] total_timesteps = {total_timesteps}")
-    print(f"[DEBUG] learning_starts = {dqn_config['training']['learning_starts']}")
+    print(f"\n[DEBUG] 即将调用 model.learn()...", flush=True)
+
+    callbacks = [checkpoint_callback, progress_callback]
     
-    # 注：删除了测试性的 env.reset() 调用，因为它会在无人机已移动后触发重置
-    # 现在领导者在接收到 start_simulation 指令后才开始移动，无需额外重置
-    
-    print(f"[DEBUG] \n开始训练循环...\n")
-    
+    # 启用 DQN 训练数据同步回调，用于外部可视化面板
+    vis_callback = DQNVisualizationCallback(server)
+    callbacks.append(vis_callback)
+    print("  ✓ DQN 训练数据同步回调已启用 (用于外部可视化)")
+
     model.learn(
         total_timesteps=total_timesteps,
-        callback=[checkpoint_callback, progress_callback],
+        callback=callbacks,
         log_interval=10
     )
-    
+
     print("\n" + "=" * 80)
     print("✓ 训练完成！")
     print("=" * 80)
-    
+
 except KeyboardInterrupt:
     print("\n\n训练被用户中断")
     print("正在保存当前模型...")
@@ -406,7 +442,6 @@ print("\n" + "=" * 80)
 print("[步骤8] 保存最终模型")
 print("=" * 80)
 
-# 保存模型
 final_model_path = os.path.join(model_dir, 'movement_dqn_airsim_final')
 model.save(final_model_path)
 print(f"  ✓ 模型已保存: {final_model_path}.zip")
@@ -415,11 +450,23 @@ print("\n" + "=" * 80)
 print("[步骤9] 清理")
 print("=" * 80)
 
-# 停止服务器
 print(f"  正在停止服务器...")
 server.stop()
 time.sleep(1)
 print(f"  ✓ 服务器已停止")
+
+# 清理独立可视化资源
+try:
+    if ipc_server:
+        ipc_server.stop()
+except Exception:
+    pass
+
+try:
+    if vis_process and vis_process.poll() is None:
+        vis_process.terminate()
+except Exception:
+    pass
 
 print("\n" + "=" * 80)
 print("训练完成总结")
@@ -432,4 +479,3 @@ print(f"\n下一步:")
 print(f"  1. 查看Tensorboard: tensorboard --logdir={log_dir}")
 print(f"  2. 测试模型: python test_movement_dqn.py")
 print("=" * 80)
-

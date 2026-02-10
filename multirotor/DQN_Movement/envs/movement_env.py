@@ -8,6 +8,7 @@ from gymnasium import spaces
 import os
 import json
 import logging
+import time
 
 # 配置日志
 logger = logging.getLogger("MovementEnv")
@@ -22,6 +23,10 @@ class MovementEnv(gym.Env):
     """
     
     def __init__(self, server=None, drone_name="UAV1", config_path=None, step_duration=0.5):
+        self._lock_timeout_sec = 0.2
+        self._state_timeout_sec = 2.0
+        self._warned_lock_timeout = False
+        self._warned_state_timeout = False
         super(MovementEnv, self).__init__()
         
         self.server = server
@@ -79,6 +84,8 @@ class MovementEnv(gym.Env):
         
         self.collision_count = 0
         self.out_of_range_count = 0
+        self.last_done_reason = None  # 记录上一次结束的原因
+        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
         
         # 首次重置标志（用于跳过启动时的重置）
         self._first_reset = True
@@ -94,7 +101,7 @@ class MovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -106,7 +113,7 @@ class MovementEnv(gym.Env):
             # 使用默认终止配置
             self.term_cfg = self.config.get('termination_config', {
                 "target_scan_ratio": 0.95,
-                "max_collision_count": 1,
+                "max_collision_count": 15,
                 "max_elapsed_time_sec": 300.0,
                 "stagnation_timeout_sec": 30.0
             })
@@ -189,7 +196,11 @@ class MovementEnv(gym.Env):
     
     def reset(self, seed=None, options=None):
         """重置环境"""
-        print(f"[DQN环境] reset() 被调用")
+        # 获取并清除上一次结束的原因
+        reason = getattr(self, 'last_done_reason', 'None')
+        print(f"\n[DQN环境] reset() 被调用，上一轮结束原因: {reason}")
+        self.last_done_reason = None
+        
         if seed is not None:
             np.random.seed(seed)
         
@@ -203,12 +214,12 @@ class MovementEnv(gym.Env):
         else:
             # 后续重置：执行完整的环境重置（Episode结束）
             if self.server:
-                print(f"[DQN环境] 🔄 Episode结束，执行完整环境重置...")
-                self.server.reset_environment()
+                reason = getattr(self, 'last_done_reason', 'manual')
+                print(f"[DQN环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
+                self.server.reset_environment(reason=f"MovementEnv_{reason}")
                 # 重置电量
                 if hasattr(self.server, 'reset_battery_voltage'):
                     self.server.reset_battery_voltage(self.drone_name)
-                import time
                 time.sleep(1.0)  # 等待Unity完成重置
                 print(f"[DQN环境] ✅ 环境重置完成")
         
@@ -224,6 +235,8 @@ class MovementEnv(gym.Env):
         print(f"[DQN环境] 初始化信息:")
         print(f"  - 初始扫描数: {self.prev_scanned_cells}")
         print(f"  - 初始总熄值: {self.prev_entropy_sum:.2f}")
+        
+        self.episode_start_time = time.time()  # 重置 Episode 开始时间
         
         print(f"[DQN环境] 获取初始状态...")
         state = self._get_state()
@@ -260,9 +273,9 @@ class MovementEnv(gym.Env):
         
         # 等待一小段时间让环境更新
         if self.server:
-            import time
-            time.sleep(0.05)  # 50ms
-            print(f"[DQN环境] 等待完成")
+            # 修正：将休眠时间从 0.05s 增加到与物理步长一致，确保无人机有时间执行动作
+            time.sleep(self.step_duration)
+            print(f"[DQN环境] 物理步长等待完成 ({self.step_duration}s)")
         
         # 获取新状态
         print(f"[DQN环境] 获取新状态...")
@@ -300,99 +313,110 @@ class MovementEnv(gym.Env):
         if not self.server:
             # 测试模式：返回随机状态
             return np.random.randn(23).astype(np.float32)
-            
-        try:
-            # 分离锁的获取，避免死锁
-            # 第一步：从 runtime_data 获取无人机状态
-            with self.server.data_lock:
+
+        deadline = time.time() + self._state_timeout_sec
+        while True:
+            if time.time() > deadline:
+                if not self._warned_state_timeout:
+                    logger.warning(f"获取状态超时({self._state_timeout_sec}s)，返回零状态")
+                    self._warned_state_timeout = True
+                return np.zeros(23, dtype=np.float32)
+
+            acquired = self.server.data_lock.acquire(timeout=self._lock_timeout_sec)
+            if not acquired:
+                if not self._warned_lock_timeout:
+                    logger.warning(f"获取 data_lock 超时({self._lock_timeout_sec}s)，将重试")
+                    self._warned_lock_timeout = True
+                continue
+
+            try:
                 runtime_data = self.server.unity_runtime_data.get(self.drone_name)
                 if not runtime_data:
-                    print(f"[DQN环境] 警告: 无人机 {self.drone_name} 的runtime_data不存在，返回零状态")
                     return np.zeros(23, dtype=np.float32)
-                    
-                # 1. 位置 (3)
+
                 pos = runtime_data.position
+                if not pos:
+                    return np.zeros(23, dtype=np.float32)
+
                 position = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
-                    
-                # 2. 速度 (3)
+
                 vel = runtime_data.finalMoveDir
                 velocity = np.array([
                     vel.x * self.server.config_data.moveSpeed,
                     vel.y * self.server.config_data.moveSpeed,
                     vel.z * self.server.config_data.moveSpeed
                 ], dtype=np.float32)
-                    
-                # 3. 朝向 (3)
+
                 fwd = runtime_data.forward
                 direction = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
-                    
-                # 5. Leader相对位置 (3)
-                if runtime_data.leader_position:
+
+                if rd.leader_position:
+                    # 修正：对相对位置进行归一化，除以扫描半径
+                    # 这样 0-1 表示在圈内，>1 表示在圈外，信号更显著
+                    radius = rd.leader_scan_radius if rd.leader_scan_radius > 0 else 50.0
                     leader_rel = np.array([
-                        runtime_data.leader_position.x - pos.x,
-                        runtime_data.leader_position.y - pos.y,
-                        runtime_data.leader_position.z - pos.z
+                        (rd.leader_position.x - pos.x) / radius,
+                        (rd.leader_position.y - pos.y) / radius,
+                        (rd.leader_position.z - pos.z) / radius
                     ], dtype=np.float32)
                 else:
                     leader_rel = np.zeros(3, dtype=np.float32)
-                    
-                # 6. Leader范围信息 (2)
+
                 if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
                     dist_to_leader = np.linalg.norm(leader_rel)
                     is_out_of_range = 1.0 if dist_to_leader > runtime_data.leader_scan_radius else 0.0
                     leader_range = np.array([dist_to_leader, is_out_of_range], dtype=np.float32)
                 else:
                     leader_range = np.zeros(2, dtype=np.float32)
-                
-            # 第二步：从 grid_data 获取网格信息
-            with self.server.grid_lock:
+            finally:
+                self.server.data_lock.release()
+
+            acquired_grid = self.server.grid_lock.acquire(timeout=self._lock_timeout_sec)
+            if not acquired_grid:
+                if not self._warned_lock_timeout:
+                    logger.warning(f"获取 grid_lock 超时({self._lock_timeout_sec}s)，将重试")
+                    self._warned_lock_timeout = True
+                continue
+
+            try:
                 grid_data = self.server.grid_data
-                if not grid_data or not grid_data.cells:
-                    print(f"[DQN环境] 警告: grid_data 为空或没有cells，返回零状态")
-                    # 返回带有基本信息的状态
+                if not grid_data or not getattr(grid_data, 'cells', None):
                     entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
                     scan_info = np.array([0.0, 0.0, 0.0], dtype=np.float32)
                     min_dist_array = np.array([100.0], dtype=np.float32)
                 else:
-                    # 4. 局部熙值统计 (3)
                     entropy_info = self._get_entropy_info(grid_data, pos)
-                        
-                    # 7. 扫描进度 (3)
                     scan_info = self._get_scan_info(grid_data)
-                        
-                    # 8. 最近无人机距离 (1) - 需要 runtime_data，稍后单独获取
-                    min_dist_array = np.array([100.0], dtype=np.float32)  # 默认值
-                
-            # 第三步：获取其他无人机距离（需要重新获取 data_lock）
-            with self.server.data_lock:
-                runtime_data = self.server.unity_runtime_data.get(self.drone_name)
-                if runtime_data:
-                    min_dist = self._get_min_distance_to_others(runtime_data)
-                    min_dist_array = np.array([min_dist], dtype=np.float32)
-                
-            # 获取电量信息 (2)
+                    min_dist_array = np.array([100.0], dtype=np.float32)
+            finally:
+                self.server.grid_lock.release()
+
+            acquired2 = self.server.data_lock.acquire(timeout=self._lock_timeout_sec)
+            if acquired2:
+                try:
+                    runtime_data2 = self.server.unity_runtime_data.get(self.drone_name)
+                    if runtime_data2:
+                        min_dist = self._get_min_distance_to_others(runtime_data2)
+                        min_dist_array = np.array([min_dist], dtype=np.float32)
+                finally:
+                    self.server.data_lock.release()
+
             battery_info = self._get_battery_info()
-            
-            # 组合状态向量
+
             state = np.concatenate([
-                position,           # 3
-                velocity,           # 3
-                direction,          # 3
-                entropy_info,       # 3
-                leader_rel,         # 3
-                leader_range,       # 2
-                scan_info,          # 3
-                min_dist_array,     # 1
-                battery_info        # 2
+                position,
+                velocity,
+                direction,
+                entropy_info,
+                leader_rel,
+                leader_range,
+                scan_info,
+                min_dist_array,
+                battery_info
             ])
-                
-            return state
-                
-        except Exception as e:
-            print(f"获取状态失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return np.zeros(23, dtype=np.float32)
+
+            return state.astype(np.float32)
+
     
     def _calculate_reward(self, action, prev_state, next_state):
         """计算奖励"""
@@ -424,8 +448,47 @@ class MovementEnv(gym.Env):
                     safe_ratio = cfg_thresh.get('stability_safe_ratio', 0.7)
                     penalty_ratio = cfg_thresh.get('stability_penalty_ratio', 0.8)
                     
+                    # 计算上一步到领导者的距离（用于判断是否在返回）
+                    # prev_dist_to_leader = getattr(self, '_last_dist_to_leader', dist_to_leader)
+                    # self._last_dist_to_leader = dist_to_leader
+                    
                     if dist_ratio > 1.0:
-                        stability_factor = 0.0  # 越界后完全取消探索奖励，强制其返回
+                        # 【核心修改】越界后完全取消一切探索正向奖励，稳定性系数归零
+                        stability_factor = 0.0
+                        
+                        # 【极大化】返回奖励：大幅提高权重，并加入方向对齐引导
+                        if self.prev_position:
+                            prev_dist = np.sqrt(
+                                (self.prev_position.x - runtime_data.leader_position.x)**2 +
+                                (self.prev_position.y - runtime_data.leader_position.y)**2 +
+                                (self.prev_position.z - runtime_data.leader_position.z)**2
+                            )
+                            # 如果当前比上一步更靠近，给予重奖
+                            if dist_to_leader < prev_dist:
+                                # 1. 基础返回奖励(100) + 进步奖励(距离差*200)
+                                return_bonus = cfg_reward.get('return_to_range_bonus', 100.0)
+                                progress_bonus = (prev_dist - dist_to_leader) * 200.0
+                                reward += (return_bonus + progress_bonus)
+                                
+                                # 2. 动作方向对齐奖励 (1.0表示正对着飞，奖励更高)
+                                dir_to_leader = np.array([
+                                    runtime_data.leader_position.x - self.prev_position.x,
+                                    runtime_data.leader_position.y - self.prev_position.y,
+                                    runtime_data.leader_position.z - self.prev_position.z
+                                ])
+                                norm = np.linalg.norm(dir_to_leader)
+                                if norm > 1e-6:
+                                    ideal_dir = dir_to_leader / norm
+                                    actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
+                                    alignment = np.dot(ideal_dir, actual_dir)
+                                    if alignment > 0:
+                                        reward += alignment * 50.0 
+                                
+                                # 抵消步惩罚
+                                reward -= cfg_reward.get('step_penalty', -0.1) 
+                            else:
+                                # 如果越界还继续往外飞，给予巨额惩罚
+                                reward += cfg_reward.get('out_of_range', -30.0) * 2.0
                     elif dist_ratio > safe_ratio:
                         # 在 safe_ratio - 1.0 之间线性衰减，从 1.0 降至 0.1
                         stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.9
@@ -486,11 +549,17 @@ class MovementEnv(gym.Env):
                     # 在最佳扫描高度附近
                     reward += cfg_reward.get('optimal_height_bonus', 1.0)
                 
-                # 5. 碰撞惩罚
+                # 5. 碰撞惩罚与容忍机制
                 min_dist = self._get_min_distance_to_others(runtime_data)
-                if min_dist < cfg_thresh['collision_distance']:
+                collision_threshold = cfg_thresh['collision_distance']
+                
+                if min_dist < collision_threshold * 0.8:  # 只有进入 80% 的安全距离才算碰撞
                     reward += cfg_reward['collision']
                     self.collision_count += 1
+                else:
+                    # 距离恢复安全时重置计数器（给予训练纠错机会）
+                    if self.collision_count > 0 and min_dist > collision_threshold * 1.5:
+                        self.collision_count = max(0, self.collision_count - 1)  # 缓慢恢复
                 
                 # 6. 越界惩罚
                 if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
@@ -541,7 +610,9 @@ class MovementEnv(gym.Env):
                 # 每个动作都更新电量消耗
                 if hasattr(self.server, 'update_battery_voltage'):
                     # 计算动作强度（位移长度归一化）
-                    step_norm = float(np.linalg.norm(displacement))
+                    # 在 step 函数中已经根据 action 计算好了 displacement
+                    # displacement 是 NumPy 数组: [dx, dy, dz]
+                    step_norm = float(np.linalg.norm(self.action_map[action]))
                     base_step = max(self.action_step, 1e-6)
                     action_intensity = min(1.0, max(0.0, step_norm / base_step))
                     self.server.update_battery_voltage(self.drone_name, action_intensity)
@@ -553,23 +624,61 @@ class MovementEnv(gym.Env):
     
     def _check_done(self):
         """判断episode是否结束 (统一终止逻辑)"""
-        elapsed_time = self.step_count * self.step_duration
+        # 修正：改用真实时间计算已用时长，避免因步频过快导致虚假超时
+        elapsed_time = time.time() - self.episode_start_time
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
+            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 2. 达到目标扫描比例
         scan_ratio = self._get_scan_ratio()
         if scan_ratio >= self.term_cfg['target_scan_ratio']:
-            print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+            self.last_done_reason = f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%})"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 3. 碰撞次数达到阈值
         if self.collision_count >= self.term_cfg['max_collision_count']:
-            print(f"[终止] 发生碰撞或超过上限: {self.collision_count} / {self.term_cfg['max_collision_count']}")
+            self.last_done_reason = f"Collision Limit Reached ({self.collision_count} >= {self.term_cfg['max_collision_count']})"
+            print(f"[终止] {self.last_done_reason}")
             return True
+        
+        # 4. 增加判定：检查无人机是否已经停止飞行或【严重越界】
+        if self.server:
+            with self.server.data_lock:
+                runtime_data = self.server.unity_runtime_data.get(self.drone_name)
+                if runtime_data:
+                    # 严重越界判定：1.5倍扫描半径
+                    if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
+                        dist = np.sqrt(
+                            (runtime_data.position.x - runtime_data.leader_position.x)**2 +
+                            (runtime_data.position.y - runtime_data.leader_position.y)**2 +
+                            (runtime_data.position.z - runtime_data.leader_position.z)**2
+                        )
+                        if dist > runtime_data.leader_scan_radius * 1.5:
+                            self.last_done_reason = f"Severe Out of Range ({dist:.1f}m > {runtime_data.leader_scan_radius * 1.5:.1f}m)"
+                            print(f"[终止] {self.last_done_reason}")
+                            return True
+                    # 获取 AirSim 中的物理状态
+                    try:
+                        state = self.server.drone_controller.get_vehicle_state(self.drone_name)
+                        if not state.get("flying", True):
+                            self.last_done_reason = "Drone Landed (Physics or Battery)"
+                            print(f"[终止] {self.last_done_reason}")
+                            return True
+                    except Exception:
+                        pass
+                    
+                    # 同时检查电量是否彻底耗尽
+                    if hasattr(self.server, "battery_manager"):
+                        battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+                        if battery_info and battery_info.status == 'empty':
+                            self.last_done_reason = "Battery Empty"
+                            print(f"[终止] {self.last_done_reason}")
+                            return True
         
         return False
     
@@ -789,6 +898,11 @@ class MultiDroneMovementEnv(gym.Env):
     def __init__(self, server=None, drone_names=None, config_path=None, step_duration=0.5):
         super(MultiDroneMovementEnv, self).__init__()
         
+        self._lock_timeout_sec = 0.2
+        self._state_timeout_sec = 2.0
+        self._warned_lock_timeout = False
+        self._warned_state_timeout = False
+
         self.server = server
         self.drone_names = drone_names if drone_names else ["UAV1"]
         self.num_drones = len(self.drone_names)
@@ -842,10 +956,13 @@ class MultiDroneMovementEnv(gym.Env):
                 'episode_reward': 0
             }
         
+        self.last_done_reason = None  # 记录多机模式结束原因
         # 全局状态
         self.step_count = 0
         self.total_episode_reward = 0
         self.episode_index = 0  # Episode 计数器（用于 DataCollector）
+        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
+        self.last_done_reason = None  # 记录结束原因
         
         # 首次重置标志（用于跳过启动时的重置）
         self._first_reset = True
@@ -861,7 +978,7 @@ class MultiDroneMovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -955,7 +1072,11 @@ class MultiDroneMovementEnv(gym.Env):
     
     def reset(self, seed=None, options=None):
         """重置环境"""
-        print(f"[DQN多机环境] reset() 被调用")
+        # 获取并清除上一次结束的原因
+        reason = getattr(self, 'last_done_reason', 'None')
+        print(f"\n[DQN多机环境] reset() 被调用，上一轮结束原因: {reason}")
+        self.last_done_reason = None
+        
         if seed is not None:
             np.random.seed(seed)
         
@@ -970,13 +1091,13 @@ class MultiDroneMovementEnv(gym.Env):
         else:
             # 后续重置：执行完整的环境重置（Episode结束）
             if self.server:
-                print(f"[DQN多机环境] 🔄 Episode结束，执行完整环境重置...")
-                self.server.reset_environment()
+                reason = getattr(self, 'last_done_reason', 'manual')
+                print(f"[DQN多机环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
+                self.server.reset_environment(reason=f"MultiDroneMovementEnv_{reason}")
                 # 重置所有无人机的电量
                 if hasattr(self.server, 'reset_battery_voltage'):
-                    for drone_name in self.drone_names:
-                        self.server.reset_battery_voltage(drone_name)
-                import time
+                    for d_name in self.drone_names:
+                        self.server.reset_battery_voltage(d_name)
                 time.sleep(1.0)
                 print(f"[DQN多机环境] ✅ 环境重置完成")
         
@@ -995,6 +1116,7 @@ class MultiDroneMovementEnv(gym.Env):
         self.step_count = 0
         self.total_episode_reward = 0
         self.current_drone_idx = 0
+        self.episode_start_time = time.time()  # 重置 Episode 开始时间
         
         # Episode 计数器递增
         self.episode_index += 1
@@ -1033,8 +1155,9 @@ class MultiDroneMovementEnv(gym.Env):
         displacement = self.action_map[action]
         if self.server:
             self._apply_movement(current_drone, displacement)
-            import time
-            time.sleep(0.05)
+            # 修正：将休眠时间从 0.05s 增加到与物理步长一致，确保无人机有时间执行动作
+            time.sleep(self.step_duration)
+            print(f"[DQN多机环境] 物理步长等待完成 ({self.step_duration}s)")
         print(f"[DQN多机环境] 动作执行完成")
         
         # 获取新状态
@@ -1091,32 +1214,39 @@ class MultiDroneMovementEnv(gym.Env):
         return next_observation, reward, terminated, truncated, info
     
     def _get_state(self, drone_name):
-        """获取指定无人机的观察状态（21维）"""
+        """获取指定无人机的观察状态（21维，多机）"""
         if not self.server:
             return np.random.randn(21).astype(np.float32)
-        
-        try:
-            # 分离锁的获取，避免死锁
-            # 第一步：从 runtime_data 获取无人机状态
-            with self.server.data_lock:
+
+        deadline = time.time() + self._state_timeout_sec
+        while True:
+            if time.time() > deadline:
+                if not self._warned_state_timeout:
+                    logger.warning(f"[DQN多机环境] 获取状态超时({self._state_timeout_sec}s)，返回零状态")
+                    self._warned_state_timeout = True
+                return np.zeros(23, dtype=np.float32)
+
+            acquired = self.server.data_lock.acquire(timeout=self._lock_timeout_sec)
+            if not acquired:
+                if not self._warned_lock_timeout:
+                    logger.warning(f"[DQN多机环境] 获取 data_lock 超时({self._lock_timeout_sec}s)，将重试")
+                    self._warned_lock_timeout = True
+                continue
+
+            try:
                 runtime_data = self.server.unity_runtime_data.get(drone_name)
                 if not runtime_data:
-                    print(f"[DQN多机环境] 警告: 无人机 {drone_name} 的runtime_data不存在")
-                    return np.zeros(21, dtype=np.float32)
-                
-                # 1. 位置 (3)
+                    return np.zeros(23, dtype=np.float32)
+
                 pos = runtime_data.position
                 position = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
-                
-                # 2. 速度 (3)
+
                 vel = runtime_data.velocity
                 velocity = np.array([vel.x, vel.y, vel.z], dtype=np.float32)
-                
-                # 3. 朝向 (3)
+
                 fwd = runtime_data.forward
                 forward = np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32)
-                
-                # 5. Leader相对位置 (3)
+
                 if runtime_data.leader_position:
                     leader_rel = np.array([
                         runtime_data.leader_position.x - pos.x,
@@ -1124,24 +1254,28 @@ class MultiDroneMovementEnv(gym.Env):
                         runtime_data.leader_position.z - pos.z
                     ], dtype=np.float32)
                 else:
-                    leader_rel = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                
-                # 6. Leader范围信息 (2)
+                    leader_rel = np.zeros(3, dtype=np.float32)
+
                 leader_distance = float(np.linalg.norm(leader_rel))
                 is_out_of_range = 1.0 if leader_distance > runtime_data.leader_scan_radius else 0.0
                 leader_info = np.array([leader_distance, is_out_of_range], dtype=np.float32)
-            
-            # 第二步：从 grid_data 获取网格信息
-            with self.server.grid_lock:
+            finally:
+                self.server.data_lock.release()
+
+            acquired_grid = self.server.grid_lock.acquire(timeout=self._lock_timeout_sec)
+            if not acquired_grid:
+                if not self._warned_lock_timeout:
+                    logger.warning(f"[DQN多机环境] 获取 grid_lock 超时({self._lock_timeout_sec}s)，将重试")
+                    self._warned_lock_timeout = True
+                continue
+
+            try:
                 grid_data = self.server.grid_data
-                if not grid_data or not grid_data.cells:
-                    print(f"[DQN多机环境] 警告: grid_data 为空或没有cells")
-                    # 返回带有基本信息的状态
+                if not grid_data or not getattr(grid_data, 'cells', None):
                     entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
                     scan_info = np.array([0.0, 0.0, 0.0], dtype=np.float32)
                     min_dist_info = np.array([100.0], dtype=np.float32)
                 else:
-                    # 4. 局部熙值统计 (3)
                     nearby_distance = self.config['thresholds']['nearby_entropy_distance']
                     nearby_cells = [c for c in grid_data.cells if (c.center - pos).magnitude() < nearby_distance]
                     if nearby_cells:
@@ -1153,26 +1287,23 @@ class MultiDroneMovementEnv(gym.Env):
                         ], dtype=np.float32)
                     else:
                         entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
-                    
-                    # 7. 扫描进度 (3)
+
                     scanned_threshold = self.config['thresholds']['scanned_entropy']
                     scanned_count = sum(1 for cell in grid_data.cells if cell.entropy < scanned_threshold)
                     total_cells = len(grid_data.cells)
                     unscanned_count = total_cells - scanned_count
                     scan_ratio = scanned_count / total_cells if total_cells > 0 else 0.0
                     scan_info = np.array([scan_ratio, float(scanned_count), float(unscanned_count)], dtype=np.float32)
-                    
-                    # 8. 其他无人机最近距离 (1) - 需要重新获取 data_lock
-                    min_dist_info = np.array([100.0], dtype=np.float32)  # 默认值
-            
-            # 第三步：获取其他无人机距离
+
+                    min_dist_info = np.array([100.0], dtype=np.float32)
+            finally:
+                self.server.grid_lock.release()
+
             min_distance = self._get_min_distance_to_others(drone_name)
             min_dist_info = np.array([min_distance], dtype=np.float32)
-            
-            # 第四步：获取电量信息
+
             battery_info = self._get_battery_info_for_drone(drone_name)
-            
-            # 拼接所有特征
+
             state = np.concatenate([
                 position,
                 velocity,
@@ -1184,13 +1315,12 @@ class MultiDroneMovementEnv(gym.Env):
                 min_dist_info,
                 battery_info
             ])
-            
+
             return state.astype(np.float32)
-            
-        except Exception as e:
-            logger.error(f"获取状态失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+
+        try:
+            return np.zeros(23, dtype=np.float32)
+        except Exception:
             return np.zeros(23, dtype=np.float32)
     
     def _get_min_distance_to_others(self, drone_name):
@@ -1277,16 +1407,39 @@ class MultiDroneMovementEnv(gym.Env):
                     safe_ratio = cfg_thresh.get('stability_safe_ratio', 0.7)
                     penalty_ratio = cfg_thresh.get('stability_penalty_ratio', 0.8)
                     
-                    # 【修复】脱离范围后保留部分稳定性系数,而非完全归零
+                    # 【修复】脱离范围后奖励归零，强制其只能关注返回
                     if dist_ratio > 1.0:
-                        # 超出范围后,稳定性系数缓慢衰减到0.2(保留20%奖励)
-                        overshoot = min(dist_ratio - 1.0, 0.5)  # 最多考虑0.5倍半径的超出
-                        stability_factor = max(0.2, 1.0 - overshoot * 1.6)  # 从1.0衰减到0.2
+                        # 圈外利益彻底归零
+                        stability_factor = 0.0
                         
-                        # 【新增】返回奖励:如果正在往回飞,给予额外正奖励
+                        # 【极大化】返回奖励：大幅提高权重，并加入方向梯度引导
                         if is_returning:
-                            return_bonus = cfg_reward.get('return_to_range_bonus', 15.0)
-                            reward += return_bonus * (prev_dist_to_leader - dist_to_leader)
+                            # 1. 基础重奖(100) + 进步激励(距离差 * 200)
+                            return_bonus = cfg_reward.get('return_to_range_bonus', 100.0)
+                            progress_reward = (prev_dist_to_leader - dist_to_leader) * 200.0
+                            reward += (return_bonus + progress_reward)
+                            
+                            # 2. 【核心优化】动作方向对齐奖励 (Cosine Similarity)
+                            # 计算当前动作相对于 Leader 的对齐程度
+                            rd = self.server.unity_runtime_data[drone_name]
+                            dir_to_leader = np.array([
+                                rd.leader_position.x - rd.position.x,
+                                rd.leader_position.y - rd.position.y,
+                                rd.leader_position.z - rd.position.z
+                            ])
+                            norm = np.linalg.norm(dir_to_leader)
+                            if norm > 1e-6:
+                                ideal_dir = dir_to_leader / norm
+                                actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
+                                alignment = np.dot(ideal_dir, actual_dir)
+                                if alignment > 0:
+                                    reward += alignment * 50.0 # 额外方向奖励
+                            
+                            # 抵消步惩罚
+                            reward -= cfg_reward.get('step_penalty', -0.1)
+                        else:
+                            # 如果越界还往外飞，给予双倍惩罚
+                            reward += cfg_reward.get('out_of_range', -30.0) * 2.0
                     elif dist_ratio > safe_ratio:
                         # safe_ratio - 1.0 之间线性衰减
                         stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.5  # 从1.0衰减到0.5
@@ -1352,13 +1505,19 @@ class MultiDroneMovementEnv(gym.Env):
                 drone_state['prev_position'] = pos
         except Exception as e:
             logger.debug(f"高度奖励计算失败: {str(e)}")
-            
-        # 5. 碰撞惩罚
+
+        # 5. 碰撞惩罚与容忍机制
         min_distance = self._get_min_distance_to_others(drone_name)
-        if min_distance < cfg_thresh['collision_distance']:
+        collision_threshold = cfg_thresh['collision_distance']
+
+        if min_distance < collision_threshold * 0.8:
             reward += cfg_reward['collision']
             drone_state['collision_count'] += 1
-        
+        else:
+            # 距离恢复安全时重置计数器
+            if drone_state['collision_count'] > 0 and min_distance > collision_threshold * 1.5:
+                drone_state['collision_count'] = max(0, drone_state['collision_count'] - 1)
+
         # 6. 超出Leader范围惩罚
         if is_out_of_range:
             reward += cfg_reward['out_of_range']
@@ -1389,11 +1548,11 @@ class MultiDroneMovementEnv(gym.Env):
                 
                 # 更新电量消耗
                 if hasattr(self.server, 'update_battery_voltage'):
-                    # 计算动作强度（位移长度归一化）
-                    step_norm = float(np.linalg.norm(displacement))
+                    # 计算动作强度
+                    step_norm = float(np.linalg.norm(self.action_map[action]))
                     base_step = max(self.action_step, 1e-6)
                     action_intensity = min(1.0, max(0.0, step_norm / base_step))
-                    self.server.update_battery_voltage(current_drone, action_intensity)
+                    self.server.update_battery_voltage(drone_name, action_intensity)
             except Exception as e:
                 logger.debug(f"电量奖励计算失败: {str(e)}")
         
@@ -1401,25 +1560,63 @@ class MultiDroneMovementEnv(gym.Env):
     
     def _check_done(self):
         """检查episode是否结束 (统一终止逻辑)"""
-        # 计算累计物理仿真时间
-        elapsed_time = self.step_count * self.step_duration
+        # 修正：改用真实时间计算已用时长，避免因步频过快导致虚假超时
+        elapsed_time = time.time() - self.episode_start_time
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
+            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 2. 达到目标扫描比例
         scan_ratio = self._get_scan_ratio()
         if scan_ratio >= self.term_cfg['target_scan_ratio']:
-            print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+            self.last_done_reason = f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%})"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 3. 碰撞次数达到阈值（检查所有无人机的碰撞总和）
         total_collisions = sum(state['collision_count'] for state in self.drone_states.values())
         if total_collisions >= self.term_cfg['max_collision_count']:
-            print(f"[终止] 发生碰撞或超过上限: {total_collisions} / {self.term_cfg['max_collision_count']}")
+            self.last_done_reason = f"Collision Limit Reached ({total_collisions} >= {self.term_cfg['max_collision_count']})"
+            print(f"[终止] {self.last_done_reason}")
             return True
+        
+        # 4. 增加判定：检查是否有无人机已经停止飞行、电量耗尽或【严重越界】
+        if self.server:
+            for drone_name in self.drone_names:
+                try:
+                    # 检查 AirSim 物理状态
+                    state = self.server.drone_controller.get_vehicle_state(drone_name)
+                    if not state.get("flying", True):
+                        self.last_done_reason = f"Drone {drone_name} Landed (Physics)"
+                        print(f"[终止] {self.last_done_reason}")
+                        return True
+                    
+                    # 检查严重越界：1.5倍扫描半径
+                    with self.server.data_lock:
+                        rd = self.server.unity_runtime_data.get(drone_name)
+                        if rd and rd.leader_position and rd.leader_scan_radius > 0:
+                            dist = np.sqrt(
+                                (rd.position.x - rd.leader_position.x)**2 +
+                                (rd.position.y - rd.leader_position.y)**2 +
+                                (rd.position.z - rd.leader_position.z)**2
+                            )
+                            if dist > rd.leader_scan_radius * 1.5:
+                                self.last_done_reason = f"Drone {drone_name} Severe Out of Range ({dist:.1f}m)"
+                                print(f"[终止] {self.last_done_reason}")
+                                return True
+                    
+                    # 检查电量状态
+                    if hasattr(self.server, "battery_manager"):
+                        battery_info = self.server.battery_manager.get_battery_info(drone_name)
+                        if battery_info and battery_info.status == 'empty':
+                            self.last_done_reason = f"Drone {drone_name} Battery Empty"
+                            print(f"[终止] {self.last_done_reason}")
+                            return True
+                except Exception:
+                    continue
         
         return False
     

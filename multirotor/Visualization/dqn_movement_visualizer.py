@@ -20,6 +20,7 @@ from multirotor.Visualization.panels.environment_panel import EnvironmentPanel
 from multirotor.Visualization.panels.training_stats_panel import TrainingStatsPanel
 from multirotor.Visualization.panels.reward_curve_panel import RewardCurvePanel
 from multirotor.Visualization.panels.battery_panel import BatteryPanel
+from multirotor.Visualization.panels.action_output_panel import ActionOutputPanel
 from multirotor.Visualization.panel_system import BasePanel
 import pygame
 
@@ -134,7 +135,7 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         super().__init__(
             server=server,
             env=env,
-            window_title="🎯 DQN移动训练可视化"
+            window_title="DQN移动训练可视化"
         )
         
         # 训练统计
@@ -142,6 +143,11 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         self.total_steps = 0
         self.current_episode_reward = 0
         self.current_episode_steps = 0
+        
+        # Episode 时间统计
+        self.episode_start_time = None
+        self.last_episode_duration = 0.0
+        self.total_training_time = 0.0
         
         # 奖励历史
         self.reward_history = deque(maxlen=200)
@@ -159,6 +165,10 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         # 训练统计面板
         training_panel = TrainingStatsPanel(width=370, height=280)
         self.panel_manager.register_panel(training_panel, position='auto')
+
+        # 当前动作输出面板 (新增)
+        action_out_panel = ActionOutputPanel(width=370, height=150)
+        self.panel_manager.register_panel(action_out_panel, position='auto')
         
         # 奖励曲线面板
         reward_panel = RewardCurvePanel(width=370, height=200)
@@ -176,14 +186,49 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         """收集DQN移动训练可视化数据"""
         data = {}
         
-        # 训练统计数据
-        data['episode_count'] = self.episode_count
-        data['total_steps'] = self.total_steps
-        data['current_episode_steps'] = self.current_episode_steps
-        data['current_episode_reward'] = self.current_episode_reward
+        # 外部进程模式：优先使用 server.current_training_stats 提供的训练统计
+        cts = None
+        try:
+            if self.server and hasattr(self.server, 'current_training_stats') and isinstance(self.server.current_training_stats, dict):
+                cts = self.server.current_training_stats
+        except Exception:
+            cts = None
+
+        if cts:
+            data['episode_count'] = int(cts.get('episode_count', 0))
+            data['total_steps'] = int(cts.get('total_steps', 0))
+            if 'steps_per_sec' in cts:
+                try:
+                    data['steps_per_sec'] = float(cts.get('steps_per_sec', 0.0))
+                except Exception:
+                    data['steps_per_sec'] = 0.0
+            data['current_episode_steps'] = int(cts.get('current_episode_steps', 0))
+            data['current_episode_reward'] = float(cts.get('current_episode_reward', 0.0))
+            # 奖励历史：用于奖励曲线面板
+            rh = cts.get('reward_history', None)
+            if isinstance(rh, list):
+                data['reward_history'] = rh
+        else:
+            # 训练统计数据（本地模式兜底）
+            data['episode_count'] = self.episode_count
+            data['total_steps'] = self.total_steps
+            data['current_episode_steps'] = self.current_episode_steps
+            data['current_episode_reward'] = self.current_episode_reward
+
+        # Episode 时间信息
+        if self.episode_start_time is not None:
+            import time as _time
+            data['current_episode_time'] = _time.time() - self.episode_start_time
+        elif self.last_episode_duration > 0:
+            data['last_episode_duration'] = self.last_episode_duration
+        if self.total_training_time > 0:
+            data['total_training_time'] = self.total_training_time
         
-        # 奖励历史
-        data['reward_history'] = list(self.reward_history)
+        # 奖励历史 (外部进程模式优先从 cts 获取)
+        if cts and 'reward_history' in cts:
+            data['reward_history'] = cts['reward_history']
+        else:
+            data['reward_history'] = list(self.reward_history)
         
         # 统计数据
         if self.reward_history:
@@ -191,9 +236,42 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
             data['max_reward'] = max(self.reward_history)
             data['min_reward'] = min(self.reward_history)
         
-        # 动作统计
-        data['action_counts'] = dict(self.action_counts)
-        
+        # 外部进程模式：优先从 server.current_training_stats 注入动作数据
+        try:
+            if self.server and hasattr(self.server, 'current_training_stats') and self.server.current_training_stats:
+                cts = self.server.current_training_stats
+                if isinstance(cts, dict):
+                    if 'action_counts' in cts and cts['action_counts']:
+                        # 归一化 action_counts，处理字符串 key 和 整数 key
+                        raw_counts = cts['action_counts']
+                        normalized_counts = {}
+                        for action_id in range(6):
+                            # 同时尝试整数和字符串 key
+                            val = raw_counts.get(action_id, raw_counts.get(str(action_id), 0))
+                            normalized_counts[action_id] = int(val)
+                        data['action_counts'] = normalized_counts
+                    if 'last_action' in cts:
+                        data['current_training_stats'] = cts
+        except Exception:
+            pass
+
+        # 动作统计（本进程模式兜底）
+        if 'action_counts' not in data:
+            data['action_counts'] = dict(self.action_counts)
+
+        # 当前动作输出面板使用 current_training_stats
+        if 'current_training_stats' not in data:
+            try:
+                if self.server and hasattr(self.server, 'current_training_stats'):
+                    data['current_training_stats'] = self.server.current_training_stats
+            except Exception:
+                pass
+
+        # 获取电量数据 (通过父类方法获取 server 中的数据)
+        battery_data = self.get_battery_data()
+        if battery_data:
+            data['battery_data'] = battery_data
+
         return data
     
     def update_training_stats(self, episode_reward: float = None, 
@@ -210,6 +288,11 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
             is_episode_done: 是否episode结束
         """
         if current_step_reward is not None:
+            # 若当前没有记录episode开始时间，则认为是新的一轮episode开始
+            if self.episode_start_time is None:
+                import time as _time
+                self.episode_start_time = _time.time()
+            
             self.current_episode_reward += current_step_reward
             self.current_episode_steps += 1
             self.total_steps += 1
@@ -219,6 +302,13 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
             self.recent_actions.append(action)
         
         if is_episode_done:
+            # 计算本轮episode耗时并累加到总训练时间
+            if self.episode_start_time is not None:
+                import time as _time
+                self.last_episode_duration = _time.time() - self.episode_start_time
+                self.total_training_time += self.last_episode_duration
+                self.episode_start_time = None
+
             if episode_reward is not None:
                 self.reward_history.append(episode_reward)
             else:

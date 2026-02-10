@@ -27,6 +27,9 @@ echo === 数据分析 ===
 echo   [A] 数据可视化分析 [⭐可以使用！]
 echo   [B] DDPG vs DQN 算法对比 [⭐可以使用！]
 echo.
+echo === 数据清理 ===
+echo   [C] 删除训练产出(模型/日志/分析结果)
+echo.
 echo === 系统信息 ===
 echo   [9] 查看系统信息
 echo   [0] 退出
@@ -34,7 +37,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A-D): 
+set /p choice=请输入选项 (0-9,A-C): 
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
@@ -49,6 +52,7 @@ if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
 if /i "%choice%"=="b" goto compare_algorithms
+if /i "%choice%"=="c" goto cleanup_menu
 if /i "%choice%"=="9" goto info
 if /i "%choice%"=="0" goto end
 
@@ -207,6 +211,164 @@ if %ERRORLEVEL% EQU 0 (
 echo.
 pause
 goto menu
+
+:cleanup_menu
+cls
+echo ============================================================
+echo           🧹 数据清理与维护菜单
+echo ============================================================
+echo.
+echo --- [DDPG 权重训练 (APF)] ---
+echo   [1] 删除 DDPG 模型 (multirotor\DDPG_Weight\models)
+echo   [2] 删除 DDPG 日志 (multirotor\DDPG_Weight\logs)
+echo.
+echo --- [DQN 基础移动控制] ---
+echo   [3] 删除 DQN 移动模型 (multirotor\DQN_Movement\models)
+echo   [4] 删除 DQN 移动日志 (multirotor\DQN_Movement\logs)
+echo.
+echo --- [HRL 分层 DQN 训练] ---
+echo   [6] 删除 HRL 分层模型 (multirotor\DQN_Movement\models\hrl_*)
+echo   [7] 删除 HRL 训练日志 (multirotor\DQN_Movement\scripts\logs\hrl_*)
+echo.
+echo --- [分析结果与全局] ---
+echo   [5] 删除 算法对比分析结果 (analysis_results)
+echo   [8] 删除 所有模型和日志 (慎用！)
+echo   [9] 返回主菜单
+echo.
+echo ============================================================
+echo.
+set /p cleanup_choice=请输入选项 (1-9): 
+
+if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
+if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
+if "%cleanup_choice%"=="3" goto cleanup_dqn_models
+if "%cleanup_choice%"=="4" goto cleanup_dqn_logs
+if "%cleanup_choice%"=="6" goto cleanup_hrl_models
+if "%cleanup_choice%"=="7" goto cleanup_hrl_logs
+if "%cleanup_choice%"=="5" goto cleanup_analysis_results
+if "%cleanup_choice%"=="8" goto cleanup_all
+if "%cleanup_choice%"=="9" goto menu
+
+echo.
+echo 无效的选项，请重新选择
+timeout /t 2 >nul
+goto cleanup_menu
+
+:confirm_delete
+set "TARGET_DIR=%~1"
+set "TARGET_DESC=%~2"
+if "%TARGET_DIR%"=="" goto cleanup_menu
+cls
+echo ============================================================
+echo 确认删除: %TARGET_DESC%
+echo ------------------------------------------------------------
+echo 路径: %TARGET_DIR%
+echo ============================================================
+echo.
+echo [警告] 该操作不可恢复！
+echo.
+set /p confirm=请输入 YES 确认删除，输入其它取消: 
+if /i not "%confirm%"=="YES" (
+    echo.
+    echo 已取消操作。
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+
+if not exist "%TARGET_DIR%" (
+    echo.
+    echo [提示] 目录不存在，无需清理。
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+
+rmdir /s /q "%TARGET_DIR%" 2>nul
+if exist "%TARGET_DIR%" (
+    echo.
+    echo [错误] 删除失败，请检查文件是否被占用。
+) else (
+    echo.
+    echo [成功] %TARGET_DESC% 已清理。
+)
+pause
+goto cleanup_menu
+
+:cleanup_ddpg_models
+call :confirm_delete "multirotor\DDPG_Weight\models" "DDPG 权重模型"
+goto cleanup_menu
+
+:cleanup_ddpg_logs
+call :confirm_delete "multirotor\DDPG_Weight\logs" "DDPG 训练日志"
+goto cleanup_menu
+
+:cleanup_dqn_models
+echo 正在清理 DQN 基础移动模型...
+if exist "multirotor\DQN_Movement\models\movement_dqn_airsim_final.zip" del /f /q "multirotor\DQN_Movement\models\movement_dqn_airsim_final.zip"
+if exist "multirotor\DQN_Movement\scripts\models\movement_dqn_airsim_final.zip" del /f /q "multirotor\DQN_Movement\scripts\models\movement_dqn_airsim_final.zip"
+echo [成功] DQN 移动模型已清理。
+pause
+goto cleanup_menu
+
+:cleanup_dqn_logs
+echo 正在清理 DQN 移动日志...
+if exist "multirotor\DQN_Movement\logs\dqn_scan_data" rmdir /s /q "multirotor\DQN_Movement\logs\dqn_scan_data"
+if exist "multirotor\DQN_Movement\scripts\logs\movement_dqn_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\logs\movement_dqn_airsim"
+echo [成功] DQN 移动日志已清理。
+pause
+goto cleanup_menu
+
+:cleanup_hrl_models
+echo 正在清理 HRL 分层模型...
+if exist "multirotor\DQN_Movement\models\hrl_planner" rmdir /s /q "multirotor\DQN_Movement\models\hrl_planner"
+if exist "multirotor\DQN_Movement\models\hrl_planner_airsim" rmdir /s /q "multirotor\DQN_Movement\models\hrl_planner_airsim"
+if exist "multirotor\DQN_Movement\scripts\models\hrl_planner_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\models\hrl_planner_airsim"
+echo [成功] HRL 分层模型已清理。
+pause
+goto cleanup_menu
+
+:cleanup_hrl_logs
+echo 正在清理 HRL 训练日志...
+if exist "multirotor\DQN_Movement\scripts\logs\hrl_dqn_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\logs\hrl_dqn_airsim"
+echo [成功] HRL 训练日志已清理。
+pause
+goto cleanup_menu
+
+:cleanup_analysis_results
+call :confirm_delete "analysis_results" "可视化分析结果"
+goto cleanup_menu
+
+:cleanup_all
+cls
+echo ============================================================
+echo           🔥 危险操作：清理所有产出
+echo ============================================================
+echo.
+echo 将删除所有 DDPG/DQN/HRL 的模型、日志以及分析结果。
+echo.
+set /p final_confirm=请输入 DELETE_ALL 确认执行: 
+if /i not "%final_confirm%"=="DELETE_ALL" (
+    echo.
+    echo 操作已取消。
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+
+echo 正在执行全面清理...
+for %%D in (
+    "multirotor\DDPG_Weight\models" 
+    "multirotor\DDPG_Weight\logs" 
+    "multirotor\DQN_Movement\models" 
+    "multirotor\DQN_Movement\scripts\models"
+    "multirotor\DQN_Movement\logs"
+    "multirotor\DQN_Movement\scripts\logs"
+    "analysis_results"
+) do (
+    if exist "%%~D" rmdir /s /q "%%~D"
+)
+echo.
+echo [成功] 所有训练产出已清理完毕。
+pause
+goto cleanup_menu
 
 :info
 cls

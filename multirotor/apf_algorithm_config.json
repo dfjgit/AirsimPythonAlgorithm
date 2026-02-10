@@ -18,7 +18,7 @@
     "env_config": {
         "termination": {
             "target_scan_ratio": 0.95,
-            "max_collision_count": 1,
+            "max_collision_count": 15,
             "max_elapsed_time_sec": 300.0,
             "stagnation_timeout_sec": 30.0
         },

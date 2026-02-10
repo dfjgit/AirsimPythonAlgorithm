@@ -66,15 +66,34 @@ class TrainingStatsPanel(BasePanel):
         screen.blit(rate_text, (text_x, y))
         y += 20
         
-        # 已用时间
+        # 已用时间（全局训练耗时）
         elapsed_time = time.time() - self.training_start_time
         hours = int(elapsed_time // 3600)
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
-        time_text = self._font.render(f"已用时间: {hours:02d}:{minutes:02d}:{seconds:02d}", 
+        time_text = self._font.render(f"已用时间(可视化): {hours:02d}:{minutes:02d}:{seconds:02d}", 
                                       True, self.WHITE)
         screen.blit(time_text, (text_x, y))
-        y += 25
+        y += 22
+
+        # Episode 级别时间信息（由上层可视化器传入）
+        current_ep_time = data.get('current_episode_time', None)
+        last_ep_duration = data.get('last_episode_duration', None)
+        total_training_time = data.get('total_training_time', None)
+
+        if current_ep_time is not None:
+            text = self._font.render(f"当前Episode耗时: {current_ep_time:.1f} s", True, self.WHITE)
+            screen.blit(text, (text_x, y))
+            y += 20
+        elif last_ep_duration is not None:
+            text = self._font.render(f"上一Episode耗时: {last_ep_duration:.1f} s", True, self.WHITE)
+            screen.blit(text, (text_x, y))
+            y += 20
+
+        if total_training_time is not None and total_training_time > 0:
+            text = self._font.render(f"总训练耗时: {total_training_time:.1f} s", True, self.WHITE)
+            screen.blit(text, (text_x, y))
+            y += 25
         
         # 统计信息
         avg_reward = data.get('avg_reward', 0.0)

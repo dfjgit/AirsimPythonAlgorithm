@@ -27,6 +27,7 @@ import signal
 import argparse
 import json
 import numpy as np
+import subprocess
 
 # 添加项目根目录到Python路径，以便导入项目模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -88,9 +89,13 @@ except ImportError as e:
 # 导入训练环境：用于AirSim仿真的权重训练环境
 from envs.simple_weight_env import SimpleWeightEnv
 
-# 导入训练可视化模块：实时显示训练统计和进度
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from Visualization import DDPGTrainingVisualizer
+# 独立进程可视化 (pygame 不与训练进程共享)
+try:
+    from multirotor.Visualization.visualization_ipc import VisualizationIPCServer
+    HAS_EXT_VIS = True
+except Exception:
+    HAS_EXT_VIS = False
+    print("警告: 无法导入 VisualizationIPCServer，独立可视化将被禁用")
 
 # 导入算法服务器：负责与Unity AirSim通信和算法执行
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -689,6 +694,69 @@ def main():
         
         print("[OK] 无人机已起飞，算法线程运行中")
 
+        # 启动独立进程可视化（默认启用，可通过环境变量 NO_VIS=1 禁用）
+        ipc_server = None
+        vis_process = None
+        vis_log_f = None
+        vis_log_path = None
+        _tmp_vis_log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'ddpg_airsim')
+        os.makedirs(_tmp_vis_log_dir, exist_ok=True)
+
+        if HAS_EXT_VIS and os.environ.get('NO_VIS', '0') != '1':
+            try:
+                ipc_server = VisualizationIPCServer(
+                    snapshot_provider=server.get_visualization_snapshot,
+                    host='127.0.0.1',
+                    port=0,
+                    hz=10.0,
+                    compress_level=1
+                )
+                ipc_server.start()
+                port = ipc_server.bound_port
+
+                vis_log_path = os.path.join(_tmp_vis_log_dir, 'external_vis.log')
+                vis_log_f = open(vis_log_path, 'w', encoding='utf-8')
+
+                python_exe = sys.executable
+                vis_entry = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'multirotor', 'Visualization', 'external_visualizer_client.py')
+                vis_cmd = [python_exe, vis_entry, '--mode', 'ddpg', '--host', '127.0.0.1', '--port', str(port)]
+
+                vis_env = os.environ.copy()
+                vis_env['PYTHONIOENCODING'] = 'utf-8'
+                vis_env['PYTHONUTF8'] = '1'
+
+                creationflags = 0
+                if os.name == 'nt' and os.environ.get('VIS_NEW_CONSOLE', '0') == '1':
+                    creationflags = subprocess.CREATE_NEW_CONSOLE
+
+                vis_process = subprocess.Popen(
+                    vis_cmd,
+                    stdout=vis_log_f,
+                    stderr=vis_log_f,
+                    creationflags=creationflags,
+                    env=vis_env
+                )
+
+                time.sleep(0.5)
+                rc = vis_process.poll()
+                if rc is not None:
+                    print(f"! 独立可视化进程启动后立即退出 (returncode={rc})")
+                    print(f"  - 请查看: {vis_log_path}")
+                else:
+                    print(f"✅ 已启动独立可视化进程 (port={port})")
+                    print(f"  - 外部可视化日志: {vis_log_path}")
+            except Exception as e:
+                print(f"! 启动独立可视化失败: {e}")
+                if vis_log_path:
+                    print(f"  - 外部可视化日志(若已生成): {vis_log_path}")
+                try:
+                    if ipc_server:
+                        ipc_server.stop()
+                except Exception:
+                    pass
+                ipc_server = None
+                vis_process = None
+
         # [2.5] 设置实验元数据 (用于跨方案数据对比)
         if hasattr(server, 'set_experiment_meta'):
             server.set_experiment_meta(
@@ -754,21 +822,14 @@ def main():
         print(f"  🎯 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * step_duration / 60:.1f}分钟")
         print(f"  💡 预计总训练时长: {total_timesteps * step_duration / 60:.1f}分钟")
         
-        # 创建并启动训练专用可视化
+        # 训练可视化（已迁移到独立进程 external_visualizer_client.py，避免 pygame 阻塞训练）
         if enable_visualization:
-            print("\n[4.5/5] 启动训练专用可视化...")
-            try:
-                training_visualizer = DDPGTrainingVisualizer(server=server, env=env)
-                if training_visualizer.start_visualization():
-                    print("✅ 训练可视化已启动")
-                    print("💡 可视化窗口应该会弹出，显示训练统计和环境状态")
-                    print("💡 按ESC键可关闭可视化窗口（不影响训练）")
-                else:
-                    print("⚠️  训练可视化启动失败，但训练将继续")
-            except Exception as e:
-                print(f"⚠️  训练可视化初始化失败: {str(e)}")
-                print("💡 训练将继续，但不显示可视化")
-                training_visualizer = None
+            print("\n[4.5/5] 训练可视化: 已使用独立进程模式启动")
+            if vis_log_path:
+                print(f"  - 外部可视化日志: {vis_log_path}")
+            else:
+                print("  - 外部可视化日志: (未生成)")
+            training_visualizer = None
 
         # ========== [5/5] 创建或加载 DDPG 模型 ==========
         print("\n[5/5] 获取 DDPG 模型...")

@@ -102,6 +102,8 @@ class HierarchicalMovementEnv(gym.Env):
         self.prev_entropy_sum = 0
         
         self.episode_index = 0  # 新增：用于 DataCollector 的 Episode 计数
+        self.last_done_reason = None  # 记录分层模式结束原因
+        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
         self._first_reset = True
         
         # 底层策略 (在训练 HL 时需要，如果是协同训练则由外部管理)
@@ -118,7 +120,7 @@ class HierarchicalMovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -176,7 +178,7 @@ class HierarchicalMovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -251,6 +253,13 @@ class HierarchicalMovementEnv(gym.Env):
         }
 
     def reset(self, seed=None, options=None):
+        # 1. 在清除前先获取上一次结束的原因
+        reason_str = getattr(self, 'last_done_reason', 'manual')
+        print(f"\n[HRL环境] reset() 被调用，上一轮结束原因: {reason_str}")
+        
+        # 2. 重置状态
+        self.last_done_reason = None
+
         if seed is not None:
             np.random.seed(seed)
             
@@ -260,7 +269,8 @@ class HierarchicalMovementEnv(gym.Env):
                 self.server.reset_battery_voltage(self.drone_name)
         else:
             if self.server:
-                self.server.reset_environment()
+                print(f"[HRL环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason_str})")
+                self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason_str}")
                 if hasattr(self.server, 'reset_battery_voltage'):
                     self.server.reset_battery_voltage(self.drone_name)
                 time.sleep(1.0)
@@ -273,6 +283,7 @@ class HierarchicalMovementEnv(gym.Env):
         self.prev_entropy_sum = self._get_total_entropy()
         self.current_hl_goal = None
         self.episode_index += 1  # 增加 Episode 计数
+        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
         
         return self._get_hl_observation(), {}
 
@@ -351,7 +362,9 @@ class HierarchicalMovementEnv(gym.Env):
             terminated = True
             
         if terminated and self.server:
-            self.server.reset_environment()
+            reason = getattr(self, 'last_done_reason', 'manual')
+            print(f"[HRL环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
+            self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason}")
             if hasattr(self.server, 'reset_battery_voltage'):
                 self.server.reset_battery_voltage(self.drone_name)
             time.sleep(1.0)
@@ -370,7 +383,8 @@ class HierarchicalMovementEnv(gym.Env):
         # 执行移动
         if self.server:
             self._apply_movement(displacement)
-            time.sleep(0.05) # 基础等待
+            # 修正：将休眠时间调整为与底层步长一致，确保物理同步
+            time.sleep(self.ll_step_duration)
             
             # 更新电量消耗
             if hasattr(self.server, "update_battery_voltage"):
@@ -625,8 +639,27 @@ class HierarchicalMovementEnv(gym.Env):
                             # 如果目标在领导者附近(比当前位置更接近),给予奖励
                             dist_goal_to_leader = np.linalg.norm(goal_rel - leader_rel)
                             if dist_goal_to_leader < dist_to_leader:
-                                return_bonus = self.config['rewards'].get('return_to_range_bonus', 8.0)
-                                reward += return_bonus
+                                # 【核心修改】极大化返回奖励：大幅提高权重并增加方向对齐激励
+                                return_bonus = self.config['rewards'].get('return_to_range_bonus', 100.0)
+                                progress_bonus = (dist_to_leader - dist_goal_to_leader) * 200.0
+                                reward += (return_bonus + progress_bonus)
+                                
+                                # 增加方向对齐奖励 (Cosine Similarity)
+                                ideal_dir_vec = Vector3(
+                                    rd.leader_position.x - rd.position.x,
+                                    rd.leader_position.y - rd.position.y,
+                                    rd.leader_position.z - rd.position.z
+                                ).normalized()
+                                actual_dir_vec = Vector3(goal_rel[0], goal_rel[1], goal_rel[2]).normalized()
+                                alignment = ideal_dir_vec.x * actual_dir_vec.x + ideal_dir_vec.y * actual_dir_vec.y + ideal_dir_vec.z * actual_dir_vec.z
+                                if alignment > 0:
+                                    reward += alignment * 50.0
+                                    
+                                # 抵消底层可能存在的距离惩罚负担
+                                reward += goal_dist * 0.1 
+                            else:
+                                # 【重罚逆行】越界且目标在更远处时给予翻倍越界惩罚
+                                reward += self.config['rewards'].get('out_of_range', -30.0) * 2.0
         
         return reward
 
@@ -741,13 +774,13 @@ class HierarchicalMovementEnv(gym.Env):
 
     def _check_done(self):
         """判断Episode是否结束 (统一终止逻辑)"""
-        # 计算高层对应的累计物理时间
-        # self.step_count 是高层步数，每步包含 ll_steps_per_hl 个底层步
-        elapsed_time = self.total_ll_steps * self.ll_step_duration
+        # 修正：改用真实时间计算已用时长，确保与纯DQN环境对比的公正性
+        elapsed_time = time.time() - self.episode_start_time
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
+            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 2. 达到目标扫描比例
@@ -757,14 +790,36 @@ class HierarchicalMovementEnv(gym.Env):
                 scanned = sum(1 for c in self.server.grid_data.cells if c.entropy < 10.0)
                 scan_ratio = scanned / total
                 if scan_ratio >= self.term_cfg['target_scan_ratio']:
-                    print(f"[终止] 任务成功：覆盖率 {scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%}")
+                    self.last_done_reason = f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%})"
+                    print(f"[终止] {self.last_done_reason}")
                     return True
         
         # 3. 碰撞次数达到阈值
         if self.collision_count >= self.term_cfg['max_collision_count']:
-            print(f"[终止] 发生碰撞或超过上限: {self.collision_count} / {self.term_cfg['max_collision_count']}")
+            self.last_done_reason = f"Collision Limit Reached ({self.collision_count} >= {self.term_cfg['max_collision_count']})"
+            print(f"[终止] {self.last_done_reason}")
             return True
             
+        # 4. 增加判定：检查无人机是否已经停止飞行或电量耗尽
+        if self.server:
+            try:
+                # 检查 AirSim 物理状态
+                state = self.server.drone_controller.get_vehicle_state(self.drone_name)
+                if not state.get("flying", True):
+                    self.last_done_reason = f"Drone {self.drone_name} Landed (Physics)"
+                    print(f"[终止] {self.last_done_reason}")
+                    return True
+                
+                # 检查电量状态
+                if hasattr(self.server, "battery_manager"):
+                    battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
+                    if battery_info and battery_info.status == 'empty':
+                        self.last_done_reason = f"Drone {self.drone_name} Battery Empty"
+                        print(f"[终止] {self.last_done_reason}")
+                        return True
+            except Exception:
+                pass
+
         return False
 
 class MultiDroneHierarchicalMovementEnv(gym.Env):
@@ -815,7 +870,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -873,7 +928,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             # 2. 尝试从本地 apf_algorithm_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
@@ -954,6 +1009,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         self.total_episode_reward = 0
         self.episode_index += 1  # 增加 Episode 计数
         self.current_drone_idx = 0
+        self.episode_start_time = time.time() # 记录 Episode 开始的真实时间
         
         return self.envs[self.drone_names[0]]._get_hl_observation(), {}
 
@@ -995,7 +1051,9 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
                     self.server.update_battery_voltage(name, action_intensity)
             
             # 统一等待环境更新
-            if self.server: time.sleep(0.05)
+            if self.server:
+                # 修正：将休眠时间调整为与底层步长一致，确保物理同步
+                time.sleep(current_env.ll_step_duration)
             
             # 计算当前决策无人机的底层奖励和状态
             next_ll_obs = current_env._get_ll_observation()
@@ -1072,15 +1130,13 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
     
     def _check_done(self):
         """判断Episode是否结束（统一终止逻辑）"""
-        # 计算高层对应的累计物理时间
-        # 每个高层步对应多个底层步，每个底层步有固定时长
-        # 使用第一个环境的配置作为参考
-        first_env = self.envs[self.drone_names[0]]
-        elapsed_time = sum(env.total_ll_steps for env in self.envs.values()) * first_env.ll_step_duration
+        # 修正：改用真实时间计算已用时长，确保与纯DQN环境对比的公正性
+        elapsed_time = time.time() - self.episode_start_time
         
         # 1. 达到最大物理仿真时间
         if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s / {self.term_cfg['max_elapsed_time_sec']}s")
+            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
+            print(f"[终止] {self.last_done_reason}")
             return True
         
         # 2. 达到目标扫描比例

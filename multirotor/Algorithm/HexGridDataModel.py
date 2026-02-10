@@ -65,6 +65,17 @@ class HexGridDataModel:
         """初始化六边形网格模型"""
         self.cells = []  # 存储所有蜂窝单元
 
+    def clear(self) -> None:
+        """清空所有单元格数据，保持对象引用不变"""
+        self.cells = []
+        # print("[网格模型] 数据已清空")
+
+    def reset_entropy(self) -> None:
+        """重置所有单元格的熵值为初始值(100)，保持对象引用和列表结构不变"""
+        for cell in self.cells:
+            cell.entropy = 100.0
+        # print("[网格模型] 熵值已重置为100")
+
     def to_dict(self) -> Dict[str, Any]:
         """将对象转换为字典格式，用于JSON序列化"""
         return {

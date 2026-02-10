@@ -24,6 +24,9 @@ echo === Data Analysis ===
 echo   [A] Data Visualization Analysis [⭐Available!]
 echo   [B] DDPG vs DQN Algorithm Comparison [⭐Available!]
 echo.
+echo === Cleanup ===
+echo   [C] Delete training outputs (models/logs/analysis)
+echo.
 echo === System Information ===
 echo   [6] View System Information
 echo   [0] Exit
@@ -31,7 +34,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=Please enter an option (0-6,A-D): 
+set /p choice=Please enter an option (0-6,A-C): 
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
@@ -43,6 +46,7 @@ if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
 if /i "%choice%"=="b" goto compare_algorithms
+if /i "%choice%"=="c" goto cleanup_menu
 if /i "%choice%"=="6" goto info
 if /i "%choice%"=="0" goto end
 
@@ -160,6 +164,126 @@ if %ERRORLEVEL% EQU 0 (
 echo.
 pause
 goto menu
+
+:cleanup_menu
+cls
+echo ============================================================
+echo Delete Training Outputs (Models/Logs/Analysis)
+echo ============================================================
+echo.
+echo [1] Delete DDPG Models (multirotor\DDPG_Weight\models)
+echo [2] Delete DDPG Logs (multirotor\DDPG_Weight\logs)
+echo [3] Delete DQN Models (multirotor\DQN_Movement\models)
+echo [4] Delete DQN Logs (multirotor\DQN_Movement\logs)
+echo [5] Delete Analysis Results (analysis_results)
+echo.
+echo [8] Delete ALL of the above
+echo [9] Back to Main Menu
+echo.
+echo ============================================================
+echo.
+set /p cleanup_choice=Please enter an option (1-5, 8-9): 
+
+if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
+if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
+if "%cleanup_choice%"=="3" goto cleanup_dqn_models
+if "%cleanup_choice%"=="4" goto cleanup_dqn_logs
+if "%cleanup_choice%"=="5" goto cleanup_analysis_results
+if "%cleanup_choice%"=="8" goto cleanup_all
+if "%cleanup_choice%"=="9" goto menu
+
+echo.
+echo Invalid option, please select again
+timeout /t 2 >nul
+goto cleanup_menu
+
+:confirm_delete
+set "TARGET_DIR=%~1"
+set "TARGET_DESC=%~2"
+if "%TARGET_DIR%"=="" goto cleanup_menu
+if "%TARGET_DESC%"=="" set "TARGET_DESC=%TARGET_DIR%"
+cls
+echo ============================================================
+echo Preparing to delete: %TARGET_DESC%
+echo Directory: %TARGET_DIR%
+echo ============================================================
+echo.
+echo [WARNING] This action is irreversible!
+echo.
+echo Type YES to confirm deletion, any other input to cancel:
+echo.
+set /p confirm=Confirmation: 
+if /i not "%confirm%"=="YES" (
+    echo.
+    echo Deletion cancelled.
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+if not exist "%TARGET_DIR%" (
+    echo.
+    echo [Tip] Directory does not exist, no need to delete.
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+rmdir /s /q "%TARGET_DIR%" 2>nul
+if exist "%TARGET_DIR%" (
+    echo.
+    echo [Failed] Deletion failed, check if files are in use or for permissions.
+) else (
+    echo.
+    echo [Success] Deleted successfully.
+)
+echo.
+pause
+goto cleanup_menu
+
+:cleanup_ddpg_models
+call :confirm_delete "multirotor\DDPG_Weight\models" "DDPG Models"
+
+:cleanup_ddpg_logs
+call :confirm_delete "multirotor\DDPG_Weight\logs" "DDPG Logs"
+
+:cleanup_dqn_models
+call :confirm_delete "multirotor\DQN_Movement\models" "DQN Models"
+
+:cleanup_dqn_logs
+call :confirm_delete "multirotor\DQN_Movement\logs" "DQN Logs"
+
+:cleanup_analysis_results
+call :confirm_delete "analysis_results" "Analysis Results"
+
+:cleanup_all
+cls
+echo ============================================================
+echo Preparing to delete ALL training outputs
+echo ============================================================
+echo.
+echo Will delete:
+echo   - multirotor\DDPG_Weight\models
+echo   - multirotor\DDPG_Weight\logs
+echo   - multirotor\DQN_Movement\models
+echo   - multirotor\DQN_Movement\logs
+echo   - analysis_results
+echo.
+echo Type YES to confirm deletion, any other input to cancel:
+echo.
+set /p confirm_all=Confirmation: 
+if /i not "%confirm_all%"=="YES" (
+    echo.
+    echo Deletion cancelled.
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+for %%D in ("multirotor\DDPG_Weight\models" "multirotor\DDPG_Weight\logs" "multirotor\DQN_Movement\models" "multirotor\DQN_Movement\logs" "analysis_results") do (
+    if exist "%%~D" (
+        rmdir /s /q "%%~D" 2>nul
+    )
+)
+echo.
+echo Deletion executed (missing directories were skipped).
+echo.
+pause
+goto cleanup_menu
 
 :info
 cls

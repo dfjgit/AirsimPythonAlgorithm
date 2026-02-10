@@ -1,3 +1,0 @@
-episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,scan_efficiency,avg_repulsion,avg_entropy,avg_distance,avg_leader,avg_direction,algorithm_type,env_type,control_mode
-0,0.00,1,7,5,5.01,2026-02-04 15:52:45,1.40,4.000,2.000,2.000,2.000,2.000,hrl_dqn_apf,hierarchical,dqn
-1,404.75,20,0,55,55.16,2026-02-04 15:53:36,0.00,4.000,2.000,2.000,2.000,2.000,hrl_dqn_apf,hierarchical,dqn
