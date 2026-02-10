@@ -77,6 +77,13 @@ class MovementEnv(gym.Env):
         
         # 状态记录
         self.prev_scanned_cells = 0
+        
+        # 越界决策诊断信息（用于可视化/日志）
+        self.last_oob_diag = {}
+        self.out_of_range_steps = 0
+        
+        # 连续越界步数（用于防止出圈后“摆烂”）
+        self.out_of_range_steps = 0
         self.prev_position = None
         self.prev_entropy_sum = 0
         self.step_count = 0
@@ -231,6 +238,7 @@ class MovementEnv(gym.Env):
         self.episode_reward = 0
         self.collision_count = 0
         self.out_of_range_count = 0
+        self.out_of_range_steps = 0  # 重置越界步数统计
         
         print(f"[DQN环境] 初始化信息:")
         print(f"  - 初始扫描数: {self.prev_scanned_cells}")
@@ -293,14 +301,15 @@ class MovementEnv(gym.Env):
         terminated = self._check_done()  # episode自然结束
         truncated = False  # 不使用截断
         
-        # 额外信息
+        # 额外信息 - 注入诊断数据
         info = {
             'action': action,
             'displacement': displacement.tolist(),
             'scanned_cells': self._count_scanned_cells(),
             'collision_count': self.collision_count,
             'out_of_range_count': self.out_of_range_count,
-            'episode_reward': self.episode_reward
+            'episode_reward': self.episode_reward,
+            'oob_diag': self.last_oob_diag  # 包含越界时的决策诊断
         }
         
         if self.step_count % 10 == 0:
@@ -427,6 +436,16 @@ class MovementEnv(gym.Env):
         cfg_reward = self.config['rewards']
         cfg_thresh = self.config['thresholds']
         
+        # 初始化诊断信息
+        diag_info = {
+            'is_oob': False,
+            'dist_ratio': 0.0,
+            'delta_dist': 0.0,
+            'alignment': 0.0,
+            'action_name': ['上', '下', '左', '右', '前', '后'][action],
+            'reward': 0.0
+        }
+        
         try:
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data[self.drone_name]
@@ -443,61 +462,70 @@ class MovementEnv(gym.Env):
                     )
                     radius = runtime_data.leader_scan_radius
                     dist_ratio = dist_to_leader / radius
+                    diag_info['dist_ratio'] = float(dist_ratio)
                     
                     # 从配置获取比例
                     safe_ratio = cfg_thresh.get('stability_safe_ratio', 0.7)
                     penalty_ratio = cfg_thresh.get('stability_penalty_ratio', 0.8)
                     
-                    # 计算上一步到领导者的距离（用于判断是否在返回）
-                    # prev_dist_to_leader = getattr(self, '_last_dist_to_leader', dist_to_leader)
-                    # self._last_dist_to_leader = dist_to_leader
-                    
                     if dist_ratio > 1.0:
-                        # 【核心修改】越界后完全取消一切探索正向奖励，稳定性系数归零
+                        diag_info['is_oob'] = True
+                        # 越界后：将任务切换为“尽快回圈”，避免圈外出现可学习的“摆烂”局部最优
                         stability_factor = 0.0
-                        
-                        # 【极大化】返回奖励：大幅提高权重，并加入方向对齐引导
+
+                        # 距离 shaping：更靠近 leader 就奖励；远离则惩罚
                         if self.prev_position:
                             prev_dist = np.sqrt(
                                 (self.prev_position.x - runtime_data.leader_position.x)**2 +
                                 (self.prev_position.y - runtime_data.leader_position.y)**2 +
                                 (self.prev_position.z - runtime_data.leader_position.z)**2
                             )
-                            # 如果当前比上一步更靠近，给予重奖
-                            if dist_to_leader < prev_dist:
-                                # 1. 基础返回奖励(100) + 进步奖励(距离差*200)
-                                return_bonus = cfg_reward.get('return_to_range_bonus', 100.0)
-                                progress_bonus = (prev_dist - dist_to_leader) * 200.0
-                                reward += (return_bonus + progress_bonus)
-                                
-                                # 2. 动作方向对齐奖励 (1.0表示正对着飞，奖励更高)
-                                dir_to_leader = np.array([
-                                    runtime_data.leader_position.x - self.prev_position.x,
-                                    runtime_data.leader_position.y - self.prev_position.y,
-                                    runtime_data.leader_position.z - self.prev_position.z
-                                ])
-                                norm = np.linalg.norm(dir_to_leader)
-                                if norm > 1e-6:
-                                    ideal_dir = dir_to_leader / norm
-                                    actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
-                                    alignment = np.dot(ideal_dir, actual_dir)
-                                    if alignment > 0:
-                                        reward += alignment * 50.0 
-                                
-                                # 抵消步惩罚
-                                reward -= cfg_reward.get('step_penalty', -0.1) 
-                            else:
-                                # 如果越界还继续往外飞，给予巨额惩罚
-                                reward += cfg_reward.get('out_of_range', -30.0) * 2.0
+                            delta = prev_dist - dist_to_leader
+                            diag_info['delta_dist'] = float(delta)
+                        else:
+                            delta = 0.0
+
+                        # 基础圈外每步惩罚
+                        reward += cfg_reward.get('out_of_range_step_penalty', -1.0)
+
+                        if delta > 0:
+                            # 回圈进度奖励
+                            reward += delta * cfg_reward.get('return_progress_weight', 200.0)
+                            reward += cfg_reward.get('return_to_range_bonus', 50.0)
+
+                            # 动作方向对齐奖励
+                            dir_to_leader = np.array([
+                                runtime_data.leader_position.x - runtime_data.position.x,
+                                runtime_data.leader_position.y - runtime_data.position.y,
+                                runtime_data.leader_position.z - runtime_data.position.z
+                            ])
+                            norm = np.linalg.norm(dir_to_leader)
+                            if norm > 1e-6:
+                                ideal_dir = dir_to_leader / norm
+                                actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
+                                alignment = float(np.dot(ideal_dir, actual_dir))
+                                diag_info['alignment'] = alignment
+                                if alignment > 0:
+                                    reward += alignment * cfg_reward.get('return_alignment_weight', 20.0)
+                        else:
+                            # 继续往外飞：额外惩罚
+                            reward += cfg_reward.get('out_of_range', -30.0)
+
+                        diag_info['reward'] = float(reward)
+                        self.last_oob_diag = diag_info
+                        # 越界阶段奖励单独结算
+                        return reward
+
                     elif dist_ratio > safe_ratio:
-                        # 在 safe_ratio - 1.0 之间线性衰减，从 1.0 降至 0.1
+                        # 在 safe_ratio - 1.0 之间线性衰减
                         stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.9
                     
-                    # 额外稳定性惩罚：靠近边界或越界时给予负反馈
                     if dist_ratio > penalty_ratio:
-                        # 引导无人机远离边界
                         penalty_weight = cfg_reward.get('stability_penalty_weight', 20.0)
                         reward -= (dist_ratio - penalty_ratio) * penalty_weight
+
+                # 正常情况下的奖励计算...
+                # (此处省略后续代码，search_replace 会处理匹配)
 
                 # 1. 探索奖励：新扫描的单元格 (受稳定性系数影响)
                 current_scanned = self._count_scanned_cells()
@@ -646,20 +674,36 @@ class MovementEnv(gym.Env):
             print(f"[终止] {self.last_done_reason}")
             return True
         
-        # 4. 增加判定：检查无人机是否已经停止飞行或【严重越界】
+        # 4. 增加判定：检查无人机是否已经停止飞行或【严重越界/长时间越界】
         if self.server:
             with self.server.data_lock:
                 runtime_data = self.server.unity_runtime_data.get(self.drone_name)
                 if runtime_data:
-                    # 严重越界判定：1.5倍扫描半径
+                    # 严重越界判定：1.3倍扫描半径 + 连续越界步数
                     if runtime_data.leader_position and runtime_data.leader_scan_radius > 0:
                         dist = np.sqrt(
                             (runtime_data.position.x - runtime_data.leader_position.x)**2 +
                             (runtime_data.position.y - runtime_data.leader_position.y)**2 +
                             (runtime_data.position.z - runtime_data.leader_position.z)**2
                         )
-                        if dist > runtime_data.leader_scan_radius * 1.5:
-                            self.last_done_reason = f"Severe Out of Range ({dist:.1f}m > {runtime_data.leader_scan_radius * 1.5:.1f}m)"
+                        radius = runtime_data.leader_scan_radius
+                        dist_ratio = dist / radius if radius > 0 else 0.0
+
+                        # 更新连续越界步数
+                        if dist_ratio > 1.0:
+                            self.out_of_range_steps += 1
+                        else:
+                            self.out_of_range_steps = 0
+
+                        # 条件1：严重越界（>1.3R）
+                        if dist_ratio > 1.3:
+                            self.last_done_reason = f"Severe Out of Range ({dist:.1f}m > {radius * 1.3:.1f}m)"
+                            print(f"[终止] {self.last_done_reason}")
+                            return True
+
+                        # 条件2：连续越界步数过多
+                        if self.out_of_range_steps >= 10:
+                            self.last_done_reason = f"Out of Range Too Long (steps={self.out_of_range_steps})"
                             print(f"[终止] {self.last_done_reason}")
                             return True
                     # 获取 AirSim 中的物理状态
