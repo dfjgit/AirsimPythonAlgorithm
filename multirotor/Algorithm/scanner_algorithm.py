@@ -8,6 +8,269 @@ from .scanner_runtime_data import ScannerRuntimeData
 from typing import List, Dict, Tuple, Optional, Set
 import time
 
+
+class ObstacleHelper:
+    """障碍物避障计算辅助类（支持Polygon/Circle形状）"""
+
+    @staticmethod
+    def calculate_normal_obstacle_repulsion(current_pos: Vector3, obstacle: Dict) -> Vector3:
+        """
+        计算普通障碍物排斥力
+        obstacle格式: {
+            "obstacleId": "building-001",
+            "obstacleType": "Static/Dynamic",
+            "category": "Normal",
+            "shapeType": "Polygon/Circle",
+            "vertices": [...],  # Polygon时使用
+            "center": {...},   # Circle时使用
+            "radius": 15.0      # Circle时使用
+        }
+        """
+        try:
+            # 兼容整数枚举值和字符串值
+            # 0/'Polygon' → 'polygon', 1/'Circle' → 'circle'
+            raw_shape_type = obstacle.get('shapeType', 'Unknown')
+            if isinstance(raw_shape_type, int):
+                # 整数枚举: 0=Polygon, 1=Circle
+                shape_type = 'polygon' if raw_shape_type == 0 else 'circle' if raw_shape_type == 1 else 'unknown'
+            else:
+                # 字符串值
+                shape_type = str(raw_shape_type).lower()
+
+            if shape_type == 'polygon':
+                # 多边形障碍物：计算到多边形的排斥力
+                return ObstacleHelper._calculate_polygon_obstacle_repulsion(current_pos, obstacle)
+            elif shape_type == 'circle':
+                # 圆形障碍物：计算到圆形的排斥力
+                return ObstacleHelper._calculate_circle_obstacle_repulsion(current_pos, obstacle)
+            else:
+                # 未知类型：使用简单距离衰减
+                return Vector3()
+
+        except Exception as e:
+            logging.warning(f"计算障碍物排斥力失败: {e}")
+            return Vector3()
+
+    @staticmethod
+    def _calculate_polygon_obstacle_repulsion(current_pos: Vector3, obstacle: Dict) -> Vector3:
+        """计算多边形障碍物的排斥力"""
+        vertices_data = obstacle.get('vertices', [])
+        if not vertices_data:
+            return Vector3()
+
+        # 解析顶点
+        vertices = [
+            Vector3(
+                v.get('x', 0.0),
+                v.get('y', 0.0),
+                v.get('z', 0.0)
+            )
+            for v in vertices_data
+        ]
+
+        # 使用点到多边形的距离计算
+        min_dist, closest_point = RestrictedZoneHelper.point_to_polygon_distance(current_pos, vertices)
+
+        if min_dist < 0.01:
+            return Vector3()
+
+        # 计算排斥方向
+        repulsion_vec = current_pos - closest_point
+        if repulsion_vec.magnitude() > 0.001:
+            repulsion_dir = repulsion_vec.normalized()
+            # 距离越近，排斥力越大
+            distance_factor = max(0.1, 1.0 - (min_dist / 15.0))  # 15.0是默认排斥距离
+            return repulsion_dir * distance_factor
+
+        return Vector3()
+
+    @staticmethod
+    def _calculate_circle_obstacle_repulsion(current_pos: Vector3, obstacle: Dict) -> Vector3:
+        """计算圆形障碍物的排斥力"""
+        center_data = obstacle.get('center', {})
+        if not center_data:
+            return Vector3()
+
+        center = Vector3(
+            center_data.get('x', 0.0),
+            center_data.get('y', 0.0),
+            center_data.get('z', 0.0)
+        )
+        radius = obstacle.get('radius', 5.0)
+
+        # 使用点到圆形的距离计算
+        distance, closest_point = RestrictedZoneHelper.point_to_circle_distance(current_pos, center, radius)
+
+        if distance < 0.01:
+            return Vector3()
+
+        # 计算排斥方向
+        repulsion_vec = current_pos - closest_point
+        if repulsion_vec.magnitude() > 0.001:
+            repulsion_dir = repulsion_vec.normalized()
+            # 距离越近，排斥力越大
+            distance_factor = max(0.1, 1.0 - (distance / 15.0))
+            return repulsion_dir * distance_factor
+
+        return Vector3()
+
+
+class RestrictedZoneHelper:
+    """禁飞区几何计算辅助类（支持多边形和圆形）"""
+
+    @staticmethod
+    def point_to_segment_distance(point: Vector3, seg_start: Vector3, seg_end: Vector3) -> Tuple[float, Vector3]:
+        """
+        计算点到线段的最短距离
+        返回: (距离, 最近点)
+        """
+        # 线段向量
+        seg_vec = seg_end - seg_start
+        # 点到线段起点的向量
+        point_vec = point - seg_start
+
+        seg_length_sq = seg_vec.x**2 + seg_vec.y**2 + seg_vec.z**2
+
+        if seg_length_sq < 0.0001:
+            # 线段退化为点
+            return (point_vec.magnitude(), seg_start)
+
+        # 计算投影参数 t
+        t = max(0.0, min(1.0, (point_vec.x * seg_vec.x +
+                                     point_vec.y * seg_vec.y +
+                                     point_vec.z * seg_vec.z) / seg_length_sq))
+
+        # 投影点
+        projection = seg_start + seg_vec * t
+
+        # 距离
+        distance = (point - projection).magnitude()
+        return (distance, projection)
+
+    @staticmethod
+    def point_to_polygon_distance(point: Vector3, vertices: List[Vector3]) -> Tuple[float, Vector3]:
+        """
+        计算点到多边形的最短距离
+        返回: (距离, 最近点)
+        """
+        if len(vertices) < 3:
+            # 至少需要3个点才能构成多边形
+            min_dist = float('inf')
+            closest_point = point
+            for v in vertices:
+                dist = (point - v).magnitude()
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_point = v
+            return (min_dist, closest_point)
+
+        min_distance = float('inf')
+        closest_point = point
+
+        # 检查点到每条边的距离
+        for i in range(len(vertices)):
+            v1 = vertices[i]
+            v2 = vertices[(i + 1) % len(vertices)]
+
+            edge_start = v1
+            edge_end = v2
+
+            dist, proj = RestrictedZoneHelper.point_to_segment_distance(point, edge_start, edge_end)
+
+            if dist < min_distance:
+                min_distance = dist
+                closest_point = proj
+
+        return (min_distance, closest_point)
+
+    @staticmethod
+    def is_point_inside_polygon(point: Vector3, vertices: List[Vector3]) -> bool:
+        """
+        判断点是否在多边形内部（使用射线法）
+        """
+        if len(vertices) < 3:
+            return False
+
+        # 投影到2D平面（使用x和z坐标，忽略y高度）
+        x, z = point.x, point.z
+        n = len(vertices)
+        inside = False
+
+        p1x, p1z = vertices[0].x, vertices[0].z
+        for i in range(n + 1):
+            p2x, p2z = vertices[i % n].x, vertices[i % n].z
+
+            if z > min(p1z, p2z):
+                if z <= max(p1z, p2z) and x <= max(p1x, p2x):
+                    if p1z != p2z:
+                        xinters = (z - p1z) * (p2x - p1x) / (p2z - p1z) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+                elif x <= max(p1x, p2x) and z <= max(p1z, p2z):
+                    if p1x != p2x:
+                        zinters = (x - p1x) * (p2z - p1z) / (p2x - p1x) + p1z
+                    if p1z == p2z or z <= zinters:
+                        inside = not inside
+            p1x, p1z = p2x, p2z
+
+        return inside
+
+    @staticmethod
+    def is_point_inside_circle(point: Vector3, center: Vector3, radius: float) -> bool:
+        """
+        判断点是否在圆形内部
+        在水平面上计算距离（忽略y高度）
+        """
+        # 在xz平面上计算距离
+        dx = point.x - center.x
+        dz = point.z - center.z
+        distance = (dx**2 + dz**2)**0.5
+        return distance <= radius
+
+    @staticmethod
+    def point_to_circle_distance(point: Vector3, center: Vector3, radius: float) -> Tuple[float, Vector3]:
+        """
+        计算点到圆形的最短距离
+        返回: (距离, 最近点)
+        在水平面上计算（忽略y高度）
+        """
+        # 在xz平面上计算距离
+        dx = point.x - center.x
+        dz = point.z - center.z
+        horizontal_distance = (dx**2 + dz**2)**0.5
+
+        if horizontal_distance < 0.001:
+            # 点在圆心
+            return (radius, Vector3(center.x + radius, point.y, center.z))
+
+        if horizontal_distance <= radius:
+            # 点在圆内，距离为0
+            return (0.0, point)
+        else:
+            # 点在圆外，计算最近点（在圆周上）
+            distance_to_edge = horizontal_distance - radius
+            # 计算圆周上最近点的位置
+            ratio = radius / horizontal_distance
+            closest_point = Vector3(
+                center.x + dx * ratio,
+                point.y,  # 保持原始高度
+                center.z + dz * ratio
+            )
+            return (distance_to_edge, closest_point)
+
+    @staticmethod
+    def check_height_limit(point: Vector3, max_height: float = None, min_height: float = None) -> bool:
+        """
+        检查点是否在高度限制内
+        返回: True表示在限制范围内，False表示超出范围
+        """
+        if max_height is not None and point.y > max_height:
+            return False
+        if min_height is not None and point.y < min_height:
+            return False
+        return True
+
+
 # 确保使用正确的坐标系
 def ensure_unity_coordinates(vector: Vector3) -> Vector3:
     """确保向量使用Unity坐标系"""
@@ -27,6 +290,58 @@ class ScannerAlgorithm:
         # 初始化上一帧的移动方向，使用Unity坐标系中的默认向前方向
         self.previous_move_dir = ensure_unity_coordinates(Vector3(0, 0, 1))  # 默认方向：z轴正方向
         self.visited_cells: Dict[Tuple[float, float, float], float] = {}  # 存储访问时间 (x,y,z) -> timestamp
+
+        # 初始化普通障碍物数据（运行时数据，包括静态和动态）
+        self.normal_obstacles: List[Dict] = []  # category=Normal的障碍物列表
+        self.obstacle_repulsion_distance = 15.0  # 障碍物排斥力有效距离
+        self.obstacle_repulsion_coefficient = 5.0  # 障碍物排斥力系数
+
+        # 初始化禁飞区数据（运行时数据，category=RestrictedZone的障碍物）
+        self.restricted_zones: List[Dict] = []  # 禁飞区列表
+        self.restricted_zone_repulsion_distance = 15.0
+        self.restricted_zone_repulsion_coefficient = 5.0
+
+    def set_normal_obstacles(self, obstacles: List[Dict]) -> None:
+        """
+        设置普通障碍物数据（运行时数据，由AlgorithmServer调用）
+        障碍物格式: [
+            {
+                "obstacleId": "building-001",
+                "obstacleType": "Static",
+                "category": "Normal",
+                "shapeType": "Polygon/Circle",
+                "vertices": [...],  # Polygon时使用
+                "center": {...},   # Circle时使用
+                "radius": 15.0      # Circle时使用
+            }
+        ]
+        """
+        if isinstance(obstacles, list):
+            self.normal_obstacles = obstacles
+            logging.info(f"普通障碍物数据已更新，数量: {len(obstacles)}")
+        else:
+            logging.warning(f"普通障碍物数据格式错误，期望list，收到: {type(obstacles)}")
+
+    def set_restricted_zones(self, obstacles: List[Dict]) -> None:
+        """
+        设置禁飞区数据（运行时数据，由AlgorithmServer调用）
+        障碍物格式: [
+            {
+                "obstacleId": "no-fly-001",
+                "obstacleType": "Static",
+                "category": "RestrictedZone",
+                "shapeType": "Polygon/Circle",
+                "vertices": [...],  # Polygon时使用
+                "center": {...},   # Circle时使用
+                "radius": 15.0      # Circle时使用
+            }
+        ]
+        """
+        if isinstance(obstacles, list):
+            self.restricted_zones = obstacles
+            logging.info(f"禁飞区数据已更新，数量: {len(obstacles)}")
+        else:
+            logging.warning(f"禁飞区数据格式错误，期望list，收到: {type(obstacles)}")
 
     def calculate_proportional_weights(self) -> Tuple[float, float, float, float, float]:
         """计算权重：F = 系数 / 系数总和（与C#逻辑一致）"""
@@ -228,32 +543,200 @@ class ScannerAlgorithm:
             return ensure_unity_coordinates(self.previous_move_dir)
         return Vector3(0, 0, 1)  # 默认方向
 
-    def merge_directions(self, 
-                        score_dir: Vector3, 
-                        path_dir: Vector3, 
-                        collide_dir: Vector3, 
-                        leader_range_dir: Vector3, 
+    def calculate_normal_obstacles_direction(self, current_pos: Vector3) -> Vector3:
+        """
+        计算普通障碍物的排斥力方向向量
+        支持：Static/Dynamic, Polygon/Circle
+        """
+        obstacle_dir = Vector3()
+
+        if not self.normal_obstacles:
+            return obstacle_dir
+
+        for obstacle in self.normal_obstacles:
+            repulsion = ObstacleHelper.calculate_normal_obstacle_repulsion(current_pos, obstacle)
+            obstacle_dir += repulsion
+
+        return obstacle_dir
+
+    def calculate_restricted_zone_direction(self, runtime_data: ScannerRuntimeData) -> Vector3:
+        """
+        计算禁飞区排斥力方向向量
+        支持：Static, Polygon/Circle（通过category=RestrictedZone标识）
+        返回远离禁飞区的方向向量
+        """
+        zone_dir = Vector3()
+
+        # 确保使用Unity坐标系
+        current_pos = ensure_unity_coordinates(runtime_data.position)
+
+        # 处理禁飞区数据
+        if not self.restricted_zones:
+            return zone_dir
+
+        for zone in self.restricted_zones:
+            # 兼容整数枚举值和字符串值
+            # 0/'Polygon' → 'polygon', 1/'Circle' → 'circle'
+            raw_shape_type = zone.get('shapeType', '')
+            if isinstance(raw_shape_type, int):
+                # 整数枚举: 0=Polygon, 1=Circle
+                shape_type = 'polygon' if raw_shape_type == 0 else 'circle' if raw_shape_type == 1 else 'unknown'
+            else:
+                # 字符串值
+                shape_type = str(raw_shape_type).lower()
+
+            if shape_type == 'polygon':
+                # 多边形禁飞区处理
+                vertices_data = zone.get('vertices', [])
+                vertices = [
+                    Vector3(
+                        v.get('x', 0.0),
+                        v.get('y', 0.0),
+                        v.get('z', 0.0)
+                    )
+                    for v in vertices_data
+                ]
+                if len(vertices) < 3:
+                    continue
+                zone_dir += self._calculate_polygon_repulsion(current_pos, vertices)
+
+            elif shape_type == 'circle':
+                # 圆形禁飞区处理
+                center_data = zone.get('center', {})
+                center = Vector3(
+                    center_data.get('x', 0.0),
+                    center_data.get('y', 0.0),
+                    center_data.get('z', 0.0)
+                )
+                radius = zone.get('radius', 10.0)
+                zone_dir += self._calculate_circle_repulsion(current_pos, center, radius)
+
+        return zone_dir
+
+    def _calculate_polygon_repulsion(self, current_pos: Vector3, vertices: List[Vector3]) -> Vector3:
+        """计算多边形禁飞区的排斥力"""
+        repulsion_dir = Vector3()
+
+        # 检查无人机当前位置是否在禁飞区内部
+        is_inside = RestrictedZoneHelper.is_point_inside_polygon(current_pos, vertices)
+
+        if is_inside:
+            # 在禁飞区内部：强力排斥到最近的安全点
+            min_dist, closest_point = RestrictedZoneHelper.point_to_polygon_distance(current_pos, vertices)
+
+            if min_dist < 0.1:
+                # 非常接近边界，计算指向外的方向
+                min_vertex_dist = float('inf')
+                escape_dir = Vector3()
+
+                for v in vertices:
+                    vec = v - current_pos
+                    dist = vec.magnitude()
+                    if dist < min_vertex_dist and dist > 0.01:
+                        min_vertex_dist = dist
+                        escape_dir = vec.normalized()
+
+                if escape_dir.magnitude() > 0.1:
+                    repulsion_dir += escape_dir * self.restricted_zone_repulsion_coefficient * 2.0
+            else:
+                # 距离边界有一定距离，计算排斥方向
+                repulsion_vec = current_pos - closest_point
+                if repulsion_vec.magnitude() > 0.1:
+                    direction = repulsion_vec.normalized()
+                    distance_factor = max(0.1, 1.0 - (min_dist / self.restricted_zone_repulsion_distance))
+                    repulsion_dir += direction * (self.restricted_zone_repulsion_coefficient * distance_factor)
+
+        else:
+            # 在禁飞区外部：检查是否接近禁飞区边界
+            min_dist, closest_point = RestrictedZoneHelper.point_to_polygon_distance(current_pos, vertices)
+
+            if min_dist < self.restricted_zone_repulsion_distance:
+                # 接近禁飞区，施加排斥力
+                repulsion_vec = current_pos - closest_point
+                if repulsion_vec.magnitude() > 0.1:
+                    direction = repulsion_vec.normalized()
+                    distance_factor = 1.0 - (min_dist / self.restricted_zone_repulsion_distance)
+                    repulsion_dir += direction * (self.restricted_zone_repulsion_coefficient * distance_factor)
+
+        return repulsion_dir
+
+    def _calculate_circle_repulsion(self, current_pos: Vector3, center: Vector3, radius: float) -> Vector3:
+        """计算圆形禁飞区的排斥力"""
+        repulsion_dir = Vector3()
+
+        # 检查无人机当前位置是否在圆形内部
+        is_inside = RestrictedZoneHelper.is_point_inside_circle(current_pos, center, radius)
+        distance, closest_point = RestrictedZoneHelper.point_to_circle_distance(current_pos, center, radius)
+
+        if is_inside:
+            # 在圆形内部：强力排斥到圆外
+            if distance < 0.1:
+                # 非常接近圆心，沿径向向外推
+                to_center = current_pos - center
+                if to_center.magnitude() > 0.01:
+                    escape_dir = to_center.normalized()
+                    repulsion_dir += escape_dir * self.restricted_zone_repulsion_coefficient * 2.0
+            else:
+                # 距离边界有一定距离，计算排斥方向
+                repulsion_vec = current_pos - closest_point
+                if repulsion_vec.magnitude() > 0.1:
+                    direction = repulsion_vec.normalized()
+                    distance_factor = max(0.1, 1.0 - (distance / self.restricted_zone_repulsion_distance))
+                    repulsion_dir += direction * (self.restricted_zone_repulsion_coefficient * distance_factor)
+
+        else:
+            # 在圆形外部：检查是否接近圆形边界
+            if distance < self.restricted_zone_repulsion_distance:
+                # 接近圆形边界，施加排斥力
+                repulsion_vec = current_pos - closest_point
+                if repulsion_vec.magnitude() > 0.1:
+                    direction = repulsion_vec.normalized()
+                    distance_factor = 1.0 - (distance / self.restricted_zone_repulsion_distance)
+                    repulsion_dir += direction * (self.restricted_zone_repulsion_coefficient * distance_factor)
+
+        return repulsion_dir
+
+    def merge_directions(self,
+                        score_dir: Vector3,
+                        path_dir: Vector3,
+                        collide_dir: Vector3,
+                        leader_range_dir: Vector3,
                         direction_retention_dir: Vector3,
-                        weights: Tuple[float, float, float, float, float]) -> Vector3:
+                        weights: Tuple[float, float, float, float, float],
+                        runtime_data: ScannerRuntimeData = None) -> Vector3:
         """合并所有方向向量（与C# MergeDirections逻辑一致）"""
         repulsion_weight, entropy_weight, distance_weight, leader_range_weight, direction_retention_weight = weights
-        
+
         # 确保所有输入向量都使用Unity坐标系
         score_dir = ensure_unity_coordinates(score_dir)
         path_dir = ensure_unity_coordinates(path_dir)
         collide_dir = ensure_unity_coordinates(collide_dir)
         leader_range_dir = ensure_unity_coordinates(leader_range_dir)
         direction_retention_dir = ensure_unity_coordinates(direction_retention_dir)
-        
+
+        # 计算障碍物和禁飞区排斥方向
+        obstacle_dir = Vector3()
+        restricted_zone_dir = Vector3()
+        if runtime_data is not None:
+            current_pos = ensure_unity_coordinates(runtime_data.position)
+            # 处理普通障碍物
+            if self.normal_obstacles:
+                obstacle_dir = self.calculate_normal_obstacles_direction(current_pos)
+            # 处理禁飞区
+            if self.restricted_zones:
+                restricted_zone_dir = self.calculate_restricted_zone_direction(runtime_data)
+
         # 应用权重合并向量
         final_move_dir = (
             score_dir * entropy_weight +
             path_dir * distance_weight +
             collide_dir * repulsion_weight +
             leader_range_dir * leader_range_weight +
-            direction_retention_dir * direction_retention_weight
+            direction_retention_dir * direction_retention_weight +
+            obstacle_dir * (repulsion_weight * 1.0) +  # 普通障碍物排斥力
+            restricted_zone_dir * (repulsion_weight * 1.5)  # 禁飞区排斥力权重稍高
         )
-        
+
         # 归一化最终方向
         if final_move_dir.magnitude() > 0.1:
             return ensure_unity_coordinates(final_move_dir.normalized())
@@ -350,9 +833,9 @@ class ScannerAlgorithm:
                     
                     # 合并所有向量
                     final_move_dir = self.merge_directions(
-                        score_dir, path_dir, collide_dir, 
+                        score_dir, path_dir, collide_dir,
                         leader_range_dir, direction_retention_dir,
-                        weights
+                        weights, runtime_data
                     )
                     
                     try:

@@ -82,6 +82,7 @@ class BaseVisualizer(ABC):
         # 数据缓存(减少锁竞争)
         self._cached_grid_data = None
         self._cached_runtime_data = {}
+        self._cached_obstacles = []  # 障碍物数据缓存
         self._last_data_update = 0
         self._data_update_interval = 0.05  # 50ms更新一次
     
@@ -313,7 +314,107 @@ class BaseVisualizer(ABC):
             pygame.draw.rect(self.screen, self.DARK_GRAY, border_rect, 2)
         except Exception as e:
             pass
-    
+
+    def draw_obstacles(self, obstacles: list):
+        """
+        绘制障碍物（支持多边形和圆形）
+
+        Args:
+            obstacles: 障碍物列表，每个障碍物包含:
+                - shapeType: Unity枚举 0=Point, 1=Sphere, 2=Polygon, 3=Circle, 4=Box
+                - category: 0=Normal, 1=RestrictedZone
+                - vertices: 多边形顶点列表（Polygon/Box时使用）
+                - center: 圆心坐标（Circle/Sphere时使用）
+                - radius: 半径（Circle/Sphere时使用）
+        """
+        if not obstacles:
+            return
+
+        for obstacle in obstacles:
+            try:
+                # 获取形状类型（Unity枚举）
+                raw_shape_type = obstacle.get('shapeType', 0)
+                if isinstance(raw_shape_type, int):
+                    shape_type = raw_shape_type
+                else:
+                    shape_type_str = str(raw_shape_type).lower()
+                    # Unity枚举: Point=0, Sphere=1, Polygon=2, Circle=3, Box=4
+                    shape_type_map = {'point': 0, 'sphere': 1, 'polygon': 2, 'circle': 3, 'box': 4}
+                    shape_type = shape_type_map.get(shape_type_str, 0)
+
+                # 获取类别（普通障碍物或禁飞区）
+                category = obstacle.get('category', 0)
+                if isinstance(category, str):
+                    is_restricted = category.lower() in ['restrictedzone', 'restricted']
+                else:
+                    # Unity枚举: Normal=0, RestrictedZone=1
+                    is_restricted = category == 1
+
+                # 根据类别选择颜色
+                if is_restricted:
+                    # 禁飞区：红色半透明
+                    color = (255, 50, 50, 100)
+                    border_color = self.RED
+                else:
+                    # 普通障碍物：橙色半透明
+                    color = (255, 165, 0, 100)
+                    border_color = self.ORANGE
+
+                # 处理多边形类型（Unity: Polygon=2, Box=4）
+                if shape_type in [2, 4]:
+                    # 绘制多边形障碍物
+                    vertices_data = obstacle.get('vertices', [])
+                    if vertices_data:
+                        # 转换顶点坐标
+                        screen_points = []
+                        for v in vertices_data:
+                            pos = Vector3(v.get('x', 0), v.get('y', 0), v.get('z', 0))
+                            screen_points.append(self.world_to_screen(pos))
+
+                        # 绘制填充多边形（需要创建带alpha的surface）
+                        if len(screen_points) >= 3:
+                            min_x = min(p[0] for p in screen_points)
+                            max_x = max(p[0] for p in screen_points)
+                            min_y = min(p[1] for p in screen_points)
+                            max_y = max(p[1] for p in screen_points)
+
+                            # 创建临时surface绘制半透明填充
+                            temp_surface = pygame.Surface((max_x - min_x + 4, max_y - min_y + 4), pygame.SRCALPHA)
+                            offset_points = [(p[0] - min_x + 2, p[1] - min_y + 2) for p in screen_points]
+                            pygame.draw.polygon(temp_surface, color, offset_points)
+                            self.screen.blit(temp_surface, (min_x - 2, min_y - 2))
+
+                        # 绘制边框
+                        pygame.draw.polygon(self.screen, border_color, screen_points, 3)
+
+                # 处理圆形类型（Unity: Circle=3, Sphere=1）
+                elif shape_type in [1, 3]:
+                    # 绘制圆形障碍物
+                    center_data = obstacle.get('center', {})
+                    if center_data:
+                        center = Vector3(
+                            center_data.get('x', 0),
+                            center_data.get('y', 0),
+                            center_data.get('z', 0)
+                        )
+                        screen_x, screen_y = self.world_to_screen(center)
+                        radius = obstacle.get('radius', 5.0)
+                        radius_pixels = int(radius * self.scale)
+
+                        # 绘制填充圆（半透明）
+                        temp_surface = pygame.Surface((radius_pixels * 2 + 4, radius_pixels * 2 + 4), pygame.SRCALPHA)
+                        pygame.draw.circle(temp_surface, color, (radius_pixels + 2, radius_pixels + 2), radius_pixels)
+                        self.screen.blit(temp_surface, (screen_x - radius_pixels - 2, screen_y - radius_pixels - 2))
+
+                        # 绘制边框
+                        pygame.draw.circle(self.screen, border_color, (screen_x, screen_y), radius_pixels, 3)
+
+            except Exception as e:
+                # 输出错误以便调试
+                import traceback
+                print(f"[BaseVisualizer] 绘制障碍物出错: {e}")
+                traceback.print_exc()
+
     def update_data(self) -> Tuple[Optional[object], Dict]:
         """
         更新可视化数据(线程安全,带缓存)
@@ -329,6 +430,7 @@ class BaseVisualizer(ABC):
             if self.server and getattr(self.server, '_vis_snapshot_cache', None) is None:
                 self._cached_grid_data = None
                 self._cached_runtime_data = {}
+                self._cached_obstacles = []
                 self._last_data_update = 0
         except Exception:
             pass
@@ -361,12 +463,21 @@ class BaseVisualizer(ABC):
                         runtime_data_dict[drone_name] = drone_info
         except:
             pass
-        
+
+        # 获取障碍物数据
+        obstacles = []
+        try:
+            if hasattr(self.server, 'obstacles'):
+                obstacles = self.server.obstacles if self.server.obstacles else []
+        except:
+            pass
+
         # 缓存数据
         self._cached_grid_data = grid_data
         self._cached_runtime_data = runtime_data_dict
+        self._cached_obstacles = obstacles
         self._last_data_update = current_time
-        
+
         return grid_data, runtime_data_dict
     
     @abstractmethod
@@ -401,7 +512,16 @@ class BaseVisualizer(ABC):
         except Exception as e:
             pass
         return {}
-    
+
+    def get_obstacles_data(self) -> list:
+        """
+        获取障碍物数据(公共方法)
+
+        Returns:
+            障碍物列表
+        """
+        return self._cached_obstacles if self._cached_obstacles else []
+
     def handle_events(self):
         """处理pygame事件"""
         try:
@@ -458,6 +578,7 @@ class BaseVisualizer(ABC):
                 # 绘制环境
                 self.draw_center_area_border()  # 绘制中间区域边框
                 self.draw_grid(grid_data)
+                self.draw_obstacles(self._cached_obstacles)  # 绘制障碍物
                 self.draw_leader(runtime_data_dict)
                 self.draw_drones(runtime_data_dict)
                 self.draw_entropy_legend()

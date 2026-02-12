@@ -68,6 +68,9 @@ class DDPGTrainingVisualizer(BaseVisualizer):
             'leaderRangeCoefficient': deque(maxlen=5000),
             'directionRetentionCoefficient': deque(maxlen=5000)
         }
+        # 权重收集控制（避免每帧都收集）
+        self._last_weight_collection_time = 0
+        self._weight_collection_interval = 0.1  # 每100ms收集一次
     
     def setup_panels(self):
         """注册DDPG训练专用面板"""
@@ -98,44 +101,93 @@ class DDPGTrainingVisualizer(BaseVisualizer):
     def get_visualization_data(self) -> Dict[str, Any]:
         """收集DDPG训练可视化数据"""
         data = {}
-        
-        # 训练统计数据
-        data['episode_count'] = self.episode_count
-        data['total_steps'] = self.total_steps
-        data['current_episode_steps'] = self.current_episode_steps
-        data['current_episode_reward'] = self.current_episode_reward
-        
-        # 计算步骤速率
-        steps_per_sec = 0.0
-        if len(self.step_timestamps) > 1:
-            time_span = self.step_timestamps[-1] - self.step_timestamps[0]
-            if time_span > 0:
-                steps_per_sec = len(self.step_timestamps) / time_span
-        data['steps_per_sec'] = steps_per_sec
-        
-        # 奖励历史
-        data['reward_history'] = list(self.reward_history)
-        
-        # 统计数据
-        if self.episode_rewards:
-            data['avg_reward'] = sum(self.episode_rewards) / len(self.episode_rewards)
-            data['max_reward'] = max(self.episode_rewards)
-            data['min_reward'] = min(self.episode_rewards)
-        
-        # 获取当前权重
+
+        # 外部进程模式：优先使用 server.current_training_stats 提供的训练统计
+        cts = None
+        try:
+            if self.server and hasattr(self.server, 'current_training_stats') and isinstance(self.server.current_training_stats, dict):
+                cts = self.server.current_training_stats
+        except Exception:
+            cts = None
+
+        if cts:
+            # 使用服务器提供的训练统计（独立进程模式）
+            data['episode_count'] = int(cts.get('episode_count', 0))
+            data['total_steps'] = int(cts.get('total_steps', 0))
+            data['current_episode_steps'] = int(cts.get('current_episode_steps', 0))
+            data['current_episode_reward'] = float(cts.get('current_episode_reward', 0.0))
+
+            # 步骤速率
+            if 'steps_per_sec' in cts:
+                try:
+                    data['steps_per_sec'] = float(cts.get('steps_per_sec', 0.0))
+                except Exception:
+                    data['steps_per_sec'] = 0.0
+            else:
+                # 计算步骤速率
+                steps_per_sec = 0.0
+                if len(self.step_timestamps) > 1:
+                    time_span = self.step_timestamps[-1] - self.step_timestamps[0]
+                    if time_span > 0:
+                        steps_per_sec = len(self.step_timestamps) / time_span
+                data['steps_per_sec'] = steps_per_sec
+
+            # 奖励历史
+            rh = cts.get('reward_history', None)
+            if isinstance(rh, list):
+                data['reward_history'] = rh
+
+            # 统计数据
+            if 'avg_reward' in cts:
+                data['avg_reward'] = cts['avg_reward']
+                data['max_reward'] = cts.get('max_reward', 0.0)
+                data['min_reward'] = cts.get('min_reward', 0.0)
+        else:
+            # 本地模式兜底：使用实例变量
+            data['episode_count'] = self.episode_count
+            data['total_steps'] = self.total_steps
+            data['current_episode_steps'] = self.current_episode_steps
+            data['current_episode_reward'] = self.current_episode_reward
+
+            # 计算步骤速率
+            steps_per_sec = 0.0
+            if len(self.step_timestamps) > 1:
+                time_span = self.step_timestamps[-1] - self.step_timestamps[0]
+                if time_span > 0:
+                    steps_per_sec = len(self.step_timestamps) / time_span
+            data['steps_per_sec'] = steps_per_sec
+
+            # 奖励历史
+            data['reward_history'] = list(self.reward_history)
+
+            # 统计数据
+            if self.episode_rewards:
+                data['avg_reward'] = sum(self.episode_rewards) / len(self.episode_rewards)
+                data['max_reward'] = max(self.episode_rewards)
+                data['min_reward'] = min(self.episode_rewards)
+
+        # 获取当前权重并更新历史
+        current_time = time.time()
+        should_collect_weights = (current_time - self._last_weight_collection_time) >= self._weight_collection_interval
+
         if self.server and hasattr(self.server, 'drone_names') and self.server.drone_names:
             first_drone = self.server.drone_names[0]
             if first_drone in self.server.algorithms:
                 try:
                     weights = self.server.algorithms[first_drone].get_current_coefficients()
-                    data['weights'] = weights
-                    data['use_dqn'] = getattr(self.server, 'use_learned_weights', True)
+                    if weights:
+                        data['weights'] = weights
+                        data['use_dqn'] = getattr(self.server, 'use_learned_weights', True)
+                        # 定期更新权重历史（避免每帧都更新）
+                        if should_collect_weights:
+                            self.update_weight_history(weights)
+                            self._last_weight_collection_time = current_time
                 except:
                     pass
-        
+
         # 权重历史
         data['weight_history'] = {k: list(v) for k, v in self.weight_history.items()}
-        
+
         return data
     
     def update_training_stats(self, episode_reward: float = None, episode_length: int = None,
@@ -153,14 +205,13 @@ class DDPGTrainingVisualizer(BaseVisualizer):
             self.current_episode_reward += current_step_reward
             self.current_episode_steps += 1
             self.total_steps += 1
-            
+
             # 记录步骤时间戳
             current_time = time.time()
             self.step_timestamps.append(current_time)
-            
-            # ⭐ 每步都采集权重（完整记录）
-            self._collect_current_weights()
-        
+
+            # 注意：权重收集现在由 get_visualization_data() 自动处理
+
         if is_episode_done and episode_reward is not None:
             self.episode_rewards.append(episode_reward)
             self.reward_history.append(episode_reward)
@@ -175,23 +226,11 @@ class DDPGTrainingVisualizer(BaseVisualizer):
                 self.episode_lengths.append(episode_length)
             
             self.episode_count += 1
-            
+
             # 重置当前episode统计
             self.current_episode_reward = 0.0
             self.current_episode_steps = 0
-    
-    def _collect_current_weights(self):
-        """从 server 采集当前权重并记录到历史"""
-        try:
-            if self.server and hasattr(self.server, 'drone_names') and self.server.drone_names:
-                first_drone = self.server.drone_names[0]
-                if first_drone in self.server.algorithms:
-                    weights = self.server.algorithms[first_drone].get_current_coefficients()
-                    if weights:
-                        self.update_weight_history(weights)
-        except Exception as e:
-            print(f"[DDPGTrainingVisualizer] 采集权重错误: {e}")
-    
+
     def update_weight_history(self, weights: Dict[str, float]):
         """
         更新权重历史

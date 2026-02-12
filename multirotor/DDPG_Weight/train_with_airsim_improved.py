@@ -829,7 +829,11 @@ def main():
                 print(f"  - 外部可视化日志: {vis_log_path}")
             else:
                 print("  - 外部可视化日志: (未生成)")
-            training_visualizer = None
+            # ⚠️ 重要：仍然需要在主进程中创建训练可视化器用于收集统计数据（权重历史等）
+            # 外部进程负责显示，主进程中的visualizer负责数据收集
+            from multirotor.Visualization.ddpg_training_visualizer import DDPGTrainingVisualizer
+            training_visualizer = DDPGTrainingVisualizer(server=server, env=None)
+            print("  - 主进程训练数据收集器: 已创建 (用于权重历史统计)")
 
         # ========== [5/5] 创建或加载 DDPG 模型 ==========
         print("\n[5/5] 获取 DDPG 模型...")

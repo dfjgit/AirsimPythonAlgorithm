@@ -2,10 +2,11 @@ import socket
 import json
 import threading
 import logging
-import time
+import time as _time
 from typing import Dict, Any, Optional, Callable, Iterable
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
 from Algorithm.scanner_config_data import ScannerConfigData
+from Algorithm.drones_config import DronesConfig
 from Crazyswarm.crazyflie_operate import CrazyflieOperate
 from AirsimServer.data_pack import DataPacks, PackType
 
@@ -35,12 +36,14 @@ class UnitySocketServer:
         self.received_grid = None
         self.received_runtimes = []  # 存储多个运行时数据
         self.received_crazyflie_logging = [] #存储所有Crazyflie无人机的当前日志
+        self.received_obstacles = []  # 存储统一障碍物数据（包括普通障碍物和禁飞区）
         self.data_callback = None  # 数据接收回调函数
-        
+
         # 性能统计
         self.stats_grid_updates = 0
         self.stats_runtime_updates = 0
         self.stats_crazyflie_logging_updates = 0
+        self.stats_obstacle_updates = 0
 
     def start(self) -> bool:
         """启动Socket服务器并监听连接"""
@@ -88,7 +91,7 @@ class UnitySocketServer:
         try:
             pack = DataPacks()
             pack.type = PackType.config_data
-            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             pack.pack_data_list = config.to_dict()  # 字典结构（匹配config.json）
             logging.info("发送配置数据")
             self.pending_packs.append(pack)
@@ -100,7 +103,7 @@ class UnitySocketServer:
         try:
             pack = DataPacks()
             pack.type = PackType.runtime_data
-            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             # 每个runtime数据已包含uavname，无需顶层字段
             pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
             self.pending_packs.append(pack)
@@ -113,7 +116,7 @@ class UnitySocketServer:
         try:
             pack = DataPacks()
             pack.type = PackType.crazyflie_operate_data
-            pack.time_span = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             pack.pack_data_list = [operateData.to_dict() for operateData in operateDatas]
             self.pending_packs.append(pack)
             logger.info(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
@@ -126,7 +129,7 @@ class UnitySocketServer:
         try:
             pack = DataPacks()
             pack.type = PackType.reset_env
-            pack.time_span = str(time.time())
+            pack.time_span = str(_time.time())
             pack.pack_data_list = {}  # 重置命令不需要额外数据
             self.pending_packs.append(pack)
             logger.info("[重置] 已发送环境重置命令到Unity")
@@ -138,12 +141,24 @@ class UnitySocketServer:
         try:
             pack = DataPacks()
             pack.type = PackType.start_simulation
-            pack.time_span = str(time.time())
+            pack.time_span = str(_time.time())
             pack.pack_data_list = {}  # 开始仿真命令不需要额外数据
             self.pending_packs.append(pack)
             logger.info("[开始仿真] 已发送开始仿真命令到Unity")
         except Exception as e:
             logger.error(f"发送开始仿真命令失败: {str(e)}")
+
+    def send_drone_config(self, drones_config: DronesConfig) -> None:
+        """发送无人机配置数据到Unity（仅包含基础配置，不含training元数据）"""
+        try:
+            pack = DataPacks()
+            pack.type = PackType.drone_config
+            pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
+            pack.pack_data_list = drones_config.get_drones_dict()
+            self.pending_packs.append(pack)
+            logger.info(f"[无人机配置] 已发送无人机配置到Unity，无人机数量: {len(drones_config.get_all_drones())}")
+        except Exception as e:
+            logger.error(f"发送无人机配置失败: {str(e)}")
     
     def get_stats(self) -> dict:
         """获取通信统计信息"""
@@ -182,7 +197,7 @@ class UnitySocketServer:
             try:
                 self._recv_and_parse(conn)
                 self._send_pending_data(conn)
-                time.sleep(0.01)
+                _time.sleep(0.01)
             except Exception as e:
                 logger.error(f"连接处理错误: {str(e)}")
                 break
@@ -275,6 +290,19 @@ class UnitySocketServer:
             self.received_crazyflie_logging = pack_data_list
             callback_data['crazyflie_logging'] = self.received_crazyflie_logging
             self.stats_crazyflie_logging_updates += 1
+        elif data_type == PackType.obstacle_data.value:
+            # 统一障碍物数据：pack_data_list是列表，包含多个障碍物
+            # 支持：Static/Dynamic（静态/动态），Normal/RestrictedZone（普通/禁飞区），Polygon/Circle（多边形/圆形）
+            self.received_obstacles = pack_data_list if isinstance(pack_data_list, list) else []
+            callback_data['obstacles'] = self.received_obstacles
+            self.stats_obstacle_updates += 1
+            # 统计各类障碍物数量
+            # 统计各类障碍物数量（兼容数字枚举和字符串）
+            normal_count = sum(1 for obs in self.received_obstacles
+                            if obs.get('category') in [0, 'Normal'])
+            restricted_count = sum(1 for obs in self.received_obstacles
+                                 if obs.get('category') in [1, 'RestrictedZone'])
+            logging.info(f"收到障碍物数据 - 普通: {normal_count}, 禁飞区: {restricted_count}, 总计: {len(self.received_obstacles)}")
         if 'time_span' in data:
             callback_data['time_span'] = data['time_span']
 

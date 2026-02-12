@@ -29,9 +29,6 @@ class ScannerConfigData:
     targetSearchRange: float
     revisitCooldown: float
 
-    # 新增字段：无人机配置（原isCrazyflieMirror升级为按无人机区分）
-    # ⚠️ 已废弃：请使用 drones_config.json 替代
-    droneSettings: Dict[str, Dict[str, bool]]
     # 新增字段：配置名称和隐藏标志
     name: str
     hideFlags: int
@@ -73,10 +70,6 @@ class ScannerConfigData:
         self.revisitCooldown = 60.0
 
         # 新增字段默认值
-        self.droneSettings = {
-            "UAV1": {"isCrazyflieMirror": False},
-            "UAV2": {"isCrazyflieMirror": False}
-        }
         self.name = "ScannerConfigData"
         self.hideFlags = 0
 
@@ -127,17 +120,6 @@ class ScannerConfigData:
         self.targetSearchRange = self._get_float(json_data, 'targetSearchRange', 20.0)
         self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 60.0)
 
-        # 解析新增字段
-        # 解析无人机配置（兼容空值/非字典情况）
-        self.droneSettings = json_data.get('droneSettings', {})
-        # 确保droneSettings中每个无人机配置都有isCrazyflieMirror字段
-        for uav_key in self.droneSettings:
-            if 'isCrazyflieMirror' not in self.droneSettings[uav_key]:
-                self.droneSettings[uav_key]['isCrazyflieMirror'] = False
-        
-        self.name = json_data.get('name', "ScannerConfigData")
-        self.hideFlags = self._get_int(json_data, 'hideFlags', 0)
-
         # 解析统一环境配置
         self.env_config = json_data.get('env_config', self.env_config)
 
@@ -187,7 +169,6 @@ class ScannerConfigData:
             'revisitCooldown': self.revisitCooldown,
 
             # 新增字段
-            'droneSettings': self.droneSettings,
             'name': self.name,
             'hideFlags': self.hideFlags,
             'env_config': self.env_config
@@ -222,30 +203,17 @@ class ScannerConfigData:
         ]:
             if coeff < 0:
                 return False
-        
-        # 新增字段验证
-        # 确保droneSettings是字典且非空（可选，根据业务需求调整）
-        if not isinstance(self.droneSettings, dict):
-            return False
-        # 验证每个无人机配置的isCrazyflieMirror是布尔值
-        for uav_key, uav_config in self.droneSettings.items():
-            if not isinstance(uav_config.get('isCrazyflieMirror', False), bool):
-                return False
-        
-        # 验证hideFlags是非负整数
-        if self.hideFlags < 0:
-            return False
-        
+
         return True
 
     def copy(self):
         """创建对象的深拷贝"""
         new_data = ScannerConfigData()
-        # 深拷贝droneSettings（避免浅拷贝导致的引用问题）
-        new_data.droneSettings = {k: v.copy() for k, v in self.droneSettings.items()}
+        # 深拷贝env_config（避免浅拷贝导致的引用问题）
+        new_data.env_config = {k: v.copy() if isinstance(v, dict) else v for k, v in self.env_config.items()}
         # 拷贝其他属性
         new_data.__dict__.update({
-            k: v for k, v in self.__dict__.items() if k != 'droneSettings'
+            k: v for k, v in self.__dict__.items() if k != 'env_config'
         })
         return new_data
     
@@ -274,40 +242,4 @@ class ScannerConfigData:
             self._set_default_values()
 
     def __repr__(self) -> str:
-        return f"ScannerConfigData(name={self.name}, ScanRadius={self.scanRadius}, UAVs={list(self.droneSettings.keys())})"
-
-    # 新增便捷方法：获取指定无人机的isCrazyflieMirror配置
-    # ⚠️ 已废弃：请使用 DronesConfig.is_crazyflie_mirror() 替代
-    def get_uav_crazyflie_mirror(self, uav_id: str) -> bool:
-        """
-        获取指定无人机的isCrazyflieMirror配置
-        :param uav_id: 无人机ID（如UAV1、UAV2）
-        :return: 是否为Crazyflie镜像
-        
-        ⚠️ 已废弃：请使用 DronesConfig.is_crazyflie_mirror() 替代
-        """
-        return self.droneSettings.get(uav_id, {}).get('isCrazyflieMirror', False)
-
-    # 新增便捷方法：设置指定无人机的isCrazyflieMirror配置
-    # ⚠️ 已废弃：请使用 drones_config.json 直接配置
-    def set_uav_crazyflie_mirror(self, uav_id: str, is_mirror: bool) -> None:
-        """
-        设置指定无人机的isCrazyflieMirror配置
-        :param uav_id: 无人机ID（如UAV1、UAV2）
-        :param is_mirror: 是否为Crazyflie镜像
-        
-        ⚠️ 已废弃：请使用 drones_config.json 直接配置
-        """
-        if uav_id not in self.droneSettings:
-            self.droneSettings[uav_id] = {}
-        self.droneSettings[uav_id]['isCrazyflieMirror'] = is_mirror
-    
-    # ⚠️ 已废弃：请使用 DronesConfig.get_enabled_drones() 替代
-    def get_drone_list(self) -> list:
-        """
-        获取配置文件中所有无人机的名称列表
-        :return: 无人机名称列表（如['UAV1', 'UAV2', 'UAV3']）
-        
-        ⚠️ 已废弃：请使用 DronesConfig.get_enabled_drones() 替代
-        """
-        return list(self.droneSettings.keys())
+        return f"ScannerConfigData(name={self.name}, ScanRadius={self.scanRadius}, Altitude={self.altitude})"

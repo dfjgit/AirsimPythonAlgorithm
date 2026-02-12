@@ -21,6 +21,7 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 
 from envs.hierarchical_movement_env import HierarchicalMovementEnv
+from Algorithm.drones_config import DronesConfig
 
 # 导入可视化器
 try:
@@ -33,50 +34,79 @@ except ImportError:
 
 class VisualizationCallback(BaseCallback):
     """训练回调，用于更新可视化数据"""
-    
-    def __init__(self, visualizer, verbose=0):
+
+    def __init__(self, visualizer, drone_name="UAV1", verbose=0):
         super(VisualizationCallback, self).__init__(verbose)
         self.visualizer = visualizer
+        self.drone_name = drone_name  # 使用配置的无人机名称
         self.episode_count = 0
         self.episode_reward = 0
-    
+
     def _on_step(self) -> bool:
         action = self.locals.get('actions', [0])[0]
         reward = self.locals.get('rewards', [0])[0]
-        
+
         # 更新可视化数据
         self.visualizer.update_training_data(
             step=self.num_timesteps,
             action=int(action),
             reward=float(reward),
-            drone_name='UAV1'
+            drone_name=self.drone_name
         )
-        
+
         self.episode_reward += reward
-        
+
         # 检查Episode是否结束
         dones = self.locals.get('dones', [False])
         if dones[0]:
             self.visualizer.on_episode_end(self.episode_count)
             self.episode_count += 1
             self.episode_reward = 0
-        
+
         return True
 
 def train_hrl(enable_visualization=True):
     print("=" * 80)
     print("分层强化学习 (HRL) 训练 - 高层协同规划器")
     print("=" * 80)
-    
+
     # 1. 加载配置
+    # 加载无人机配置（兼容模式）
+    try:
+        drones_config = DronesConfig()
+        drone_names = drones_config.get_training_drones('hierarchical')
+        if drone_names:
+            # 使用配置文件中的无人机
+            training_drone = drone_names[0]
+            print(f"  ✓ 从 drones_config.json 读取训练无人机: {training_drone}")
+        else:
+            # 配置文件存在但没有对应的训练配置，使用默认值并提示
+            training_drone = "UAV1"
+            print(f"  ⚠️  警告: drones_config.json 中未找到 training.hierarchical 配置")
+            print(f"  ⚠️  使用默认无人机: {training_drone}")
+            print(f"  💡 提示: 如需自定义训练无人机，请在 drones_config.json 的 training.hierarchical 部分配置:")
+            print(f"  💡     \"hierarchical\": {{\"drone_list\": [\"UAV1\"]}}")
+    except FileNotFoundError:
+        # 配置文件不存在，使用默认值并提示
+        training_drone = "UAV1"
+        print(f"  ⚠️  警告: 未找到 drones_config.json 配置文件")
+        print(f"  ⚠️  使用默认无人机: {training_drone}")
+        print(f"  💡 提示: 配置文件应位于项目根目录的 multirotor/drones_config.json")
+        print(f"  💡     配置示例: {{\"training\": {{\"hierarchical\": {{\"drone_list\": [\"UAV1\"]}}}}}}")
+    except Exception as e:
+        # 其他错误，使用默认值并提示
+        training_drone = "UAV1"
+        print(f"  ⚠️  警告: 读取 drones_config.json 时出错: {e}")
+        print(f"  ⚠️  使用默认无人机: {training_drone}")
+
     config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "hierarchical_dqn_config.json")
     with open(config_path, 'r', encoding='utf-8') as f:
         config = json.load(f)
-    
+
     # 2. 创建高层训练环境
     # 注意: 这里 server=None 仅用于演示或纯离线逻辑测试。
     # 实际训练应连接 AirSimServer (AlgorithmServer.py)
-    base_env = HierarchicalMovementEnv(server=None, drone_name="UAV1", config_path=config_path)
+    base_env = HierarchicalMovementEnv(server=None, drone_name=training_drone, config_path=config_path)
     env = Monitor(base_env)
     
     print(f"✓ 环境创建成功")
@@ -143,7 +173,7 @@ def train_hrl(enable_visualization=True):
     callbacks.append(checkpoint_callback)
     
     if visualizer:
-        vis_callback = VisualizationCallback(visualizer)
+        vis_callback = VisualizationCallback(visualizer, drone_name=training_drone)
         callbacks.append(vis_callback)
     
     # 7. 开始训练

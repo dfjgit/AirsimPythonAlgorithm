@@ -115,6 +115,16 @@ class DronesConfig:
                     print(f"警告: 无人机 {drone} 不存在于配置中")
             return valid_drones
     
+    def get_drones_dict(self) -> dict:
+        """
+        获取仅包含无人机配置的字典（用于发送给Unity）
+        排除training等元数据，只发送无人机基础配置
+        :return: 仅包含drones字段的字典
+        """
+        return {
+            'drones': self.config.get('drones', {})
+        }
+
     def save_config(self):
         """保存配置到文件"""
         with open(self.config_file, 'w', encoding='utf-8') as f:

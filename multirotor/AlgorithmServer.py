@@ -1,5 +1,5 @@
 import sys
-import time
+import time as _time
 import logging
 import json
 import math
@@ -100,7 +100,7 @@ class MultiDroneAlgorithmServer:
 
         # 线程与状态管理
         self.max_episode_seconds = max_episode_seconds  # 单轮训练最大时长（秒）
-        self._episode_start_time = time.time()
+        self._episode_start_time = _time.time()
         self.ready_event = threading.Event()  # 同步所有无人机首帧runtime到位
         self.reset_ack_event = threading.Event()  # 用于重置闭环同步
         self.resetting = False  # 正在重置标志
@@ -118,7 +118,7 @@ class MultiDroneAlgorithmServer:
         # 熵值记录
         self.entropy_history: List[Tuple[float, float]] = []
         self.entropy_history_lock = threading.Lock()
-        self._start_time = time.time()
+        self._start_time = _time.time()
         self._last_entropy_record_time = 0.0
         self.entropy_dist_history: List[Tuple[float, List[int], List[float]]] = []
         self.entropy_bins: List[int] = []
@@ -151,7 +151,13 @@ class MultiDroneAlgorithmServer:
 
         # 注册Unity数据接收回调
         self.unity_socket.set_callback(self._handle_unity_data)
-        
+
+        # 调试：初始化后检查received_obstacles状态
+        if self.unity_socket:
+            logger.info(f"[初始化] unity_socket已连接，received_obstacles初始长度: {len(self.unity_socket.received_obstacles) if hasattr(self.unity_socket, 'received_obstacles') else '属性不存在'}")
+        else:
+            logger.warning("[初始化] ⚠️ unity_socket为None")
+
         # 控制模式：'apf' 或 'dqn'
         self.control_mode = control_mode.lower()
         if self.control_mode not in ['apf', 'dqn']:
@@ -171,7 +177,21 @@ class MultiDroneAlgorithmServer:
             self._init_weight_predictor()
         elif use_learned_weights and self.control_mode == 'dqn':
             logger.info("DQN控制模式下，use_learned_weights参数被忽略")
-        
+
+        # 训练统计（用于IPC可视化进程）
+        self.current_training_stats: Dict[str, Any] = {
+            'episode_count': 0,
+            'total_steps': 0,
+            'current_episode_steps': 0,
+            'current_episode_reward': 0.0,
+            'avg_reward': 0.0,
+            'max_reward': 0.0,
+            'min_reward': 0.0,
+            'reward_history': [],
+            'steps_per_sec': 0.0
+        }
+        self._training_stats_lock = threading.Lock()  # 训练统计锁
+
         # 初始化可视化组件（如果启用）
         if self.enable_visualization:
             self._init_visualization()
@@ -315,12 +335,33 @@ class MultiDroneAlgorithmServer:
         return self.battery_manager.reset_voltage(drone_name)
 
     def set_training_stats(self, episode: int, step: int, reward: float, total_reward: float):
-        """设置训练统计信息，用于数据采集记录"""
+        """设置训练统计信息，用于数据采集记录和IPC可视化"""
         if self.data_collector:
             self.data_collector.set_external_data('episode', episode)
             self.data_collector.set_external_data('step', step)
             self.data_collector.set_external_data('reward', reward)
             self.data_collector.set_external_data('total_reward', total_reward)
+
+        # 同时更新 current_training_stats（用于IPC可视化进程）
+        with self._training_stats_lock:
+            self.current_training_stats['episode_count'] = episode
+            self.current_training_stats['total_steps'] = step
+            self.current_training_stats['current_episode_reward'] = reward
+            self.current_training_stats['current_episode_steps'] = step
+
+            # 更新奖励历史（保留最近500个）
+            if 'reward_history' not in self.current_training_stats:
+                self.current_training_stats['reward_history'] = []
+            reward_history = self.current_training_stats['reward_history']
+            reward_history.append(reward)
+            if len(reward_history) > 500:
+                reward_history.pop(0)
+
+            # 计算统计数据
+            if reward_history:
+                self.current_training_stats['avg_reward'] = sum(reward_history) / len(reward_history)
+                self.current_training_stats['max_reward'] = max(reward_history)
+                self.current_training_stats['min_reward'] = min(reward_history)
 
     def set_experiment_meta(self, algorithm_type: str, env_type: str, control_mode: str):
         """
@@ -414,14 +455,15 @@ class MultiDroneAlgorithmServer:
 
         # 等待Unity连接（超时120秒）
         timeout = 120
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+        start_time = _time.time()
+        while _time.time() - start_time < timeout:
             if self.unity_socket.is_connected():
                 logger.info("Unity客户端已连接")
                 self.unity_socket.send_config(self.config_data)
+                self.unity_socket.send_drone_config(self.drones_config)
                 # logger.info("已发送初始配置数据到Unity")
                 return True
-            time.sleep(0.5)
+            _time.sleep(0.5)
 
         logger.error(f"等待Unity连接超时（{timeout}秒）")
         return False
@@ -436,7 +478,7 @@ class MultiDroneAlgorithmServer:
             self.drone_controller.reset()
             # 重置后等待几秒，让系统稳定
             logger.info("等待AirSim系统稳定...")
-            time.sleep(3)
+            _time.sleep(3)
             return True
         logger.error("AirSim连接失败")
         return False
@@ -457,8 +499,8 @@ class MultiDroneAlgorithmServer:
 
     def _wait_for_takeoff(self, timeout: float = 20.0) -> bool:
         """等待所有虚拟无人机 flying=True"""
-        start = time.time()
-        while time.time() - start < timeout:
+        start = _time.time()
+        while _time.time() - start < timeout:
             all_ready = True
             for name in self.drone_names:
                 if self.drones_config.is_crazyflie_mirror(name):
@@ -470,7 +512,7 @@ class MultiDroneAlgorithmServer:
             if all_ready:
                 logger.info("所有虚拟无人机已稳定在空中")
                 return True
-            time.sleep(0.3)
+            _time.sleep(0.3)
         logger.warning("[起飞检测] 超时，仍有无人机未飞起")
         return False
 
@@ -478,7 +520,7 @@ class MultiDroneAlgorithmServer:
         """开始任务：控制所有无人机起飞并启动算法线程"""
         if not self.running:
             logger.info("准备开始任务，等待系统完全稳定...")
-            time.sleep(2)  # 额外等待2秒确保系统稳定
+            _time.sleep(2)  # 额外等待2秒确保系统稳定
 
             # 1. 所有无人机起飞
             if not self._takeoff_all():
@@ -504,7 +546,7 @@ class MultiDroneAlgorithmServer:
             if self.unity_socket and self.unity_socket.is_connected():
                 logger.info("发送开始仿真指令到Unity...")
                 self.unity_socket.send_start_simulation_command()
-                time.sleep(0.5)  # 等待Unity处理指令
+                _time.sleep(0.5)  # 等待Unity处理指令
             
             # 在启动算法线程前清空同步事件
             self.ready_event.clear()
@@ -513,7 +555,7 @@ class MultiDroneAlgorithmServer:
             logger.info("启动算法处理线程...")
             self.running = True
             # 记录Episode开始时间
-            self._episode_start_time = time.time()
+            self._episode_start_time = _time.time()
             for drone_name in self.drone_names:
                 self.drone_threads[drone_name] = threading.Thread(
                     target=self._process_drone,
@@ -555,7 +597,7 @@ class MultiDroneAlgorithmServer:
                     all_success = False
                 else:
                     logger.info(f"无人机{drone_name}起飞成功")
-            time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
+            _time.sleep(2)  # 增加延迟时间，确保每个无人机起飞后稳定
         return all_success
 
 
@@ -588,7 +630,7 @@ class MultiDroneAlgorithmServer:
                                         'x': pos.x,
                                         'y': pos.y,
                                         'z': pos.z,
-                                        'timestamp': time.time()
+                                        'timestamp': _time.time()
                                     }
                                     
                                 except Exception as e:
@@ -646,6 +688,35 @@ class MultiDroneAlgorithmServer:
                         logger.info("配置数据更新成功")
                     except Exception as e:
                         logger.error(f"更新配置数据失败: {str(e)}")
+                # 检查是否包含统一障碍物数据（支持Static/Dynamic，Normal/RestrictedZone，Polygon/Circle）
+                elif 'obstacles' in received_data:
+                    obstacles = received_data.get('obstacles', [])
+                    if isinstance(obstacles, list):
+                        # 分类处理障碍物（兼容数字枚举和字符串）
+                        normal_obstacles = [obs for obs in obstacles
+                                               if obs.get('category') in [0, 'Normal']]
+                        restricted_zones = [obs for obs in obstacles
+                                               if obs.get('category') in [1, 'RestrictedZone']]
+
+                        logger.info(f"收到障碍物数据 - 普通: {len(normal_obstacles)}, 禁飞区: {len(restricted_zones)}, 总计: {len(obstacles)}")
+
+                        try:
+                            # 处理普通障碍物（运行时动态数据）
+                            for algo in self.algorithms.values():
+                                if hasattr(algo, 'set_normal_obstacles'):
+                                    algo.set_normal_obstacles(normal_obstacles)
+
+                            # 处理禁飞区（静态配置数据）
+                            if restricted_zones:
+                                for algo in self.algorithms.values():
+                                    if hasattr(algo, 'set_restricted_zones'):
+                                        algo.set_restricted_zones(restricted_zones)
+
+                            logger.info(f"障碍物数据已更新到各算法实例 - 普通障碍物: {len(normal_obstacles)}, 禁飞区: {len(restricted_zones)}")
+                        except Exception as e:
+                            logger.error(f"更新障碍物数据失败: {str(e)}")
+                    else:
+                        logger.warning(f"障碍物数据格式错误: {type(obstacles)}")
                 elif 'crazyflie_logging' in received_data:
                     try:
                         crazyflie_logging_json = CrazyflieLoggingData.from_json_to_dicts(received_data['crazyflie_logging'])
@@ -828,7 +899,7 @@ class MultiDroneAlgorithmServer:
 
     def _record_entropy_snapshot(self) -> None:
         """定期记录网格平均熵值，用于可视化"""
-        current_time = time.time()
+        current_time = _time.time()
         if current_time - self._last_entropy_record_time < 1.0:
             return
 
@@ -929,7 +1000,7 @@ class MultiDroneAlgorithmServer:
                 has_runtime = bool(self.unity_runtime_data[drone_name].position)
 
                 if not (has_grid and has_runtime):
-                    time.sleep(1)
+                    _time.sleep(1)
                     continue
 
                 # 根据控制模式选择不同的控制逻辑
@@ -989,12 +1060,12 @@ class MultiDroneAlgorithmServer:
                     logger.debug(f"[DQN模式] DQN直接控制，跳过APF算法计算")
 
                 # 按配置间隔休眠
-                time.sleep(self.config_data.updateInterval)
+                _time.sleep(self.config_data.updateInterval)
 
             except Exception as e:
                 logger.error(f"无人机{drone_name}处理出错: {str(e)}")
                 logger.debug(traceback.format_exc())
-                time.sleep(self.config_data.updateInterval)  # 出错后延迟重试
+                _time.sleep(self.config_data.updateInterval)  # 出错后延迟重试
 
 
     def _control_drone_movement(self, drone_name: str, direction: Vector3) -> None:
@@ -1075,7 +1146,7 @@ class MultiDroneAlgorithmServer:
         if not self.running:
             return
         
-        current_time = time.time()
+        current_time = _time.time()
         
         # 检查位置是否发生变化
         if drone_name in self.last_positions and self.last_positions[drone_name]:
@@ -1171,9 +1242,12 @@ class MultiDroneAlgorithmServer:
 
     def get_visualization_snapshot(self) -> Dict[str, Any]:
         """为独立可视化进程提取数据快照（非阻塞）"""
-        now = time.time()
+        # 显式声明使用全局time模块（避免Python误认为time是局部变量）
+        global _time
+        now = _time.time()
         # 频率限制，避免过度消耗 CPU 序列化大数据
-        if self._vis_snapshot_cache and (now - self._vis_snapshot_cache_time < 0.05):
+        # 修复：只有缓存存在且时间差小于阈值时才返回缓存
+        if self._vis_snapshot_cache is not None and (now - self._vis_snapshot_cache_time < 0.1):
             return self._vis_snapshot_cache
 
         snapshot = {
@@ -1194,28 +1268,31 @@ class MultiDroneAlgorithmServer:
             pass
 
         # 1. 尝试提取网格数据 (带极短超时)
+        # 修复：重置期间不要返回空cells，否则客户端proxy会被清空且无法恢复
         if self.grid_lock.acquire(timeout=0.01):
             try:
                 if self.grid_data and hasattr(self.grid_data, 'cells') and len(self.grid_data.cells) > 0:
                     snapshot['grid_data'] = {
                         'cells': [
                             {
-                                'x': c.center.x, 
-                                'y': c.center.y, 
-                                'z': c.center.z, 
+                                'x': c.center.x,
+                                'y': c.center.y,
+                                'z': c.center.z,
                                 'entropy': c.entropy
                             } for c in self.grid_data.cells
                         ]
                     }
                 else:
-                    # 显式返回空列表，强制外部可视化刷新清空旧热力图
+                    # 网格数据为空时才返回空列表
                     snapshot['grid_data'] = {'cells': []}
             finally:
                 self.grid_lock.release()
-        else:
-            # 获取锁失败时，如果不为空则延用上一帧（如果是重置期间，则强制为空）
-            if self.resetting:
-                snapshot['grid_data'] = {'cells': []}
+        # 获取锁失败时：
+        # - 如果正在重置，不添加grid_data字段，让客户端延用旧数据
+        # - 如果不在重置，可能是短暂的锁竞争，跳过本次更新
+        # 这样可以避免重置期间客户端收到空cells导致热力图消失
+        # else:
+        #     # 不添加grid_data字段，客户端会延用上一帧的数据
         
         # 2. 尝试提取运行时数据
         if self.data_lock.acquire(timeout=0.01):
@@ -1241,6 +1318,56 @@ class MultiDroneAlgorithmServer:
         if hasattr(self, 'current_training_stats'):
             snapshot['current_training_stats'] = self.current_training_stats
 
+        # 4. 提取障碍物数据（用于可视化绘制）
+        # 添加详细调试日志
+        if not self.unity_socket:
+            logger.warning("[快照-障碍物] ⚠️ unity_socket为None，无法提取障碍物数据")
+            snapshot['obstacles'] = []
+        elif not hasattr(self.unity_socket, 'received_obstacles'):
+            logger.warning("[快照-障碍物] ⚠️ unity_socket没有received_obstacles属性")
+            snapshot['obstacles'] = []
+        else:
+            # 正常情况：直接提取obstacles数据
+            snapshot['obstacles'] = self.unity_socket.received_obstacles
+            # 调试日志：每秒输出一次（避免日志刷屏）
+            current_time = _time.time()
+            if not hasattr(self, '_last_obstacle_log_time'):
+                self._last_obstacle_log_time = 0
+            if current_time - self._last_obstacle_log_time > 1.0:  # 每秒最多输出一次
+                self._last_obstacle_log_time = current_time
+                obs_count = len(snapshot['obstacles']) if snapshot['obstacles'] else 0
+                logger.debug(f"[快照-障碍物] 障碍物: {obs_count} 个已添加到snapshot")
+
+        # 5. 提取当前权重数据（用于DDPG训练可视化）
+        if self.drone_names and len(self.drone_names) > 0:
+            first_drone = self.drone_names[0]
+            # ⚠️ 优化：放宽algorithms访问检查，即使访问失败也尝试提取数据
+            if first_drone in self.algorithms:
+                try:
+                    algo = self.algorithms[first_drone]
+                    if hasattr(algo, 'get_current_coefficients'):
+                        weights = algo.get_current_coefficients()
+                        snapshot['current_weights'] = weights
+                        logger.debug(f"[快照-权重] first_drone={first_drone}, 权重数: {len(weights)}")
+                except Exception as e:
+                    logger.error(f"[快照-权重] first_drone={first_drone} 提取失败: {e}")
+                    # 即使失败也要添加空字典，避免可视化界面完全没有权重数据
+                    snapshot['current_weights'] = {}
+
+        # 调试：输出快照的所有字段（每5秒一次）
+        if not hasattr(self, '_last_snapshot_debug_time'):
+            self._last_snapshot_debug_time = 0
+        current_time_debug = _time.time()
+        if current_time_debug - self._last_snapshot_debug_time > 5.0:
+            self._last_snapshot_debug_time = current_time_debug
+            snap_keys = list(snapshot.keys())
+            logger.info(f"[快照-调试] 📤 准备发送snapshot，字段数: {len(snap_keys)}, 字段列表: {snap_keys}")
+            # 特别检查关键字段
+            logger.info(f"[快照-调试]   grid_data: {'有' if 'grid_data' in snapshot else '无'}, " +
+                       f"unity_runtime_data: {len(snapshot.get('unity_runtime_data', {}))} 个, " +
+                       f"obstacles: {len(snapshot.get('obstacles', []))} 个, " +
+                       f"current_weights: {len(snapshot.get('current_weights', {}))} 个")
+
         self._vis_snapshot_cache = snapshot
         self._vis_snapshot_cache_time = now
         return snapshot
@@ -1261,7 +1388,7 @@ class MultiDroneAlgorithmServer:
                     self.crazyswarm.hover(d_name)
             except Exception:
                 pass
-        time.sleep(0.2)
+        _time.sleep(0.2)
         
         # 1. 强制执行 AirSim 物理重置 (回到地面未起飞状态)
         # 不再进行水平距离和飞行状态判断，为了实验严谨性，每轮都重新开始
@@ -1278,7 +1405,7 @@ class MultiDroneAlgorithmServer:
                 
                 # 执行模拟器 reset
                 self.drone_controller.reset()
-                time.sleep(1.0)
+                _time.sleep(1.0)
                 
                 # 重新初始化 API 控制和解锁
                 logger.info("[重置] 重新初始化无人机控制权...")
@@ -1318,18 +1445,18 @@ class MultiDroneAlgorithmServer:
             self.unity_socket.send_reset_command()
             
             # 4. 等待 Unity 返回重置完毕的数据 (ACK)
-            wait_start = time.time()
+            wait_start = _time.time()
             success = self.reset_ack_event.wait(timeout=10.0)
             
             if success:
-                logger.info(f"[重置] ✅ 收到 Unity 反馈，耗时: {time.time() - wait_start:.2f}s")
+                logger.info(f"[重置] ✅ 收到 Unity 反馈，耗时: {_time.time() - wait_start:.2f}s")
             else:
                 logger.warning("[重置] ⚠️ 等待 Unity 重置反馈超时")
             
             # 5. 最后发送启动仿真指令
             logger.info("[重置] 4/5 发送 start_simulation 指令，Leader 开始移动")
             self.unity_socket.send_start_simulation_command()
-            time.sleep(0.5) 
+            _time.sleep(0.5) 
         else:
             logger.warning("[重置] Unity 未连接，仅清空本地数据")
             with self.grid_lock:
@@ -1381,7 +1508,7 @@ class MultiDroneAlgorithmServer:
                 logger.info(f"无人机{drone_name}降落成功")
             else:
                 logger.error(f"无人机{drone_name}降落失败")
-            time.sleep(1)
+            _time.sleep(1)
 
     def _crazyflie_all_land(self):
         """控制所有实体无人机降落"""
@@ -1389,7 +1516,7 @@ class MultiDroneAlgorithmServer:
         for drone_name in self.drone_names:
             if self.config_data.get_uav_crazyflie_mirror(drone_name):
                 self.crazyswarm.land(drone_name, 2)
-                time.sleep(2)
+                _time.sleep(2)
 
 
     def _disconnect_airsim(self) -> None:
@@ -1442,26 +1569,26 @@ class MultiDroneAlgorithmServer:
                             logger.warning(f"无人机{drone_name}算法线程未能正常结束")
                         else:
                             logger.info(f"无人机{drone_name}算法线程已停止")
-                time.sleep(0.5)  # 减少等待时间
+                _time.sleep(0.5)  # 减少等待时间
             else:
                 logger.info("[步骤1/8] 跳过（算法未运行）")
             
             # 2. 所有无人机降落
             logger.info("[步骤2/8] 所有无人机降落...")
             self._land_all()
-            time.sleep(1)  # 减少等待时间
+            _time.sleep(1)  # 减少等待时间
             
             # 3. 发送Unity重置命令
             logger.info("[步骤3/8] 发送重置命令到Unity...")
             self.unity_socket.send_reset_command()
-            time.sleep(2)  # 等待Unity处理重置命令并完成
+            _time.sleep(2)  # 等待Unity处理重置命令并完成
             
             # 4. 重置AirSim模拟器
             logger.info("[步骤4/8] 重置AirSim模拟器...")
             if not self.drone_controller.reset():
                 logger.error("AirSim模拟器重置失败")
                 return False
-            time.sleep(1.5)  # 等待AirSim重置完成
+            _time.sleep(1.5)  # 等待AirSim重置完成
             
             # 5. 清理本地数据
             logger.info("[步骤5/8] 清理本地数据...")
@@ -1472,12 +1599,12 @@ class MultiDroneAlgorithmServer:
             if not self._init_drones():
                 logger.error("无人机重新初始化失败")
                 return False
-            time.sleep(1)
+            _time.sleep(1)
             
             # 7. 发送配置数据到Unity（包含Leader位置等初始配置）
             logger.info("[步骤7/8] 发送配置数据到Unity...")
             self.unity_socket.send_config(self.config_data)
-            time.sleep(0.5)
+            _time.sleep(0.5)
             
             # 8. 如果之前在运行，重新启动任务
             if was_running:
@@ -1594,7 +1721,7 @@ if __name__ == "__main__":
             server.start_mission()
             # 主循环保持运行
             while server.running:
-                time.sleep(1)
+                _time.sleep(1)
     except KeyboardInterrupt:
         logger.info("用户中断，停止服务")
     except Exception as e:

@@ -30,7 +30,7 @@ echo.
 echo ============================================================
 echo.
 
-set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\unified_train_config.json"
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\configs\unified_train_config.json"
 if not "%~1"=="" (
     set "CONFIG_PATH=%~1"
     shift

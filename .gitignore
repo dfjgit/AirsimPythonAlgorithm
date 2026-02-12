@@ -137,6 +137,17 @@ multirotor/DDPG_Weight/crazyflie_logs/
 multirotor/DDPG_Weight/training_visualizer_logs/
 analysis_results/
 
+# ==================== 训练生成的模型和输出文件 ====================
+# DDPG权重预测模型（带时间戳的训练输出）
+multirotor/DDPG_Weight/models/*_*.json
+multirotor/DDPG_Weight/models/*_*.zip
+# DQN训练模型输出
+multirotor/DQN_Movement/models/
+multirotor/DQN_Movement/logs/
+multirotor/DQN_Movement/training_logs/
+# 训练过程中的可视化数据
+multirotor/Visualization/visualization_data/
+
 # ==================== 补充：VS Code 配置忽略 ====================
 # VS Code 全局配置目录
 /.vscode/

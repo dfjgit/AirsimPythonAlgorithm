@@ -5,12 +5,14 @@ from typing import List, Any, Union
 # 数据包类型枚举
 class PackType(Enum):
     grid_data = "grid_data"  # HexGridDataModel，地图数据
-    config_data = "config_data"  # ScannerConfigData
+    config_data = "config_data"  # ScannerConfigData (APF算法配置)
     runtime_data = "runtime_data"  # ScannerRuntimeData
     crazyflie_logging_data = "crazyflie_logging"
     crazyflie_operate_data = "crazyflie_operate"
     reset_env = "reset_env"  # 重置环境命令
     start_simulation = "start_simulation"  # 开始仿真命令（让领导者开始移动）
+    obstacle_data = "obstacle_data"  # 统一障碍物数据（支持Static/Dynamic，Normal/RestrictedZone，Polygon/Circle）
+    drone_config = "drone_config"  # DronesConfig (无人机配置数据)
 
 
 # 数据包数据结构（通信发送的数据包）

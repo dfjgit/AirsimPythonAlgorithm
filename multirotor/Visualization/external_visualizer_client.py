@@ -35,6 +35,15 @@ class ConfigProxy:
         self.moveSpeed = data.get('moveSpeed', 1.0)
         self.updateInterval = data.get('updateInterval', 0.05)
 
+class AlgorithmProxy:
+    """算法代理类，用于外部可视化进程访问算法数据"""
+    def __init__(self):
+        self.current_weights = {}
+
+    def get_current_coefficients(self) -> Dict[str, float]:
+        """获取当前权重系数"""
+        return self.current_weights if self.current_weights else {}
+
 class SnapshotServerProxy:
     def __init__(self, visualizer=None):
         self.visualizer = visualizer
@@ -47,7 +56,12 @@ class SnapshotServerProxy:
         self.use_learned_weights = False
         self.battery_data = {}
         self.current_training_stats = {}
+        self.obstacles = []  # 障碍物数据
         self._last_applied_reset_time = 0.0
+        self.current_weights = {}  # 当前权重数据
+
+        # 创建算法代理（用于DDPGTrainingVisualizer访问权重）
+        self.algorithm_proxy = AlgorithmProxy()
 
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         return self.battery_data
@@ -60,18 +74,34 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
             proxy.visualizer.clear_cache()
         proxy._last_applied_reset_time = server_reset_time
 
+    # 调试：输出快照的关键字段
+    snap_keys = list(snap.keys())
+    print(f"[IPC客户端] 🔍 收到snapshot，字段数: {len(snap_keys)}")
+    print(f"[IPC客户端] 🔍 snapshot字段列表: {snap_keys}")
+
+    # 更新基础数据
     proxy.drone_names = snap.get('drone_names', proxy.drone_names)
     proxy.control_mode = snap.get('control_mode', proxy.control_mode)
-    
+
+    # 更新基础数据
     if 'config_data' in snap:
         proxy.config_data = ConfigProxy(snap['config_data'])
 
     # grid data reconstruction
     if 'grid_data' in snap:
-        proxy.grid_data = GridProxy(snap['grid_data'])
+        cells_count = len(snap['grid_data'].get('cells', []))
+        print(f"[IPC客户端] 🔍 grid_data存在，cells数: {cells_count}")
+        # 只有当cells不为空时才更新，避免重置期间清空热力图
+        if cells_count > 0:
+            proxy.grid_data = GridProxy(snap['grid_data'])
+        else:
+            print(f"[IPC客户端] ⚠️ grid_data为空，保留旧数据避免热力图消失")
+    else:
+        print(f"[IPC客户端] 🔍 snapshot中没有grid_data字段，保留旧数据")
 
     # runtime data reconstruction
     if 'unity_runtime_data' in snap:
+        print(f"[IPC客户端] 🔍 unity_runtime_data存在，drone数: {len(snap['unity_runtime_data'])}")
         runtimes = {}
         for name, data in snap['unity_runtime_data'].items():
             runtimes[name] = RuntimeProxy(data)
@@ -89,6 +119,30 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     if 'current_training_stats' in snap:
         proxy.current_training_stats = snap.get('current_training_stats') or {}
 
+    # obstacles data mapping (for visualization)
+    if 'obstacles' in snap:
+        proxy.obstacles = snap.get('obstacles') or []
+        print(f"[IPC客户端] 🔍 收到障碍物数据: {len(proxy.obstacles)} 个")
+    else:
+        # 只在第一次输出警告
+        if not hasattr(proxy, '_obstacles_warned'):
+            proxy._obstacles_warned = True
+            print(f"[IPC客户端] ⚠️ snapshot中没有'obstacles'字段！")
+
+    # current weights mapping (for DDPG training visualization)
+    if 'current_weights' in snap:
+        proxy.current_weights = snap.get('current_weights') or {}
+        print(f"[IPC客户端] 🔍 收到权重数据: {len(proxy.current_weights)} 个")
+        # 同步更新算法代理的权重
+        proxy.algorithm_proxy.current_weights = proxy.current_weights
+        # 确保algorithms字典中有第一个无人机的算法代理
+        if proxy.drone_names and len(proxy.drone_names) > 0:
+            first_drone = proxy.drone_names[0]
+            if first_drone not in proxy.algorithms or proxy.algorithms[first_drone] != proxy.algorithm_proxy:
+                proxy.algorithms[first_drone] = proxy.algorithm_proxy
+                print(f"[IPC客户端] ✅ 算法代理已设置: first_drone={first_drone}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
@@ -104,9 +158,6 @@ def main():
         print(f"Failed to connect to IPC server at {args.host}:{args.port}: {e}")
         sys.exit(1)
 
-    # 将可视化器实例传入 proxy，便于在 reset 时触发 clear_cache
-    proxy = SnapshotServerProxy(visualizer=vis)
-
     # Import visualizer based on mode
     if args.mode == 'runtime':
         from multirotor.Visualization.runtime_visualizer import RuntimeVisualizer as _Vis
@@ -117,8 +168,14 @@ def main():
     else:
         from multirotor.Visualization.ddpg_training_visualizer import DDPGTrainingVisualizer as _Vis
 
+    # Create proxy first (without visualizer reference)
+    proxy = SnapshotServerProxy(visualizer=None)
+
     # Initialize visualizer with proxy
     vis = _Vis(server=proxy, env=None)
+
+    # Now update proxy with the visualizer instance for clear_cache callback
+    proxy.visualizer = vis
     
     vis.pygame_initialized = False
 
@@ -127,13 +184,33 @@ def main():
     stop_event = threading.Event()
 
     def recv_loop():
-        try:
-            while not stop_event.is_set():
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 10
+
+        while not stop_event.is_set():
+            try:
                 payload = recv_frame(s)
                 snap = decode_snapshot(payload)
+                consecutive_errors = 0  # 重置错误计数
                 _apply_snapshot(proxy, snap)
-        except Exception:
-            stop_event.set()
+            except (ConnectionError, ConnectionResetError, BrokenPipeError) as e:
+                print(f"[IPC客户端] ❌ 连接错误: {e}，停止接收")
+                stop_event.set()
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                print(f"[IPC客户端] ⚠️ 接收快照异常 ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}")
+                import traceback
+                traceback.print_exc()
+
+                # 如果连续错误过多，退出循环
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(f"[IPC客户端] ❌ 连续错误过多，停止接收")
+                    stop_event.set()
+                    break
+
+                # 短暂等待后重试
+                time.sleep(0.1)
 
     t = threading.Thread(target=recv_loop, daemon=True)
     t.start()

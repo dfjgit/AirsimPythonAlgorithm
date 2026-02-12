@@ -13,6 +13,7 @@ if PROJECT_ROOT not in sys.path:
 
 from multirotor.AlgorithmServer import MultiDroneAlgorithmServer
 from multirotor.DQN_Movement.envs.crazyflie_hierarchical_env import CrazyflieHierarchicalEnv
+from multirotor.Algorithm.drones_config import DronesConfig
 
 # 尝试导入训练库，根据实际项目使用的库（假设是 stable_baselines3 或自定义）
 try:
@@ -27,15 +28,44 @@ def main():
     logger = logging.getLogger("HierarchicalDQN_Online")
 
     parser = argparse.ArgumentParser(description="双层DQN实机在线训练")
-    parser.add_argument("--drone-name", type=str, default="UAV1", help="无人机名称")
+    parser.add_argument("--drone-name", type=str, default=None, help="无人机名称（若未指定则从配置读取）")
     parser.add_argument("--total-timesteps", type=int, default=1000, help="总训练步数")
     parser.add_argument("--save-dir", type=str, default="models/hrl_online", help="模型保存目录")
     parser.add_argument("--load-model", type=str, default=None, help="加载预训练模型路径")
     args = parser.parse_args()
 
+    # 加载无人机配置（兼容模式）
+    drone_name = args.drone_name
+    if drone_name is None:
+        # 命令行未指定，尝试从配置读取
+        try:
+            drones_config = DronesConfig()
+            drone_names = drones_config.get_training_drones('hierarchical')
+            if drone_names:
+                # 使用配置文件中的无人机
+                drone_name = drone_names[0]
+                logger.info(f"从 drones_config.json 读取训练无人机: {drone_name}")
+            else:
+                # 配置文件存在但没有对应的训练配置，使用默认值并提示
+                drone_name = "UAV1"
+                logger.warning(f"drones_config.json 中未找到 training.hierarchical 配置")
+                logger.warning(f"使用默认无人机: {drone_name}")
+                logger.info(f"提示: 如需自定义训练无人机，请在 drones_config.json 的 training.hierarchical 部分配置")
+        except FileNotFoundError:
+            # 配置文件不存在，使用默认值并提示
+            drone_name = "UAV1"
+            logger.warning(f"未找到 drones_config.json 配置文件")
+            logger.warning(f"使用默认无人机: {drone_name}")
+            logger.info(f"提示: 配置文件应位于项目根目录的 multirotor/drones_config.json")
+        except Exception as e:
+            # 其他错误，使用默认值并提示
+            drone_name = "UAV1"
+            logger.warning(f"读取 drones_config.json 时出错: {e}")
+            logger.warning(f"使用默认无人机: {drone_name}")
+
     # 1. 启动 AlgorithmServer (控制模式必须为 apf)
     server = MultiDroneAlgorithmServer(
-        drone_names=[args.drone_name],
+        drone_names=[drone_name],
         control_mode='apf',
         use_learned_weights=False,  # 训练模式下由 Env 动态设置
         enable_visualization=True
@@ -54,7 +84,7 @@ def main():
         # 2. 创建实机分层环境
         env = CrazyflieHierarchicalEnv(
             server=server,
-            drone_name=args.drone_name,
+            drone_name=drone_name,
             step_duration=2.0  # 与实机物理特性对齐的决策周期
         )
 

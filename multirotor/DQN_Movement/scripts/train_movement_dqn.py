@@ -44,6 +44,7 @@ except ImportError:
 
 # 导入环境
 from envs.movement_env import MovementEnv
+from Algorithm.drones_config import DronesConfig
 
 print("\n" + "=" * 80)
 print("[步骤2] 加载配置")
@@ -60,12 +61,40 @@ print(f"    - 最大步数: {config['movement']['max_steps']}")
 print(f"    - 训练步数: {config['training']['total_timesteps']}")
 print(f"    - 学习率: {config['training']['learning_rate']}")
 
+# 加载无人机配置（兼容模式）
+try:
+    drones_config = DronesConfig()
+    drone_names = drones_config.get_training_drones('dqn')
+    if drone_names:
+        # 使用配置文件中的无人机
+        training_drone = drone_names[0]
+        print(f"  ✓ 从 drones_config.json 读取训练无人机: {training_drone}")
+    else:
+        # 配置文件存在但没有对应的训练配置，使用默认值并提示
+        training_drone = "UAV1"
+        print(f"  ⚠️  警告: drones_config.json 中未找到 training.dqn 配置")
+        print(f"  ⚠️  使用默认无人机: {training_drone}")
+        print(f"  💡 提示: 如需自定义训练无人机，请在 drones_config.json 的 training.dqn 部分配置:")
+        print(f"  💡     \"dqn\": {{\"drone_list\": [\"UAV1\"]}}")
+except FileNotFoundError:
+    # 配置文件不存在，使用默认值并提示
+    training_drone = "UAV1"
+    print(f"  ⚠️  警告: 未找到 drones_config.json 配置文件")
+    print(f"  ⚠️  使用默认无人机: {training_drone}")
+    print(f"  💡 提示: 配置文件应位于项目根目录的 multirotor/drones_config.json")
+    print(f"  💡     配置示例: {{\"training\": {{\"dqn\": {{\"drone_list\": [\"UAV1\"]}}}}}}")
+except Exception as e:
+    # 其他错误，使用默认值并提示
+    training_drone = "UAV1"
+    print(f"  ⚠️  警告: 读取 drones_config.json 时出错: {e}")
+    print(f"  ⚠️  使用默认无人机: {training_drone}")
+
 print("\n" + "=" * 80)
 print("[步骤3] 创建训练环境")
 print("=" * 80)
 
 # 创建环境（无server，使用模拟数据）
-env = MovementEnv(server=None, drone_name="UAV1", config_path=config_path)
+env = MovementEnv(server=None, drone_name=training_drone, config_path=config_path)
 env = Monitor(env)  # 包装监控器
 
 print(f"  ✓ 环境创建成功")

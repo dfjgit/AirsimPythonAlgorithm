@@ -191,22 +191,28 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
         绘制主视图区域（左侧）
         显示：
         - 熵值热力图（底层）
+        - 障碍物（普通/禁飞区）
         - 5x5高层网格（跟随Leader）
         - 无人机目标指引箭头
         """
         try:
             grid_data = data.get('grid_data')
             runtime_data = data.get('runtime_data')
-            
+
             # 第1层：绘制熵值热力图（底层背景）
             if grid_data:
                 self.draw_grid(grid_data)
-            
-            # 第2层：绘制Leader标记
+
+            # 第2层：绘制障碍物（在热力图之上）
+            obstacles = data.get('obstacles', [])
+            if obstacles:
+                self.draw_obstacles(obstacles)
+
+            # 第3层：绘制Leader标记
             if runtime_data:
                 self._draw_leader(screen, data)
-            
-            # 第3层：绘制5x5高层网格（在无人机之前，但透明度低）
+
+            # 第4层：绘制5x5高层网格（在无人机之前，但透明度低）
             if Vector3 and runtime_data:
                 center, radius = self._get_leader_info(data)
                 if center and radius > 0:
@@ -215,15 +221,15 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
                     if self.small_font:
                         debug_text = self.small_font.render("[5x5 Grid ON]", True, (0, 255, 0))
                         screen.blit(debug_text, (10, 10))
-            
-            # 第4层：绘制无人机和指引箭头（最上层，确保可见）
+
+            # 第5层：绘制无人机和指引箭头（最上层，确保可见）
             if runtime_data:
                 self._draw_drones_with_arrows(screen, data)
                 # 调试标记：确认箭头已绘制
                 if self.small_font:
                     debug_text = self.small_font.render("[Arrows ON]", True, (0, 255, 0))
                     screen.blit(debug_text, (10, 30))
-                
+
         except Exception as e:
             print(f"绘制失败: {e}")
             import traceback
@@ -625,15 +631,19 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
                 vis_data = self.get_visualization_data()
                 vis_data['grid_data'] = grid_data
                 vis_data['runtime_data'] = runtime_data_dict
-                
+
+                # 获取并添加障碍物数据
+                obstacles = self.get_obstacles_data()
+                vis_data['obstacles'] = obstacles
+
                 # 添加电量数据
                 battery_data = self.get_battery_data()
                 if battery_data:
                     vis_data['battery_data'] = battery_data
-                
+
                 # 使用自定义的draw_main_view
                 self.draw_main_view(self.screen, vis_data)
-                
+
                 # 绘制熵值图例
                 self.draw_entropy_legend()
                 

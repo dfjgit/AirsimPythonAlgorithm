@@ -2,7 +2,7 @@ import json
 import socket
 import struct
 import threading
-import time
+import time as _time  # ⚠️ 修改：重命名time模块避免冲突
 import zlib
 from typing import Any, Dict, Optional, Callable
 
@@ -95,7 +95,7 @@ class VisualizationIPCServer:
             self._sock = None
 
     def _run(self) -> None:
-        next_send = time.time()
+        next_send = _time.time()
         period = 1.0 / max(self.hz, 1e-6)
 
         while self._running:
@@ -110,20 +110,39 @@ class VisualizationIPCServer:
                 except Exception:
                     continue
 
-            now = time.time()
+            now = _time.time()
             if now < next_send:
-                time.sleep(min(0.01, next_send - now))
+                _time.sleep(min(0.01, next_send - now))
                 continue
 
             next_send = now + period
             try:
                 snapshot = self.snapshot_provider()
+                # 调试日志：每5秒输出一次，显示发送的快照字段
+                current_time = _time.time()
+                if not hasattr(self, '_last_snapshot_log_time'):
+                    self._last_snapshot_log_time = 0
+                if current_time - self._last_snapshot_log_time > 5.0:
+                    self._last_snapshot_log_time = current_time
+                    snap_keys = list(snapshot.keys())
+                    print(f"[IPC服务端] 📤 发送snapshot，字段数: {len(snap_keys)}，字段列表: {snap_keys}")
                 payload = encode_snapshot(snapshot, compress_level=self.compress_level)
                 _send_frame(self._client, payload)
-            except Exception:
-                try:
-                    if self._client:
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                # 客户端断开连接是正常情况（关闭可视化窗口时），不输出警告
+                # 清除客户端连接，等待重新连接
+                if self._client:
+                    try:
                         self._client.close()
-                finally:
+                    except Exception:
+                        pass
                     self._client = None
-                continue
+            except Exception as e:
+                # 其他异常也静默处理，不影响用户体验
+                # 清除客户端连接，等待重新连接
+                if self._client:
+                    try:
+                        self._client.close()
+                    except Exception:
+                        pass
+                    self._client = None

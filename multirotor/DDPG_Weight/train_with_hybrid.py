@@ -528,6 +528,7 @@ def main():
     try:
         # ========== [0/5] 设置虚实融合配置 ==========
         print("\n[0/5] 设置虚实融合配置...")
+        # 使用统一的算法配置文件
         original_config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apf_algorithm_config.json")
         temp_config_file = _setup_hybrid_config(original_config_file, mirror_drones)
         
@@ -692,7 +693,11 @@ def main():
                 print(f"  - 外部可视化日志: {vis_log_path}")
             else:
                 print("  - 外部可视化日志: (未生成)")
-            training_visualizer = None
+            # ⚠️ 重要：仍然需要在主进程中创建训练可视化器用于收集统计数据（权重历史等）
+            # 外部进程负责显示，主进程中的visualizer负责数据收集
+            from multirotor.Visualization.ddpg_training_visualizer import DDPGTrainingVisualizer
+            training_visualizer = DDPGTrainingVisualizer(server=server, env=None)
+            print("  - 主进程训练数据收集器: 已创建 (用于权重历史统计)")
 
         # ========== [5/5] 创建DDPG模型 ==========
         print("\n[5/5] 创建DDPG模型...")
