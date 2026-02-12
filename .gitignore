@@ -1,8 +1,11 @@
 # ==================== Python 基础忽略规则 ====================
 # Byte-compiled / optimized / DLL files
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 
 # C extensions
 *.so
@@ -135,6 +138,8 @@ multirotor/data_logs/
 multirotor/DDPG_Weight/airsim_training_logs/
 multirotor/DDPG_Weight/crazyflie_logs/
 multirotor/DDPG_Weight/training_visualizer_logs/
+multirotor/DDPG_Weight/logs/
+multirotor/Visualization/training_logs/
 analysis_results/
 
 # ==================== 训练生成的模型和输出文件 ====================
@@ -157,3 +162,25 @@ multirotor/Visualization/visualization_data/
 !.vscode/extensions.json  # 如需保留extensions.json则注释此行
 *.code-workspace
 .history/
+
+# ==================== JetBrains IDE 配置忽略 ====================
+.idea/
+*.iml
+
+# ==================== Claude Code 配置忽略 ====================
+.claude/
+
+# ==================== Python 虚拟环境忽略 ====================
+# 虚拟环境目录
+myvenv/
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ==================== 模拟/日志数据文件 ====================
+# 模拟飞行日志
+crazyflie_flight_log*.json
+*.flightlog
