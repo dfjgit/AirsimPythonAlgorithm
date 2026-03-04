@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal
 
 :: 设置编码为 UTF-8
@@ -18,8 +18,8 @@ if not exist "myvenv\Scripts\python.exe" (
     exit /b 1
 )
 
-:: 启动训练（禁用可视化）
-echo [状态] 正在启动分层融合训练脚本（无可视化模式）...
+:: 启动训练(禁用可视化)
+echo [状态] 正在启动分层融合训练脚本(无可视化模式)...
 .\myvenv\Scripts\python.exe multirotor\DQN_Movement\scripts\train_hierarchical_with_airsim.py --no-visualization
 
 if %ERRORLEVEL% neq 0 (

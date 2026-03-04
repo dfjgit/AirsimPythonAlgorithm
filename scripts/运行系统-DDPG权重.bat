@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 cls
 
@@ -41,7 +41,7 @@ echo 无人机数量: 3
 echo ============================================================
 echo.
 
-REM 运行算法服务器（使用DDPG权重）
+REM 运行算法服务器(使用DDPG权重)
 echo [3/3] 启动算法服务器...
 python %~dp0..\multirotor\AlgorithmServer.py --use-learned-weights --model-path DDPG_Weight/models/best_model --drones 3
 

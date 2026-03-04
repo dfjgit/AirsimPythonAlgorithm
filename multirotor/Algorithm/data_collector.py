@@ -418,11 +418,12 @@ class DataCollector:
                 # 如果表头未写入，先写入表头
                 if self.csv_writer and not self.header_written:
                     header = [
-                        'timestamp', 
-                        'elapsed_time', 
-                        'scanned_count', 
-                        'unscanned_count', 
-                        'total_count', 
+                        'episode',        # 新增：训练轮次标识
+                        'timestamp',
+                        'elapsed_time',
+                        'scanned_count',
+                        'unscanned_count',
+                        'total_count',
                         'scan_ratio',
                         'global_avg_entropy',
                         'global_scan_ratio',
@@ -478,7 +479,11 @@ class DataCollector:
                         env_type = self.external_data.get('env_type', '')
                         ctrl_mode = self.external_data.get('control_mode', '')
 
+                    # 获取当前episode（从training_data或external_data）
+                    current_episode = training_data.get('episode', self.external_data.get('episode', -1))
+
                     row = [
+                        current_episode,  # 新增：episode字段
                         timestamp,
                         f"{elapsed_time:.2f}",
                         scanned_count,

@@ -701,6 +701,20 @@ class ScanDataVisualizer:
                 except Exception as e:
                     LOGGER.error(f"  [失败] 生成图表 '3D轨迹': {e}", exc_info=True)
 
+            # 图表5.5: 按episode分组的轨迹图（解决多轮次混杂问题）
+            if drones and "episode" in df.columns:
+                try:
+                    self._visualize_episode_trajectories(df, drones, run_dir)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成分组轨迹图: {e}", exc_info=True)
+
+            # 图表5.6: Episode性能汇总图
+            if "episode" in df.columns:
+                try:
+                    self._visualize_episode_performance_summary(df, run_dir)
+                except Exception as e:
+                    LOGGER.error(f"  [失败] 生成Episode性能汇总图: {e}", exc_info=True)
+
             # 图表6: 熵值分布快照
             if e_bins and e_hist:
                 try:
@@ -971,10 +985,308 @@ class ScanDataVisualizer:
             
             LOGGER.info(f"✅ 扫描数据分析完成，结果保存在: {run_dir}")
             return True
-            
+
         except Exception as e:
             LOGGER.error(f"❌ 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
             return False
+
+    def _visualize_episode_trajectories(self, df: pd.DataFrame, drones: list, run_dir: Path) -> None:
+        """按episode分组生成轨迹图（解决多轮次轨迹混杂问题）"""
+        # 检查是否有episode字段
+        if "episode" not in df.columns:
+            LOGGER.info("  [跳过] 数据中没有episode字段，不生成分组轨迹图")
+            return
+
+        # 获取所有episodes
+        episodes = df["episode"].unique()
+        # 过滤掉episode=-1的情况（未初始化的episode）
+        episodes = episodes[episodes >= 0]
+
+        if len(episodes) <= 1:
+            LOGGER.info("  [跳过] 只有1个或0个episode，不生成分组轨迹图")
+            return
+
+        LOGGER.info(f"  [分组] 检测到 {len(episodes)} 个episodes，开始生成分组轨迹图...")
+
+        # 为每个episode生成单独的轨迹图
+        episode_dir = run_dir / "episode_trajectories"
+        episode_dir.mkdir(exist_ok=True)
+
+        for ep in episodes:
+            ep_df = df[df["episode"] == ep]
+
+            # 跳过数据点太少的episode
+            if len(ep_df) < 5:
+                continue
+
+            try:
+                # 2D轨迹图
+                fig2d, ax2d = plt.subplots(figsize=(8, 8))
+                for drone in drones:
+                    x_col, y_col = f"{drone}_x", f"{drone}_y"
+                    if x_col in ep_df.columns and y_col in ep_df.columns:
+                        ax2d.plot(ep_df[x_col], ep_df[y_col],
+                                label=f"{drone}", linewidth=1.5, alpha=0.8)
+                        # 标记起点和终点
+                        if len(ep_df) > 0:
+                            ax2d.scatter(ep_df[x_col].iloc[0], ep_df[y_col].iloc[0],
+                                       marker='o', s=100, color='green', label='起点' if drone == drones[0] else '')
+                            ax2d.scatter(ep_df[x_col].iloc[-1], ep_df[y_col].iloc[-1],
+                                       marker='X', s=100, color='red', label='终点' if drone == drones[0] else '')
+
+                ax2d.set_xlabel("X (m)")
+                ax2d.set_ylabel("Y (m)")
+                ax2d.set_title(f"Episode {ep} - 水平面轨迹 (X-Y)")
+                ax2d.grid(True, alpha=0.3)
+                ax2d.legend()
+                fig2d.tight_layout()
+                fig2d.savefig(episode_dir / f"episode_{ep:03d}_trajectory_xy.png", dpi=150)
+                plt.close(fig2d)
+
+                # 3D轨迹图
+                fig3d = plt.figure(figsize=(10, 8))
+                ax3d = fig3d.add_subplot(111, projection="3d")
+                valid_3d = False
+                for drone in drones:
+                    x, y, z = f"{drone}_x", f"{drone}_y", f"{drone}_z"
+                    if all(c in ep_df.columns for c in [x, y, z]):
+                        ax3d.plot(ep_df[x], ep_df[y], ep_df[z], label=drone, linewidth=1.5, alpha=0.8)
+                        # 标记起点和终点
+                        if len(ep_df) > 0:
+                            ax3d.scatter(ep_df[x].iloc[0], ep_df[y].iloc[0], ep_df[z].iloc[0],
+                                       marker='o', s=50, color='green')
+                            ax3d.scatter(ep_df[x].iloc[-1], ep_df[y].iloc[-1], ep_df[z].iloc[-1],
+                                       marker='X', s=50, color='red')
+                        valid_3d = True
+
+                if valid_3d:
+                    ax3d.set_xlabel("X")
+                    ax3d.set_ylabel("Y")
+                    ax3d.set_zlabel("Z")
+                    ax3d.set_title(f"Episode {ep} - 3D空间轨迹")
+                    ax3d.legend()
+                    fig3d.tight_layout()
+                    fig3d.savefig(episode_dir / f"episode_{ep:03d}_trajectory_3d.png", dpi=150)
+                plt.close(fig3d)
+
+            except Exception as e:
+                LOGGER.error(f"  [失败] 生成Episode {ep}轨迹图: {e}")
+
+        # 生成汇总图：所有episode的轨迹叠加（用不同颜色）
+        try:
+            # 2D汇总图
+            fig_summary_2d, ax_summary_2d = plt.subplots(figsize=(10, 10))
+            colors = plt.cm.tab10(np.linspace(0, 1, min(len(episodes), 10)))
+
+            for idx, ep in enumerate(sorted(episodes)[:10]):  # 最多显示10个episode
+                ep_df = df[df["episode"] == ep]
+                color = colors[idx % len(colors)]
+                for drone in drones:
+                    x_col, y_col = f"{drone}_x", f"{drone}_y"
+                    if x_col in ep_df.columns and y_col in ep_df.columns:
+                        ax_summary_2d.plot(ep_df[x_col], ep_df[y_col],
+                                          label=f"E{ep}", color=color, linewidth=1, alpha=0.6)
+
+            ax_summary_2d.set_xlabel("X (m)")
+            ax_summary_2d.set_ylabel("Y (m)")
+            ax_summary_2d.set_title("多Episode轨迹对比 (X-Y)")
+            ax_summary_2d.grid(True, alpha=0.3)
+            ax_summary_2d.legend(ncol=2, fontsize=8)
+            fig_summary_2d.tight_layout()
+            fig_summary_2d.savefig(episode_dir / "all_episodes_comparison_xy.png", dpi=150)
+            plt.close(fig_summary_2d)
+
+            LOGGER.info(f"  [成功] 生成分组轨迹图，保存在: {episode_dir}")
+        except Exception as e:
+            LOGGER.error(f"  [失败] 生成Episode汇总轨迹图: {e}")
+
+    def _visualize_episode_performance_summary(self, df: pd.DataFrame, run_dir: Path) -> None:
+        """生成Episode性能汇总图（每个episode的统计指标对比）"""
+        # 检查是否有episode字段
+        if "episode" not in df.columns:
+            LOGGER.info("  [跳过] 数据中没有episode字段，不生成性能汇总图")
+            return
+
+        # 获取所有episodes
+        episodes = df["episode"].unique()
+        episodes = episodes[episodes >= 0]  # 过滤掉-1
+
+        if len(episodes) <= 1:
+            LOGGER.info("  [跳过] Episode数量不足，不生成性能汇总图")
+            return
+
+        LOGGER.info(f"  [汇总] 生成 {len(episodes)} 个Episodes的性能对比图...")
+
+        # 计算每个episode的统计指标
+        episode_stats = []
+        for ep in episodes:
+            ep_df = df[df["episode"] == ep]
+
+            if len(ep_df) == 0:
+                continue
+
+            stats = {
+                "episode": ep,
+                "start_time": ep_df["elapsed_time"].min(),
+                "end_time": ep_df["elapsed_time"].max(),
+                "duration": ep_df["elapsed_time"].max() - ep_df["elapsed_time"].min(),
+                "data_points": len(ep_df),
+            }
+
+            # 最终覆盖率
+            if "scan_ratio" in ep_df.columns:
+                final_scan = ep_df["scan_ratio"].iloc[-1]
+                # 处理百分比字符串
+                if isinstance(final_scan, str):
+                    final_scan = float(final_scan.rstrip("%"))
+                stats["final_scan_ratio"] = final_scan
+
+            # 最终全局覆盖率
+            if "global_scan_ratio" in ep_df.columns:
+                final_global = ep_df["global_scan_ratio"].iloc[-1]
+                if isinstance(final_global, str):
+                    final_global = float(final_global.rstrip("%"))
+                stats["final_global_scan_ratio"] = final_global
+
+            # 最终熵值
+            if "global_avg_entropy" in ep_df.columns:
+                stats["final_entropy"] = ep_df["global_avg_entropy"].iloc[-1]
+
+            # 平均扫描速率（覆盖百分比/秒）
+            if "scan_ratio" in ep_df.columns and len(ep_df) > 1:
+                scan_values = ep_df["scan_ratio"].apply(
+                    lambda x: float(x.rstrip("%")) if isinstance(x, str) else float(x)
+                )
+                stats["avg_scan_rate"] = scan_values.diff().fillna(0).mean()
+
+            episode_stats.append(stats)
+
+        if not episode_stats:
+            LOGGER.info("  [跳过] 没有有效的episode统计数据")
+            return
+
+        # 转换为DataFrame
+        stats_df = pd.DataFrame(episode_stats)
+        stats_df = stats_df.sort_values("episode")
+
+        # 创建汇总图表（2x2子图）
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle("Episode性能汇总分析", fontsize=16, fontweight="bold")
+
+        # 子图1: 最终覆盖率对比
+        if "final_scan_ratio" in stats_df.columns:
+            ax1 = axes[0, 0]
+            colors = ["green" if x >= 80 else "orange" if x >= 50 else "red"
+                     for x in stats_df["final_scan_ratio"]]
+            ax1.bar(stats_df["episode"], stats_df["final_scan_ratio"], color=colors, alpha=0.7)
+            ax1.axhline(y=80, color="green", linestyle="--", alpha=0.5, label="优秀 (80%)")
+            ax1.axhline(y=50, color="orange", linestyle="--", alpha=0.5, label="合格 (50%)")
+            ax1.set_xlabel("Episode")
+            ax1.set_ylabel("最终覆盖率 (%)")
+            ax1.set_title("各Episode最终覆盖率对比")
+            ax1.grid(True, alpha=0.3, axis="y")
+            ax1.legend()
+
+            # 标注最佳episode
+            best_idx = stats_df["final_scan_ratio"].idxmax()
+            best_ep = stats_df.loc[best_idx, "episode"]
+            best_val = stats_df.loc[best_idx, "final_scan_ratio"]
+            ax1.annotate(f"最佳: E{best_ep}\n{best_val:.1f}%",
+                        xy=(best_ep, best_val),
+                        xytext=(best_ep, best_val + 5),
+                        arrowprops=dict(arrowstyle="->", color="blue"),
+                        fontsize=9, color="blue")
+
+        # 子图2: Episode时长对比
+        if "duration" in stats_df.columns:
+            ax2 = axes[0, 1]
+            ax2.plot(stats_df["episode"], stats_df["duration"], marker="o", linewidth=2, markersize=6)
+            ax2.fill_between(stats_df["episode"], stats_df["duration"], alpha=0.3)
+            ax2.set_xlabel("Episode")
+            ax2.set_ylabel("时长 (秒)")
+            ax2.set_title("各Episode完成时长")
+            ax2.grid(True, alpha=0.3)
+
+            # 趋势线
+            if len(stats_df) > 2:
+                z = np.polyfit(stats_df["episode"], stats_df["duration"], 1)
+                p = np.poly1d(z)
+                ax2.plot(stats_df["episode"], p(stats_df["episode"]),
+                        linestyle="--", color="red", alpha=0.5, label="趋势线")
+                ax2.legend()
+
+        # 子图3: 数据点数量（采样密度）
+        if "data_points" in stats_df.columns:
+            ax3 = axes[1, 0]
+            ax3.bar(stats_df["episode"], stats_df["data_points"], color="steelblue", alpha=0.7)
+            ax3.set_xlabel("Episode")
+            ax3.set_ylabel("数据点数量")
+            ax3.set_title("各Episode采样密度")
+            ax3.grid(True, alpha=0.3, axis="y")
+
+            # 显示平均值线
+            avg_points = stats_df["data_points"].mean()
+            ax3.axhline(y=avg_points, color="red", linestyle="--", alpha=0.7,
+                       label=f"平均值: {avg_points:.0f}")
+            ax3.legend()
+
+        # 子图4: 综合性能雷达图（前10个episode）
+        ax4 = axes[1, 1]
+        if len(stats_df) >= 3:
+            # 归一化各项指标（0-100）
+            display_eps = stats_df.head(10)  # 只显示前10个
+            n_eps = len(display_eps)
+
+            # 创建归一化的指标矩阵
+            metrics_to_plot = []
+            metric_names = []
+
+            if "final_scan_ratio" in display_eps.columns:
+                metrics_to_plot.append(display_eps["final_scan_ratio"].values)
+                metric_names.append("覆盖率")
+
+            if "duration" in display_eps.columns:
+                # 时长取反（越短越好），归一化到0-100
+                max_dur = display_eps["duration"].max()
+                norm_duration = [(1 - d / max_dur) * 100 if max_dur > 0 else 50
+                                for d in display_eps["duration"].values]
+                metrics_to_plot.append(norm_duration)
+                metric_names.append("效率(时长)")
+
+            if "final_entropy" in display_eps.columns:
+                # 熵值越低越好，归一化到0-100
+                max_ent = display_eps["final_entropy"].max()
+                min_ent = display_eps["final_entropy"].min()
+                if max_ent > min_ent:
+                    norm_entropy = [(1 - (e - min_ent) / (max_ent - min_ent)) * 100
+                                   for e in display_eps["final_entropy"].values]
+                else:
+                    norm_entropy = [50] * n_eps
+                metrics_to_plot.append(norm_entropy)
+                metric_names.append("不确定性消除")
+
+            if metrics_to_plot:
+                # 绘制多折线图
+                x = np.arange(len(metric_names))
+                for idx, row in display_eps.iterrows():
+                    ep_num = int(row["episode"])
+                    values = [m[idx] for m in metrics_to_plot]
+                    ax4.plot(x, values, marker="o", label=f"E{ep_num}", alpha=0.7)
+
+                ax4.set_xticks(x)
+                ax4.set_xticklabels(metric_names)
+                ax4.set_ylabel("归一化得分 (0-100)")
+                ax4.set_title("前10个Episode综合性能对比")
+                ax4.grid(True, alpha=0.3)
+                ax4.legend(ncol=2, fontsize=7)
+                ax4.set_ylim(0, 105)
+
+        plt.tight_layout()
+        fig.savefig(run_dir / "episode_performance_summary.png", dpi=150)
+        LOGGER.info(f"  [成功] 生成Episode性能汇总图")
+        if self.show_plots:
+            plt.show()
+        plt.close(fig)
 
 
 class DQNDataVisualizer:

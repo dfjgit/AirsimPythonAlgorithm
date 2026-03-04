@@ -9,10 +9,10 @@
 
   "common": {
     "_comment": "所有训练模式共用的配置",
-    "total_timesteps": 10000,
+    "total_timesteps": 14400,
     "enable_visualization": true,
-    "checkpoint_freq": 1000,
-    "progress_interval": 10,
+    "checkpoint_freq": 2000,
+    "progress_interval": 20,
     "save_dir": "models",
     "reward_config": null,
     "continue_model": null,

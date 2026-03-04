@@ -1,17 +1,17 @@
 {
-    "repulsionCoefficient": 4.0,
+    "repulsionCoefficient": 2.0,
     "entropyCoefficient": 2.0,
     "distanceCoefficient": 2.0,
-    "leaderRangeCoefficient": 2.0,
-    "directionRetentionCoefficient": 2.0,
+    "leaderRangeCoefficient": 1.5,
+    "directionRetentionCoefficient": 0.5,
     "groundRepulsionCoefficient": 2.0,
-    "updateInterval": 1,
+    "updateInterval": 0.5,
     "moveSpeed": 1.0,
     "rotationSpeed": 120.0,
     "scanRadius": 2,
-    "maxRepulsionDistance": 5.0,
+    "maxRepulsionDistance": 3.0,
     "minSafeDistance": 1.0,
-    "avoidRevisits": true,
+    "avoidRevisits": false,
     "targetSearchRange": 20.0,
     "revisitCooldown": 10.0,
     "altitude": 2.0,
@@ -19,7 +19,7 @@
         "termination": {
             "target_scan_ratio": 0.95,
             "max_collision_count": 15,
-            "max_elapsed_time_sec": 300.0,
+            "max_elapsed_time_sec": 180.0,
             "stagnation_timeout_sec": 30.0
         },
         "battery": {

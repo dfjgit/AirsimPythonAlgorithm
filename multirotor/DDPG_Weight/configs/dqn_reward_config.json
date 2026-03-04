@@ -13,7 +13,13 @@
         "battery_low_threshold": 3.5
     },
     "episode": {
-        "max_steps": 10
+        "max_steps": 120
+    },
+    "out_of_range_config": {
+        "reset_immediately": false,
+        "reset_threshold_sec": 5.0,
+        "penalty": 5.0,
+        "continuous_count_threshold": 5
     },
     "action_space": {
         "weight_min": 0.5,

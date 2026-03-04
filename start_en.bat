@@ -21,8 +21,8 @@ echo   [F] Train Hierarchical DQN (AirSim Fusion Mode) [⭐New!]
 echo   [D] Test DQN Movement Model [⭐Available!]
 echo.
 echo === Data Analysis ===
-echo   [A] Data Visualization Analysis [⭐Available!]
-echo   [B] DDPG vs DQN Algorithm Comparison [⭐Available!]
+echo   [A] Training Data Visualization [⭐Available!]
+echo   [B] Algorithm Comparison (DDPG vs DQN) [⭐Available!]
 echo.
 echo === Cleanup ===
 echo   [C] Delete training outputs (models/logs/analysis)
@@ -132,7 +132,7 @@ goto menu
 :data_visualization
 cls
 echo ============================================================
-echo Data Visualization Analysis
+echo Training Data Visualization
 echo ============================================================
 echo.
 call scripts\Data_Visualization_Analysis.bat
@@ -141,7 +141,7 @@ goto menu
 :compare_algorithms
 cls
 echo ============================================================
-echo DDPG vs DQN Algorithm Comparison Analysis
+echo Algorithm Comparison (DDPG vs DQN)
 echo ============================================================
 echo.
 echo [Tip] This feature will compare the training effects of DDPG and DQN algorithms
@@ -172,9 +172,9 @@ echo Delete Training Outputs (Models/Logs/Analysis)
 echo ============================================================
 echo.
 echo [1] Delete DDPG Models (multirotor\DDPG_Weight\models)
-echo [2] Delete DDPG Logs (multirotor\DDPG_Weight\logs)
+echo [2] Delete DDPG Logs (logs + airsim_training_logs + crazyflie_logs)
 echo [3] Delete DQN Models (multirotor\DQN_Movement\models)
-echo [4] Delete DQN Logs (multirotor\DQN_Movement\logs)
+echo [4] Delete DQN Logs (logs + dqn_scan_data + scripts\logs)
 echo [5] Delete Analysis Results (analysis_results)
 echo.
 echo [8] Delete ALL of the above
@@ -182,7 +182,7 @@ echo [9] Back to Main Menu
 echo.
 echo ============================================================
 echo.
-set /p cleanup_choice=Please enter an option (1-5, 8-9): 
+set /p cleanup_choice=Please enter an option (1-5, 8-9):
 
 if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
 if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
@@ -241,13 +241,72 @@ goto cleanup_menu
 call :confirm_delete "multirotor\DDPG_Weight\models" "DDPG Models"
 
 :cleanup_ddpg_logs
-call :confirm_delete "multirotor\DDPG_Weight\logs" "DDPG Logs"
+cls
+echo ============================================================
+echo Preparing to delete: DDPG Training Logs
+echo ============================================================
+echo.
+echo Will delete:
+echo   - multirotor\DDPG_Weight\logs (visualization logs)
+echo   - multirotor\DDPG_Weight\airsim_training_logs (AirSim training data)
+echo   - multirotor\DDPG_Weight\crazyflie_logs (Crazyflie training data)
+echo.
+echo [WARNING] This action is irreversible!
+echo.
+echo Type YES to confirm deletion, any other input to cancel:
+echo.
+set /p confirm=Confirmation:
+if /i not "%confirm%"=="YES" (
+    echo.
+    echo Deletion cancelled.
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+echo.
+echo Deleting DDPG logs...
+rmdir /s /q "multirotor\DDPG_Weight\logs" 2>nul
+rmdir /s /q "multirotor\DDPG_Weight\airsim_training_logs" 2>nul
+rmdir /s /q "multirotor\DDPG_Weight\crazyflie_logs" 2>nul
+echo.
+echo [Success] DDPG logs deleted.
+echo.
+pause
+goto cleanup_menu
 
 :cleanup_dqn_models
 call :confirm_delete "multirotor\DQN_Movement\models" "DQN Models"
 
 :cleanup_dqn_logs
-call :confirm_delete "multirotor\DQN_Movement\logs" "DQN Logs"
+cls
+echo ============================================================
+echo Preparing to delete: DQN Training Logs
+echo ============================================================
+echo.
+echo Will delete:
+echo   - multirotor\DQN_Movement\logs (main logs)
+echo   - multirotor\DQN_Movement\logs\dqn_scan_data (scan training data)
+echo   - multirotor\DQN_Movement\scripts\logs (HRL training data)
+echo.
+echo [WARNING] This action is irreversible!
+echo.
+echo Type YES to confirm deletion, any other input to cancel:
+echo.
+set /p confirm=Confirmation:
+if /i not "%confirm%"=="YES" (
+    echo.
+    echo Deletion cancelled.
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+echo.
+echo Deleting DQN logs...
+rmdir /s /q "multirotor\DQN_Movement\logs" 2>nul
+rmdir /s /q "multirotor\DQN_Movement\scripts\logs" 2>nul
+echo.
+echo [Success] DQN logs deleted.
+echo.
+pause
+goto cleanup_menu
 
 :cleanup_analysis_results
 call :confirm_delete "analysis_results" "Analysis Results"
@@ -261,20 +320,23 @@ echo.
 echo Will delete:
 echo   - multirotor\DDPG_Weight\models
 echo   - multirotor\DDPG_Weight\logs
+echo   - multirotor\DDPG_Weight\airsim_training_logs
+echo   - multirotor\DDPG_Weight\crazyflie_logs
 echo   - multirotor\DQN_Movement\models
 echo   - multirotor\DQN_Movement\logs
+echo   - multirotor\DQN_Movement\scripts\logs
 echo   - analysis_results
 echo.
 echo Type YES to confirm deletion, any other input to cancel:
 echo.
-set /p confirm_all=Confirmation: 
+set /p confirm_all=Confirmation:
 if /i not "%confirm_all%"=="YES" (
     echo.
     echo Deletion cancelled.
     timeout /t 2 >nul
     goto cleanup_menu
 )
-for %%D in ("multirotor\DDPG_Weight\models" "multirotor\DDPG_Weight\logs" "multirotor\DQN_Movement\models" "multirotor\DQN_Movement\logs" "analysis_results") do (
+for %%D in ("multirotor\DDPG_Weight\models" "multirotor\DDPG_Weight\logs" "multirotor\DDPG_Weight\airsim_training_logs" "multirotor\DDPG_Weight\crazyflie_logs" "multirotor\DQN_Movement\models" "multirotor\DQN_Movement\logs" "multirotor\DQN_Movement\scripts\logs" "analysis_results") do (
     if exist "%%~D" (
         rmdir /s /q "%%~D" 2>nul
     )

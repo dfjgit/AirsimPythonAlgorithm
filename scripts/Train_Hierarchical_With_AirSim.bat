@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal
 
 :: 设置编码为 UTF-8

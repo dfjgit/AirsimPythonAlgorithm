@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul 2>&1
 cls
 
@@ -28,9 +28,9 @@ echo.
 
 REM 关键修改：先切换到AlgorithmServer.py所在的目录
 echo [2/2] 切换到脚本目录并启动算法服务器....
-cd /d "%~dp0..\multirotor"  :: 切换到multirotor目录（AlgorithmServer.py在这里）
+cd /d "%~dp0..\multirotor"  :: 切换到multirotor目录(AlgorithmServer.py在这里)
 
-REM 直接用脚本名运行（此时是当前目录的短路径，无空格问题）
+REM 直接用脚本名运行(此时是当前目录的短路径，无空格问题)
 python AlgorithmServer.py --drones 3
 
 echo.

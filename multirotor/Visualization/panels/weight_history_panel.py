@@ -113,7 +113,11 @@ class WeightHistoryPanel(BasePanel):
             'entropyCoefficient': (78, 205, 196),          # 青色
             'distanceCoefficient': (69, 183, 209),         # 蓝色
             'leaderRangeCoefficient': (255, 160, 122),     # 橙色
-            'directionRetentionCoefficient': (152, 216, 200)  # 绿色
+            'directionRetentionCoefficient': (152, 216, 200),  # 绿色
+            'obstacleRepulsionDistance': (255, 165, 0),    # 橙色
+            'obstacleRepulsionCoefficient': (255, 215, 0), # 金色
+            'restrictedZoneDistance': (238, 130, 238),     # 紫罗兰
+            'restrictedZoneCoefficient': (186, 85, 211)    # 中紫色
         }
         
         # 找到最大步数
@@ -188,7 +192,12 @@ class WeightHistoryPanel(BasePanel):
         legend_y = self.y + self.height - 20
         legend_x = self.x + 10
         
-        weight_labels = {
+        # 图例(分两行显示)
+        legend_y = self.y + self.height - 35
+        legend_x = self.x + 5
+        
+        # 只显示核心5个APF参数的图例（避免太拥挤）
+        core_weight_labels = {
             'repulsionCoefficient': 'α1',
             'entropyCoefficient': 'α2',
             'distanceCoefficient': 'α3',
@@ -196,11 +205,29 @@ class WeightHistoryPanel(BasePanel):
             'directionRetentionCoefficient': 'α5'
         }
         
-        for i, (key, label) in enumerate(weight_labels.items()):
+        for i, (key, label) in enumerate(core_weight_labels.items()):
             if key in weight_history and len(weight_history[key]) > 0:
                 color = weight_colors.get(key, self.WHITE)
                 # 颜色块
-                pygame.draw.rect(screen, color, (legend_x + i * 65, legend_y, 12, 12))
+                pygame.draw.rect(screen, color, (legend_x + i * 70, legend_y, 10, 10))
                 # 标签
                 text = self._small_font.render(label, True, self.WHITE)
-                screen.blit(text, (legend_x + i * 65 + 15, legend_y - 2))
+                screen.blit(text, (legend_x + i * 70 + 12, legend_y - 2))
+        
+        # 第二行：避障参数
+        legend_y2 = self.y + self.height - 18
+        obstacle_labels = {
+            'obstacleRepulsionDistance': '避障D',
+            'obstacleRepulsionCoefficient': '避障C',
+            'restrictedZoneDistance': '禁飞D',
+            'restrictedZoneCoefficient': '禁飞C'
+        }
+        
+        for i, (key, label) in enumerate(obstacle_labels.items()):
+            if key in weight_history and len(weight_history[key]) > 0:
+                color = weight_colors.get(key, self.WHITE)
+                # 颜色块
+                pygame.draw.rect(screen, color, (legend_x + i * 85, legend_y2, 10, 10))
+                # 标签
+                text = self._small_font.render(label, True, self.WHITE)
+                screen.blit(text, (legend_x + i * 85 + 12, legend_y2 - 2))

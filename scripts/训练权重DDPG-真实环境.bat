@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul 2>&1
 cls
 
@@ -38,7 +38,7 @@ echo 按任意键开始训练...
 pause >nul
 echo.
 
-REM 激活虚拟环境（如果存在）
+REM 激活虚拟环境(如果存在)
 echo [1/3] 激活Python虚拟环境...
 if exist "%~dp0..\myvenv\Scripts\activate.bat" (
     call "%~dp0..\myvenv\Scripts\activate.bat"

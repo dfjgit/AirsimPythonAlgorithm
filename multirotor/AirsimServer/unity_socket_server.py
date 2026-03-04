@@ -250,7 +250,6 @@ class UnitySocketServer:
             # 处理提取出的数据包
             if packet.strip():
                 try:
-                    # logger.debug(f"解析数据包: {packet}")
                     parsed = json.loads(packet)
                     if isinstance(parsed, dict) and 'type' in parsed:
                         self._handle_parsed(parsed)

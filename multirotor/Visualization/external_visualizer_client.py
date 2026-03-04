@@ -6,43 +6,74 @@ import subprocess
 from typing import Any, Dict, List
 
 # Ensure project root in path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from multirotor.Visualization.visualization_ipc import decode_snapshot, recv_frame
 from multirotor.Algorithm.Vector3 import Vector3
 
+
 class CellProxy:
     def __init__(self, data: Dict[str, Any]):
-        self.center = Vector3(data['x'], data['y'], data['z'])
-        self.entropy = data['entropy']
+        self.center = Vector3(data["x"], data["y"], data["z"])
+        self.entropy = data["entropy"]
+
 
 class GridProxy:
     def __init__(self, data: Dict[str, Any]):
-        self.revision = int(data.get('revision', 0))
-        self.cells = [CellProxy(c) for c in data.get('cells', [])]
+        self.revision = int(data.get("revision", 0))
+        self.cells = [CellProxy(c) for c in data.get("cells", [])]
+
 
 class RuntimeProxy:
     def __init__(self, data: Dict[str, Any]):
-        self.position = Vector3(data['position']['x'], data['position']['y'], data['position']['z']) if data.get('position') else None
-        self.forward = Vector3(data['forward']['x'], data['forward']['y'], data['forward']['z']) if data.get('forward') else None
-        self.finalMoveDir = Vector3(data['finalMoveDir']['x'], data['finalMoveDir']['y'], data['finalMoveDir']['z']) if data.get('finalMoveDir') else None
-        self.leader_position = Vector3(data['leader_position']['x'], data['leader_position']['y'], data['leader_position']['z']) if data.get('leader_position') else None
-        self.leader_scan_radius = data.get('leader_scan_radius', 0.0)
+        self.position = (
+            Vector3(data["position"]["x"], data["position"]["y"], data["position"]["z"])
+            if data.get("position")
+            else None
+        )
+        self.forward = (
+            Vector3(data["forward"]["x"], data["forward"]["y"], data["forward"]["z"])
+            if data.get("forward")
+            else None
+        )
+        self.finalMoveDir = (
+            Vector3(
+                data["finalMoveDir"]["x"],
+                data["finalMoveDir"]["y"],
+                data["finalMoveDir"]["z"],
+            )
+            if data.get("finalMoveDir")
+            else None
+        )
+        self.leader_position = (
+            Vector3(
+                data["leader_position"]["x"],
+                data["leader_position"]["y"],
+                data["leader_position"]["z"],
+            )
+            if data.get("leader_position")
+            else None
+        )
+        self.leader_scan_radius = data.get("leader_scan_radius", 0.0)
+
 
 class ConfigProxy:
     def __init__(self, data: Dict[str, Any]):
-        self.scanRadius = data.get('scanRadius', 1.0)
-        self.moveSpeed = data.get('moveSpeed', 1.0)
-        self.updateInterval = data.get('updateInterval', 0.05)
+        self.scanRadius = data.get("scanRadius", 1.0)
+        self.moveSpeed = data.get("moveSpeed", 1.0)
+        self.updateInterval = data.get("updateInterval", 0.05)
+
 
 class AlgorithmProxy:
     """算法代理类，用于外部可视化进程访问算法数据"""
+
     def __init__(self):
         self.current_weights = {}
 
     def get_current_coefficients(self) -> Dict[str, float]:
         """获取当前权重系数"""
         return self.current_weights if self.current_weights else {}
+
 
 class SnapshotServerProxy:
     def __init__(self, visualizer=None):
@@ -52,13 +83,16 @@ class SnapshotServerProxy:
         self.config_data = ConfigProxy({})
         self.algorithms = {}
         self.drone_names = []
-        self.control_mode = 'dqn'
+        self.control_mode = "dqn"
         self.use_learned_weights = False
         self.battery_data = {}
         self.current_training_stats = {}
         self.obstacles = []  # 障碍物数据
         self._last_applied_reset_time = 0.0
         self.current_weights = {}  # 当前权重数据
+        self.last_reset_reason = ""  # 最后重置原因
+        self.last_reset_time = 0.0  # 最后重置时间
+        self.reset_history = []  # 重置历史
 
         # 创建算法代理（用于DDPGTrainingVisualizer访问权重）
         self.algorithm_proxy = AlgorithmProxy()
@@ -66,11 +100,12 @@ class SnapshotServerProxy:
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         return self.battery_data
 
+
 def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     # 检查重置时间戳，如果发生新重置，则清空可视化缓存
-    server_reset_time = float(snap.get('last_reset_time', 0.0))
+    server_reset_time = float(snap.get("last_reset_time", 0.0))
     if server_reset_time > proxy._last_applied_reset_time:
-        if proxy.visualizer and hasattr(proxy.visualizer, 'clear_cache'):
+        if proxy.visualizer and hasattr(proxy.visualizer, "clear_cache"):
             proxy.visualizer.clear_cache()
         proxy._last_applied_reset_time = server_reset_time
 
@@ -80,77 +115,90 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     print(f"[IPC客户端] 🔍 snapshot字段列表: {snap_keys}")
 
     # 更新基础数据
-    proxy.drone_names = snap.get('drone_names', proxy.drone_names)
-    proxy.control_mode = snap.get('control_mode', proxy.control_mode)
+    proxy.drone_names = snap.get("drone_names", proxy.drone_names)
+    proxy.control_mode = snap.get("control_mode", proxy.control_mode)
 
     # 更新基础数据
-    if 'config_data' in snap:
-        proxy.config_data = ConfigProxy(snap['config_data'])
+    if "config_data" in snap:
+        proxy.config_data = ConfigProxy(snap["config_data"])
 
     # grid data reconstruction
-    if 'grid_data' in snap:
-        cells_count = len(snap['grid_data'].get('cells', []))
+    if "grid_data" in snap:
+        cells_count = len(snap["grid_data"].get("cells", []))
         print(f"[IPC客户端] 🔍 grid_data存在，cells数: {cells_count}")
         # 只有当cells不为空时才更新，避免重置期间清空热力图
         if cells_count > 0:
-            proxy.grid_data = GridProxy(snap['grid_data'])
+            proxy.grid_data = GridProxy(snap["grid_data"])
         else:
             print(f"[IPC客户端] ⚠️ grid_data为空，保留旧数据避免热力图消失")
     else:
         print(f"[IPC客户端] 🔍 snapshot中没有grid_data字段，保留旧数据")
 
     # runtime data reconstruction
-    if 'unity_runtime_data' in snap:
-        print(f"[IPC客户端] 🔍 unity_runtime_data存在，drone数: {len(snap['unity_runtime_data'])}")
+    if "unity_runtime_data" in snap:
+        print(
+            f"[IPC客户端] 🔍 unity_runtime_data存在，drone数: {len(snap['unity_runtime_data'])}"
+        )
         runtimes = {}
-        for name, data in snap['unity_runtime_data'].items():
+        for name, data in snap["unity_runtime_data"].items():
             runtimes[name] = RuntimeProxy(data)
         proxy.unity_runtime_data = runtimes
 
     # battery data mapping (for BatteryPanel)
-    if 'battery_data' in snap:
-        proxy.battery_data = snap.get('battery_data') or {}
+    if "battery_data" in snap:
+        proxy.battery_data = snap.get("battery_data") or {}
 
     # training stats mapping
-    if 'training_stats' in snap:
-        proxy.training_stats = snap['training_stats']
+    if "training_stats" in snap:
+        proxy.training_stats = snap["training_stats"]
 
     # DQN extra training stats mapping (for action panels)
-    if 'current_training_stats' in snap:
-        proxy.current_training_stats = snap.get('current_training_stats') or {}
+    if "current_training_stats" in snap:
+        proxy.current_training_stats = snap.get("current_training_stats") or {}
 
     # obstacles data mapping (for visualization)
-    if 'obstacles' in snap:
-        proxy.obstacles = snap.get('obstacles') or []
+    if "obstacles" in snap:
+        proxy.obstacles = snap.get("obstacles") or []
         print(f"[IPC客户端] 🔍 收到障碍物数据: {len(proxy.obstacles)} 个")
     else:
         # 只在第一次输出警告
-        if not hasattr(proxy, '_obstacles_warned'):
+        if not hasattr(proxy, "_obstacles_warned"):
             proxy._obstacles_warned = True
             print(f"[IPC客户端] ⚠️ snapshot中没有'obstacles'字段！")
 
     # current weights mapping (for DDPG training visualization)
-    if 'current_weights' in snap:
-        proxy.current_weights = snap.get('current_weights') or {}
+    if "current_weights" in snap:
+        proxy.current_weights = snap.get("current_weights") or {}
         print(f"[IPC客户端] 🔍 收到权重数据: {len(proxy.current_weights)} 个")
         # 同步更新算法代理的权重
         proxy.algorithm_proxy.current_weights = proxy.current_weights
         # 确保algorithms字典中有第一个无人机的算法代理
         if proxy.drone_names and len(proxy.drone_names) > 0:
             first_drone = proxy.drone_names[0]
-            if first_drone not in proxy.algorithms or proxy.algorithms[first_drone] != proxy.algorithm_proxy:
+            if (
+                first_drone not in proxy.algorithms
+                or proxy.algorithms[first_drone] != proxy.algorithm_proxy
+            ):
                 proxy.algorithms[first_drone] = proxy.algorithm_proxy
                 print(f"[IPC客户端] ✅ 算法代理已设置: first_drone={first_drone}")
+
+    # reset info mapping (for training reset visualization)
+    proxy.last_reset_reason = snap.get("last_reset_reason", "")
+    proxy.last_reset_time = snap.get("last_reset_time", 0)
+    proxy.reset_history = snap.get("reset_history", [])
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--mode', choices=['runtime', 'dqn', 'hrl', 'ddpg'], required=True)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument(
+        "--mode", choices=["runtime", "dqn", "hrl", "ddpg"], required=True
+    )
     args = parser.parse_args()
 
     import socket
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.connect((args.host, args.port))
@@ -159,14 +207,22 @@ def main():
         sys.exit(1)
 
     # Import visualizer based on mode
-    if args.mode == 'runtime':
-        from multirotor.Visualization.runtime_visualizer import RuntimeVisualizer as _Vis
-    elif args.mode == 'dqn':
-        from multirotor.Visualization.dqn_movement_visualizer import DQNMovementTrainingVisualizer as _Vis
-    elif args.mode == 'hrl':
-        from multirotor.Visualization.hierarchical_training_visualizer import HierarchicalTrainingVisualizer as _Vis
+    if args.mode == "runtime":
+        from multirotor.Visualization.runtime_visualizer import (
+            RuntimeVisualizer as _Vis,
+        )
+    elif args.mode == "dqn":
+        from multirotor.Visualization.dqn_movement_visualizer import (
+            DQNMovementTrainingVisualizer as _Vis,
+        )
+    elif args.mode == "hrl":
+        from multirotor.Visualization.hierarchical_training_visualizer import (
+            HierarchicalTrainingVisualizer as _Vis,
+        )
     else:
-        from multirotor.Visualization.ddpg_training_visualizer import DDPGTrainingVisualizer as _Vis
+        from multirotor.Visualization.ddpg_training_visualizer import (
+            DDPGTrainingVisualizer as _Vis,
+        )
 
     # Create proxy first (without visualizer reference)
     proxy = SnapshotServerProxy(visualizer=None)
@@ -176,7 +232,7 @@ def main():
 
     # Now update proxy with the visualizer instance for clear_cache callback
     proxy.visualizer = vis
-    
+
     vis.pygame_initialized = False
 
     import threading
@@ -199,8 +255,11 @@ def main():
                 break
             except Exception as e:
                 consecutive_errors += 1
-                print(f"[IPC客户端] ⚠️ 接收快照异常 ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}")
+                print(
+                    f"[IPC客户端] ⚠️ 接收快照异常 ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}"
+                )
                 import traceback
+
                 traceback.print_exc()
 
                 # 如果连续错误过多，退出循环
@@ -227,5 +286,6 @@ def main():
         except Exception:
             pass
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

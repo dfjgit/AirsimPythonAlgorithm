@@ -31,6 +31,7 @@
 
 日期：2026-01-23
 """
+
 import argparse
 import json
 import logging
@@ -54,19 +55,19 @@ from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数
 def _load_train_config(path: str) -> dict:
     """
     加载训练配置文件
-    
+
     功能：
         从 JSON 文件读取训练配置参数
         支持两种格式：
         1. 传统格式：直接返回配置字典
         2. 统一格式：包含 common 和模式专用配置，自动合并
-        
+
     参数：
         path: 配置文件路径（JSON格式）
-        
+
     返回：
         dict: 配置参数字典
-        
+
     异常：
         FileNotFoundError: 配置文件不存在
         ValueError: 配置文件格式无效
@@ -79,7 +80,7 @@ def _load_train_config(path: str) -> dict:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError("配置文件必须为JSON对象")
-    
+
     # 检查是否为统一配置格式（包含 common 和 crazyflie_online 键）
     if "common" in data and "crazyflie_online" in data:
         # 统一配置格式：合并 common 和 crazyflie_online 配置
@@ -95,13 +96,13 @@ def _load_train_config(path: str) -> dict:
 def _get_config_value(cli_value, config: dict, key: str, default):
     """
     获取配置值（优先级：命令行 > 配置文件 > 默认值）
-    
+
     参数：
         cli_value: 命令行参数值（优先级最高）
         config: 配置字典
         key: 配置键名
         default: 默认值（优先级最低）
-        
+
     返回：
         配置值
     """
@@ -115,16 +116,16 @@ def _get_config_value(cli_value, config: dict, key: str, default):
 def _format_duration(seconds: float) -> str:
     """
     格式化时间持续时间为可读字符串
-    
+
     功能：
         将秒数转换为 "HH:MM:SS" 或 "MM:SS" 格式
-        
+
     参数：
         seconds: 秒数（浮点数）
-        
+
     返回：
         str: 格式化后的时间字符串
-        
+
     示例：
         _format_duration(3661) -> "01:01:01"
         _format_duration(125) -> "02:05"
@@ -141,16 +142,16 @@ def _format_duration(seconds: float) -> str:
 def _save_model(model, path: str, logger, note: str) -> bool:
     """
     保存训练模型到文件
-    
+
     功能：
         将DDPG模型保存为.zip文件
-        
+
     参数：
         model: DDPG模型实例
         path: 保存路径（不含.zip扩展名）
         logger: 日志记录器
         note: 保存说明（用于日志）
-        
+
     返回：
         bool: 保存是否成功
     """
@@ -168,15 +169,15 @@ def _save_model(model, path: str, logger, note: str) -> bool:
 def _save_final_weights(server, path: str, logger) -> None:
     """
     保存各无人机最后的权重系数到JSON文件
-    
+
     功能：
         将训练完成后的权重系数保存到JSON文件，用于后续训练或部署
-        
+
     参数：
         server: AlgorithmServer实例，包含所有无人机的算法对象
         path: 保存路径（JSON文件）
         logger: 日志记录器
-        
+
     保存格式：
         {
             "UAV1": {
@@ -199,28 +200,28 @@ def _save_final_weights(server, path: str, logger) -> None:
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(weights_by_drone, f, ensure_ascii=False, indent=2)
-        logger.info("✅ 权重已保存: %s", path)
+        logger.info("[OK] 权重已保存: %s", path)
     except Exception as exc:
-        logger.error("⚠️  保存权重失败: %s (%s)", path, exc)
+        logger.error("[!]  保存权重失败: %s (%s)", path, exc)
 
 
 def _load_initial_weights(path: str, drone_name: str, logger) -> dict:
     """
     加载初始权重（支持两种格式）
-    
+
     功能：
         从JSON文件加载初始权重，支持两种格式：
         1. 单一权重字典：所有无人机使用相同权重
         2. 按无人机名映射：每个无人机有独立的权重
-        
+
     参数：
         path: 权重文件路径（JSON格式）
         drone_name: 无人机名称（用于查找对应权重）
         logger: 日志记录器
-        
+
     返回：
         dict: 权重字典，包含5个APF系数
-        
+
     支持的格式：
         格式1（单一权重）:
         {
@@ -228,7 +229,7 @@ def _load_initial_weights(path: str, drone_name: str, logger) -> dict:
             "entropyCoefficient": 2.0,
             ...
         }
-        
+
         格式2（按无人机）:
         {
             "UAV1": {"repulsionCoefficient": 1.0, ...},
@@ -253,11 +254,11 @@ def _load_initial_weights(path: str, drone_name: str, logger) -> dict:
 
     # 格式1: 检查是否为单一权重字典（包含所有必需的权重键）
     required_keys = [
-        "repulsionCoefficient",      # α1: 排斥力系数
-        "entropyCoefficient",         # α2: 熵值系数
-        "distanceCoefficient",         # α3: 距离系数
-        "leaderRangeCoefficient",     # α4: Leader范围系数
-        "directionRetentionCoefficient"  # α5: 方向保持系数
+        "repulsionCoefficient",  # α1: 排斥力系数
+        "entropyCoefficient",  # α2: 熵值系数
+        "distanceCoefficient",  # α3: 距离系数
+        "leaderRangeCoefficient",  # α4: Leader范围系数
+        "directionRetentionCoefficient",  # α5: 方向保持系数
     ]
     if all(k in data for k in required_keys):
         return data  # 单一权重格式，直接返回
@@ -273,47 +274,53 @@ def _load_initial_weights(path: str, drone_name: str, logger) -> dict:
 def _weights_to_action(weights: dict) -> np.ndarray:
     """
     将权重字典转换为动作向量（numpy数组）
-    
+
     功能：
         将APF权重系数字典转换为DDPG算法所需的动作向量格式
-        
+
     参数：
-        weights: 权重字典，包含5个APF系数
-        
+        weights: 权重字典，包含5个APF系数 + 2个避障参数（可选）
+
     返回：
-        np.ndarray: 形状为(5,)的浮点数组，包含5个权重系数
-        
+        np.ndarray: 形状为(7,)的浮点数组，包含7个参数
+
     权重顺序：
         [repulsionCoefficient, entropyCoefficient, distanceCoefficient,
-         leaderRangeCoefficient, directionRetentionCoefficient]
+         leaderRangeCoefficient, directionRetentionCoefficient,
+         obstacleRepulsionDistance, obstacleRepulsionCoefficient]
     """
-    return np.array([
-        float(weights.get("repulsionCoefficient", 0.0)),
-        float(weights.get("entropyCoefficient", 0.0)),
-        float(weights.get("distanceCoefficient", 0.0)),
-        float(weights.get("leaderRangeCoefficient", 0.0)),
-        float(weights.get("directionRetentionCoefficient", 0.0))
-    ], dtype=np.float32)
+    return np.array(
+        [
+            float(weights.get("repulsionCoefficient", 0.0)),
+            float(weights.get("entropyCoefficient", 0.0)),
+            float(weights.get("distanceCoefficient", 0.0)),
+            float(weights.get("leaderRangeCoefficient", 0.0)),
+            float(weights.get("directionRetentionCoefficient", 0.0)),
+            float(weights.get("obstacleRepulsionDistance", 15.0)),
+            float(weights.get("obstacleRepulsionCoefficient", 5.0)),
+        ],
+        dtype=np.float32,
+    )
 
 
 def _derive_weights_path(model_path: str) -> str:
     """
     根据模型路径推导权重文件路径
-    
+
     功能：
         权重文件名与模型文件名一致（去掉.zip，加上.json）
         例如：model_20250123_120000.zip -> model_20250123_120000.json
-        
+
     参数：
         model_path: 模型路径（不含.zip扩展名）
-        
+
     返回：
         str: 权重文件路径（.json扩展名）
     """
     if not model_path:
         return ""
     # 如果路径以.zip结尾，去掉它
-    if model_path.endswith('.zip'):
+    if model_path.endswith(".zip"):
         model_path = model_path[:-4]
     # 返回与模型文件名一致的权重文件名
     return f"{model_path}.json"
@@ -322,7 +329,7 @@ def _derive_weights_path(model_path: str) -> str:
 def main():
     """
     主训练流程函数
-    
+
     功能：
         1. 解析命令行参数和配置文件
         2. 初始化AlgorithmServer（连接实体无人机）
@@ -330,7 +337,7 @@ def main():
         4. 启动训练可视化（可选）
         5. 创建并训练DDPG模型
         6. 保存训练结果和模型
-        
+
     训练流程：
         1. 加载配置和参数
         2. 创建并启动AlgorithmServer
@@ -338,12 +345,12 @@ def main():
         4. 创建训练环境
         5. 启动训练可视化（可选）
         6. 创建DDPG模型并开始训练
-        
+
     安全特性：
         - 训练前需要人工确认（避免误启动）
         - 权重变化安全限制（防止飞行不稳定）
         - 支持从已有模型继续训练
-        
+
     异常处理：
         - KeyboardInterrupt: 用户中断，尝试保存当前模型
         - Exception: 其他错误，清理资源并退出
@@ -351,26 +358,52 @@ def main():
     # ========== 初始化日志系统 ==========
     logging.basicConfig(
         level=logging.INFO,  # 日志级别：INFO
-        format="%(asctime)s - %(levelname)s - %(message)s"  # 日志格式：时间 - 级别 - 消息
+        format="%(asctime)s - %(levelname)s - %(message)s",  # 日志格式：时间 - 级别 - 消息
     )
     logger = logging.getLogger("crazyflie_train_online")
     # ====================================
 
     parser = argparse.ArgumentParser(description="Crazyflie在线训练（实体机）")
-    parser.add_argument("--config", type=str, default=None, help="训练配置文件路径（JSON）")
+    parser.add_argument(
+        "--config", type=str, default=None, help="训练配置文件路径（JSON）"
+    )
     parser.add_argument("--drone-name", type=str, default=None, help="训练无人机名称")
     parser.add_argument("--total-timesteps", type=int, default=None, help="训练步数")
-    parser.add_argument("--step-duration", type=float, default=None, help="每步飞行时长（秒）")
+    parser.add_argument(
+        "--step-duration", type=float, default=None, help="每步飞行时长（秒）"
+    )
     parser.add_argument("--reward-config", type=str, default=None, help="奖励配置路径")
     parser.add_argument("--save-dir", type=str, default=None, help="模型保存目录")
-    parser.add_argument("--continue-model", type=str, default=None, help="继续训练模型路径（不含.zip）")
-    parser.add_argument("--initial-model-path", type=str, default=None, help="初始模型路径（不含.zip）")
-    parser.add_argument("--reset-unity", action="store_true", default=None, help="每个episode重置Unity环境")
-    parser.add_argument("--safety-max-delta", type=float, default=None, help="权重变化最大幅度")
-    parser.add_argument("--no-safety-limit", action="store_true", default=None, help="关闭权重变化限制")
-    parser.add_argument("--progress-interval", type=int, default=None, help="进度打印间隔（步）")
-    parser.add_argument("--enable-visualization", action="store_true", default=None, help="启用训练可视化")
-    parser.add_argument("--no-visualization", action="store_true", default=None, help="禁用训练可视化")
+    parser.add_argument(
+        "--continue-model", type=str, default=None, help="继续训练模型路径（不含.zip）"
+    )
+    parser.add_argument(
+        "--initial-model-path", type=str, default=None, help="初始模型路径（不含.zip）"
+    )
+    parser.add_argument(
+        "--reset-unity",
+        action="store_true",
+        default=None,
+        help="每个episode重置Unity环境",
+    )
+    parser.add_argument(
+        "--safety-max-delta", type=float, default=None, help="权重变化最大幅度"
+    )
+    parser.add_argument(
+        "--no-safety-limit", action="store_true", default=None, help="关闭权重变化限制"
+    )
+    parser.add_argument(
+        "--progress-interval", type=int, default=None, help="进度打印间隔（步）"
+    )
+    parser.add_argument(
+        "--enable-visualization",
+        action="store_true",
+        default=None,
+        help="启用训练可视化",
+    )
+    parser.add_argument(
+        "--no-visualization", action="store_true", default=None, help="禁用训练可视化"
+    )
     args = parser.parse_args()
 
     # 读取配置文件（若未提供则用空配置，后续会回退到默认值）
@@ -379,23 +412,35 @@ def main():
     # 从命令行/配置中解析训练超参数
     # 规则：命令行优先，其次配置文件，最后默认值
     drone_name = _get_config_value(args.drone_name, config, "drone_name", "UAV1")
-    total_timesteps = _get_config_value(args.total_timesteps, config, "total_timesteps", 500)
+    total_timesteps = _get_config_value(
+        args.total_timesteps, config, "total_timesteps", 500
+    )
     step_duration = _get_config_value(args.step_duration, config, "step_duration", 5.0)
     reward_config = _get_config_value(args.reward_config, config, "reward_config", None)
     save_dir = _get_config_value(args.save_dir, config, "save_dir", "models")
-    continue_model = _get_config_value(args.continue_model, config, "continue_model", None)
-    initial_model_path = _get_config_value(args.initial_model_path, config, "initial_model_path", None)
+    continue_model = _get_config_value(
+        args.continue_model, config, "continue_model", None
+    )
+    initial_model_path = _get_config_value(
+        args.initial_model_path, config, "initial_model_path", None
+    )
     reset_unity = _get_config_value(args.reset_unity, config, "reset_unity", False)
-    safety_max_delta = _get_config_value(args.safety_max_delta, config, "safety_max_delta", 0.5)
-    progress_interval = _get_config_value(args.progress_interval, config, "progress_interval", 50)
-    
+    safety_max_delta = _get_config_value(
+        args.safety_max_delta, config, "safety_max_delta", 0.5
+    )
+    progress_interval = _get_config_value(
+        args.progress_interval, config, "progress_interval", 50
+    )
+
     # 可视化开关：命令行优先，其次配置文件，最后默认值（默认启用）
     if args.no_visualization:
         enable_visualization = False
     elif args.enable_visualization:
         enable_visualization = True
     else:
-        enable_visualization = _get_config_value(None, config, "enable_visualization", True)
+        enable_visualization = _get_config_value(
+            None, config, "enable_visualization", True
+        )
 
     if not initial_model_path and continue_model:
         initial_model_path = continue_model
@@ -428,15 +473,16 @@ def main():
     class TrainingProgressCallback(BaseCallback):
         """
         训练进度回调类
-        
+
         功能：
             - 监控训练进度，定期打印进度信息（包含ETA）
             - 更新训练可视化统计信息
             - 支持按步数或时间间隔打印
-            
+
         继承自：
             stable_baselines3.common.callbacks.BaseCallback
         """
+
         def __init__(
             self,
             total_timesteps: int,
@@ -447,7 +493,7 @@ def main():
         ):
             """
             初始化训练进度回调
-            
+
             参数：
                 total_timesteps: 总训练步数
                 print_interval_steps: 按步数打印的间隔（每N步打印一次）
@@ -456,7 +502,9 @@ def main():
             """
             super().__init__()
             self.total_timesteps = max(int(total_timesteps), 0)  # 总训练步数
-            self.print_interval_steps = max(int(print_interval_steps), 1)  # 步数打印间隔
+            self.print_interval_steps = max(
+                int(print_interval_steps), 1
+            )  # 步数打印间隔
             self.print_interval_sec = max(int(print_interval_sec), 1)  # 时间打印间隔
             self.start_time = 0.0  # 训练开始时间
             self.last_print_time = 0.0  # 上次打印时间
@@ -475,109 +523,126 @@ def main():
         def _on_step(self) -> bool:
             """
             每个训练步骤调用一次
-            
+
             功能：
                 - 检查是否需要打印进度（按步数或时间）
                 - 更新训练可视化统计信息
                 - 检测新完成的Episode并更新可视化
-                
+
             返回：
                 bool: True继续训练，False停止训练
             """
             num_timesteps = int(self.num_timesteps)
             now = time.time()
-            
+
             # 检查是否需要打印进度（满足步数间隔或时间间隔）
-            need_by_steps = (num_timesteps - self.last_print_step) >= self.print_interval_steps
+            need_by_steps = (
+                num_timesteps - self.last_print_step
+            ) >= self.print_interval_steps
             need_by_time = (now - self.last_print_time) >= self.print_interval_sec
             if need_by_steps or need_by_time:
                 self._print_progress()
-            
+
             # ========== 更新可视化统计 ==========
             if self.training_visualizer:
                 try:
                     # 检查是否有新的episode完成
-                    if hasattr(self.model, 'ep_info_buffer') and len(self.model.ep_info_buffer) > 0:
+                    if (
+                        hasattr(self.model, "ep_info_buffer")
+                        and len(self.model.ep_info_buffer) > 0
+                    ):
                         current_episode_count = len(self.model.ep_info_buffer)
                         if current_episode_count > self.last_episode_count:
                             # 新episode完成，更新统计
                             ep_info = self.model.ep_info_buffer[-1]
-                            ep_reward = ep_info.get('r', 0.0)  # Episode总奖励
-                            ep_length = ep_info.get('l', 0)  # Episode步数
+                            ep_reward = ep_info.get("r", 0.0)  # Episode总奖励
+                            ep_length = ep_info.get("l", 0)  # Episode步数
                             self.training_visualizer.update_training_stats(
                                 episode_reward=ep_reward,
                                 episode_length=ep_length,
-                                is_episode_done=True
+                                is_episode_done=True,
                             )
                             self.last_episode_count = current_episode_count
-                            
+
                             # 记录 Episode 统计信息
                             if self.data_logger:
                                 self.data_logger.record_episode_stats(
                                     episode=current_episode_count,
                                     reward=ep_reward,
-                                    length=ep_length
+                                    length=ep_length,
                                 )
-                    
+
                     # 更新当前步的奖励（从locals获取）
-                    if 'rewards' in self.locals and len(self.locals['rewards']) > 0:
-                        step_reward = float(self.locals['rewards'][0])
+                    if "rewards" in self.locals and len(self.locals["rewards"]) > 0:
+                        step_reward = float(self.locals["rewards"][0])
                         self.training_visualizer.update_training_stats(
                             current_step_reward=step_reward
                         )
-                    
+
                     # 更新权重历史（定期更新，不只在episode结束时）
-                    if hasattr(self.model, 'env'):
+                    if hasattr(self.model, "env"):
                         env = self.model.env
                         # 处理VecEnv包装（stable-baselines3可能使用向量化环境）
-                        if hasattr(env, 'envs') and len(env.envs) > 0:
+                        if hasattr(env, "envs") and len(env.envs) > 0:
                             env = env.envs[0]  # 获取实际环境
-                        if hasattr(env, 'server') and env.server:
-                            drone_name = getattr(env, 'drone_name', None)
+                        if hasattr(env, "server") and env.server:
+                            drone_name = getattr(env, "drone_name", None)
                             if drone_name and drone_name in env.server.algorithms:
                                 # 获取当前权重并更新可视化
-                                weights = env.server.algorithms[drone_name].get_current_coefficients()
+                                weights = env.server.algorithms[
+                                    drone_name
+                                ].get_current_coefficients()
                                 self.training_visualizer.update_weight_history(weights)
-                                
+
                                 # 记录权重到数据记录器
                                 if self.data_logger:
                                     self.data_logger.record_weights(
                                         drone_name=drone_name,
                                         weights=weights,
                                         episode=current_episode_count,
-                                        step=self.num_timesteps
+                                        step=self.num_timesteps,
                                     )
                 except Exception as e:
                     # 静默忽略可视化更新错误，避免影响训练
                     pass
-            
+
             # ========== 记录实体无人机飞行数据 ==========
             if self.data_logger:
                 try:
                     # 从环境中获取当前的 logging_data
-                    if hasattr(self.model, 'env'):
+                    if hasattr(self.model, "env"):
                         env = self.model.env
                         # 处理VecEnv包装
-                        if hasattr(env, 'envs') and len(env.envs) > 0:
+                        if hasattr(env, "envs") and len(env.envs) > 0:
                             env = env.envs[0]
-                        if hasattr(env, 'server') and env.server:
-                            drone_name = getattr(env, 'drone_name', None)
+                        if hasattr(env, "server") and env.server:
+                            drone_name = getattr(env, "drone_name", None)
                             if drone_name:
-                                logging_data = env.server.crazyswarm.get_loggingData_by_droneName(drone_name)
+                                logging_data = (
+                                    env.server.crazyswarm.get_loggingData_by_droneName(
+                                        drone_name
+                                    )
+                                )
                                 if logging_data:
-                                    self.data_logger.record_flight_data(drone_name, logging_data)
+                                    self.data_logger.record_flight_data(
+                                        drone_name, logging_data
+                                    )
                 except Exception as e:
                     # 静默忽略数据记录错误，避免影响训练
                     pass
             # ===========================================
             # ====================================
-            
+
             return True
 
         def _print_progress(self, force: bool = False) -> None:
             num_timesteps = int(self.num_timesteps)
             now = time.time()
-            if not force and num_timesteps == self.last_print_step and (now - self.last_print_time) < 1.0:
+            if (
+                not force
+                and num_timesteps == self.last_print_step
+                and (now - self.last_print_time) < 1.0
+            ):
                 return
             self.last_print_step = num_timesteps
             self.last_print_time = now
@@ -593,10 +658,12 @@ def main():
                     self.total_timesteps,
                     percent,
                     _format_duration(elapsed),
-                    _format_duration(eta)
+                    _format_duration(eta),
                 )
             else:
-                logger.info("进度 %s 步 已用%s", num_timesteps, _format_duration(elapsed))
+                logger.info(
+                    "进度 %s 步 已用%s", num_timesteps, _format_duration(elapsed)
+                )
 
     # 打印训练参数，便于复现实验
     logger.info(
@@ -614,19 +681,19 @@ def main():
         continue_model,
         initial_model_path,
         initial_weights_path,
-        enable_visualization
+        enable_visualization,
     )
-    
+
     # 可视化状态提示
     if enable_visualization:
         logger.info("=" * 60)
-        logger.info("👁️  训练可视化: 已启用")
+        logger.info("[Eye]  训练可视化: 已启用")
         logger.info("   可视化窗口将在训练开始后自动弹出")
         logger.info("   显示内容: 训练统计、奖励曲线、权重变化、环境状态")
         logger.info("   操作提示: 按ESC键可关闭可视化窗口（不影响训练）")
         logger.info("=" * 60)
     else:
-        logger.info("👁️  训练可视化: 已禁用")
+        logger.info("[Eye]  训练可视化: 已禁用")
 
     # ========== 安全确认 ==========
     # 实体机训练需要人工确认，避免误启动导致安全事故
@@ -645,7 +712,7 @@ def main():
     training_visualizer = None  # 训练可视化器实例
     data_logger = None  # 实体无人机数据记录器实例
     # ====================================
-    
+
     try:
         # ========== 创建并启动算法服务器 ==========
         # AlgorithmServer负责与实体无人机通信和控制
@@ -653,7 +720,7 @@ def main():
             drone_names=[drone_name],  # 训练无人机名称列表
             use_learned_weights=False,  # 训练模式：不使用已学习的权重
             model_path=None,  # 训练模式：不加载模型
-            enable_visualization=False  # 使用训练专用可视化，禁用服务器自带可视化
+            enable_visualization=False,  # 使用训练专用可视化，禁用服务器自带可视化
         )
 
         # 启动通信与后台线程
@@ -674,12 +741,12 @@ def main():
         logger.info("创建实体无人机数据记录器...")
         data_logger = CrazyflieDataLogger(
             drone_names=[drone_name],
-            output_dir=os.path.join(os.path.dirname(__file__), "crazyflie_logs")
+            output_dir=os.path.join(os.path.dirname(__file__), "crazyflie_logs"),
         )
         data_logger.start_recording()
-        logger.info("✅ 数据记录器已启动")
+        logger.info("[OK] 数据记录器已启动")
         # =============================================
-        
+
         # ========== 创建在线训练环境 ==========
         # CrazyflieOnlineWeightEnv: 实体无人机在线训练环境
         # 环境功能：
@@ -694,7 +761,7 @@ def main():
             step_duration=step_duration,  # 每步飞行时长（秒）
             reset_unity=reset_unity,  # 是否在每个episode重置Unity环境
             safety_limit=not no_safety_limit,  # 是否启用权重变化安全限制
-            max_weight_delta=safety_max_delta  # 权重变化最大幅度（安全限制）
+            max_weight_delta=safety_max_delta,  # 权重变化最大幅度（安全限制）
         )
 
         # 应用初始权重（若提供）
@@ -702,46 +769,52 @@ def main():
             # 自动查找同名权重文件
             initial_weights_path = _derive_weights_path(initial_model_path)
             if os.path.exists(initial_weights_path):
-                logger.info("📂 找到权重文件: %s", initial_weights_path)
-                weights = _load_initial_weights(initial_weights_path, drone_name, logger)
+                logger.info("[Folder] 找到权重文件: %s", initial_weights_path)
+                weights = _load_initial_weights(
+                    initial_weights_path, drone_name, logger
+                )
                 if weights:
                     server.algorithms[drone_name].set_coefficients(weights)
                     env.set_initial_action(_weights_to_action(weights))
-                    logger.info("✅ 已加载初始权重: %s", initial_weights_path)
+                    logger.info("[OK] 已加载初始权重: %s", initial_weights_path)
                 else:
-                    logger.warning("⚠️  权重文件格式无效: %s", initial_weights_path)
+                    logger.warning("[!]  权重文件格式无效: %s", initial_weights_path)
             else:
-                logger.warning("⚠️  权重文件不存在: %s", initial_weights_path)
+                logger.warning("[!]  权重文件不存在: %s", initial_weights_path)
                 logger.info("   模型路径: %s", initial_model_path)
                 logger.info("   将使用默认配置权重")
-        
+
         # 创建并启动训练专用可视化
         if enable_visualization:
             logger.info("启动训练专用可视化...")
             try:
                 training_visualizer = DDPGTrainingVisualizer(server=server, env=env)
                 if training_visualizer.start_visualization():
-                    logger.info("✅ 训练可视化已启动")
-                    logger.info("💡 可视化窗口应该会弹出，显示训练统计和环境状态")
-                    logger.info("💡 按ESC键可关闭可视化窗口（不影响训练）")
+                    logger.info("[OK] 训练可视化已启动")
+                    logger.info("[Light] 可视化窗口应该会弹出，显示训练统计和环境状态")
+                    logger.info("[Light] 按ESC键可关闭可视化窗口（不影响训练）")
                     # 给可视化窗口一些初始化时间
                     time.sleep(1.0)
                 else:
-                    logger.warning("⚠️  训练可视化启动失败，但训练将继续")
+                    logger.warning("[!]  训练可视化启动失败，但训练将继续")
             except Exception as e:
-                logger.warning("⚠️  训练可视化初始化失败: %s", str(e))
-                logger.info("💡 训练将继续，但不显示可视化")
+                logger.warning("[!]  训练可视化初始化失败: %s", str(e))
+                logger.info("[Light] 训练将继续，但不显示可视化")
                 training_visualizer = None
 
         # 动作维度决定噪声向量长度（用于探索）
         n_actions = env.action_space.shape[0]
-        action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.15 * np.ones(n_actions))
+        action_noise = NormalActionNoise(
+            mean=np.zeros(n_actions), sigma=0.15 * np.ones(n_actions)
+        )
 
         # 确保模型输出目录存在
         os.makedirs(save_dir, exist_ok=True)
         # 使用时间戳作为模型文件名
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        final_path = os.path.join(save_dir, f"weight_predictor_crazyflie_online_{timestamp}")
+        final_path = os.path.join(
+            save_dir, f"weight_predictor_crazyflie_online_{timestamp}"
+        )
         logger.info("模型保存路径: %s.zip", os.path.abspath(final_path))
 
         # 继续训练：加载已有模型并保持步数累计
@@ -764,7 +837,7 @@ def main():
                 train_freq=(1, "episode"),
                 gradient_steps=-1,
                 verbose=1,
-                device="cpu"
+                device="cpu",
             )
             reset_num_timesteps = True
 
@@ -774,23 +847,23 @@ def main():
             print_interval_steps=progress_interval,
             print_interval_sec=15,
             training_visualizer=training_visualizer,
-            data_logger=data_logger
+            data_logger=data_logger,
         )
         # 训练主循环：达到 total_timesteps 视为训练完成
         model.learn(
             total_timesteps=total_timesteps,
             reset_num_timesteps=reset_num_timesteps,
-            callback=progress_cb
+            callback=progress_cb,
         )
 
         # 正常结束后保存模型
         model_saved = _save_model(model, final_path, logger, "训练完成，模型已保存")
-        
+
         # 保存权重文件（与模型文件名一致）
         if model_saved and server:
             weights_path = _derive_weights_path(final_path)
             _save_final_weights(server, weights_path, logger)
-        
+
         # 停止数据记录并保存
         if data_logger:
             logger.info("停止并保存实体无人机数据...")
@@ -821,16 +894,16 @@ def main():
                 data_logger.save_all()
             except Exception as e:
                 logger.warning("保存数据时出错: %s", e)
-        
+
         # 停止可视化
         if training_visualizer:
             logger.info("停止训练可视化...")
             try:
                 training_visualizer.stop_visualization()
-                logger.info("✅ 训练可视化已停止")
+                logger.info("[OK] 训练可视化已停止")
             except Exception as e:
                 logger.warning("停止可视化时出错: %s", e)
-        
+
         # 无论成功与否都释放服务器资源
         if server:
             server.stop()

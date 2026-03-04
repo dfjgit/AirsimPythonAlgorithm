@@ -13,9 +13,7 @@ echo   [3] 运行系统 (DQN模型) [待开发]
 echo.
 echo === DDPG权重APF训练 ===
 echo   [4] 训练权重DDPG (虚拟训练 - AirSim环境) [⭐可以使用！]
-echo   [5] 训练权重DDPG (实体训练 - Crazyflie在线) [⭐可以使用！]
-echo   [6] 训练权重DDPG (实体训练 - Crazyflie日志) [⭐可以使用！]
-echo   [7] 训练权重DDPG (虚实融合训练) [⭐可以使用！]
+echo   [6] 训练权重DDPG (使用日志离线训练) [⭐可以使用！]
 echo.
 echo === DQN移动控制训练 ===
 echo   [8] 训练移动DQN (真实AirSim环境)[⭐可以使用！]
@@ -43,9 +41,7 @@ if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
 if /i "%choice%"=="3" goto run_dqn_movement
 if /i "%choice%"=="4" goto train_weight_airsim
-if /i "%choice%"=="5" goto train_weight_crazyflie_online
 if /i "%choice%"=="6" goto train_weight_crazyflie_logs
-if /i "%choice%"=="7" goto train_weight_hybrid
 if /i "%choice%"=="8" goto train_movement_airsim
 if /i "%choice%"=="H" goto train_hierarchical_dqn
 if /i "%choice%"=="F" goto train_hierarchical_airsim
@@ -99,31 +95,13 @@ echo.
 call scripts\Train_DDPG_Weights_Real_Environment.bat
 goto menu
 
-:train_weight_crazyflie_online
-cls
-echo ============================================================
-echo DDPG权重APF训练 (实体训练 - Crazyflie在线)
-echo ============================================================
-echo.
-call scripts\Train_DDPG_Weights_Crazyflie_Online.bat
-goto menu
-
 :train_weight_crazyflie_logs
 cls
 echo ============================================================
-echo DDPG权重APF训练 (实体训练 - Crazyflie日志)
+echo DDPG权重APF训练 (使用日志离线训练)
 echo ============================================================
 echo.
 call scripts\Train_DDPG_Weights_Crazyflie_Logs.bat
-goto menu
-
-:train_weight_hybrid
-cls
-echo ============================================================
-echo DDPG权重APF训练 (虚实融合训练)
-echo ============================================================
-echo.
-call scripts\Train_DDPG_Weights_Hybrid.bat
 goto menu
 
 :train_movement_airsim
@@ -220,15 +198,11 @@ echo ============================================================
 echo.
 echo --- [DDPG 权重训练 (APF)] ---
 echo   [1] 删除 DDPG 模型 (multirotor\DDPG_Weight\models)
-echo   [2] 删除 DDPG 日志 (multirotor\DDPG_Weight\logs)
+echo   [2] 删除 DDPG 日志 (logs + airsim_training_logs + crazyflie_logs)
 echo.
 echo --- [DQN 基础移动控制] ---
 echo   [3] 删除 DQN 移动模型 (multirotor\DQN_Movement\models)
-echo   [4] 删除 DQN 移动日志 (multirotor\DQN_Movement\logs)
-echo.
-echo --- [HRL 分层 DQN 训练] ---
-echo   [6] 删除 HRL 分层模型 (multirotor\DQN_Movement\models\hrl_*)
-echo   [7] 删除 HRL 训练日志 (multirotor\DQN_Movement\scripts\logs\hrl_*)
+echo   [4] 删除 DQN 移动日志 (logs + scripts\logs)
 echo.
 echo --- [分析结果与全局] ---
 echo   [5] 删除 算法对比分析结果 (analysis_results)
@@ -243,8 +217,6 @@ if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
 if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
 if "%cleanup_choice%"=="3" goto cleanup_dqn_models
 if "%cleanup_choice%"=="4" goto cleanup_dqn_logs
-if "%cleanup_choice%"=="6" goto cleanup_hrl_models
-if "%cleanup_choice%"=="7" goto cleanup_hrl_logs
 if "%cleanup_choice%"=="5" goto cleanup_analysis_results
 if "%cleanup_choice%"=="8" goto cleanup_all
 if "%cleanup_choice%"=="9" goto menu
@@ -298,7 +270,34 @@ call :confirm_delete "multirotor\DDPG_Weight\models" "DDPG 权重模型"
 goto cleanup_menu
 
 :cleanup_ddpg_logs
-call :confirm_delete "multirotor\DDPG_Weight\logs" "DDPG 训练日志"
+cls
+echo ============================================================
+echo 删除 DDPG 训练日志
+echo ============================================================
+echo.
+echo 将删除:
+echo   - multirotor\DDPG_Weight\logs (可视化日志)
+echo   - multirotor\DDPG_Weight\airsim_training_logs (AirSim训练数据)
+echo   - multirotor\DDPG_Weight\crazyflie_logs (Crazyflie训练数据)
+echo.
+echo [警告] 该操作不可恢复！
+echo.
+set /p confirm=请输入 YES 确认删除，输入其它取消:
+if /i not "%confirm%"=="YES" (
+    echo.
+    echo 已取消操作。
+    timeout /t 2 >nul
+    goto cleanup_menu
+)
+echo.
+echo 正在删除 DDPG 日志...
+if exist "multirotor\DDPG_Weight\logs" rmdir /s /q "multirotor\DDPG_Weight\logs" 2>nul
+if exist "multirotor\DDPG_Weight\airsim_training_logs" rmdir /s /q "multirotor\DDPG_Weight\airsim_training_logs" 2>nul
+if exist "multirotor\DDPG_Weight\crazyflie_logs" rmdir /s /q "multirotor\DDPG_Weight\crazyflie_logs" 2>nul
+echo.
+echo [成功] DDPG 日志已删除。
+echo.
+pause
 goto cleanup_menu
 
 :cleanup_dqn_models
@@ -311,25 +310,9 @@ goto cleanup_menu
 
 :cleanup_dqn_logs
 echo 正在清理 DQN 移动日志...
-if exist "multirotor\DQN_Movement\logs\dqn_scan_data" rmdir /s /q "multirotor\DQN_Movement\logs\dqn_scan_data"
-if exist "multirotor\DQN_Movement\scripts\logs\movement_dqn_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\logs\movement_dqn_airsim"
+if exist "multirotor\DQN_Movement\logs" rmdir /s /q "multirotor\DQN_Movement\logs"
+if exist "multirotor\DQN_Movement\scripts\logs" rmdir /s /q "multirotor\DQN_Movement\scripts\logs"
 echo [成功] DQN 移动日志已清理。
-pause
-goto cleanup_menu
-
-:cleanup_hrl_models
-echo 正在清理 HRL 分层模型...
-if exist "multirotor\DQN_Movement\models\hrl_planner" rmdir /s /q "multirotor\DQN_Movement\models\hrl_planner"
-if exist "multirotor\DQN_Movement\models\hrl_planner_airsim" rmdir /s /q "multirotor\DQN_Movement\models\hrl_planner_airsim"
-if exist "multirotor\DQN_Movement\scripts\models\hrl_planner_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\models\hrl_planner_airsim"
-echo [成功] HRL 分层模型已清理。
-pause
-goto cleanup_menu
-
-:cleanup_hrl_logs
-echo 正在清理 HRL 训练日志...
-if exist "multirotor\DQN_Movement\scripts\logs\hrl_dqn_airsim" rmdir /s /q "multirotor\DQN_Movement\scripts\logs\hrl_dqn_airsim"
-echo [成功] HRL 训练日志已清理。
 pause
 goto cleanup_menu
 
@@ -355,9 +338,11 @@ if /i not "%final_confirm%"=="DELETE_ALL" (
 
 echo 正在执行全面清理...
 for %%D in (
-    "multirotor\DDPG_Weight\models" 
-    "multirotor\DDPG_Weight\logs" 
-    "multirotor\DQN_Movement\models" 
+    "multirotor\DDPG_Weight\models"
+    "multirotor\DDPG_Weight\logs"
+    "multirotor\DDPG_Weight\airsim_training_logs"
+    "multirotor\DDPG_Weight\crazyflie_logs"
+    "multirotor\DQN_Movement\models"
     "multirotor\DQN_Movement\scripts\models"
     "multirotor\DQN_Movement\logs"
     "multirotor\DQN_Movement\scripts\logs"

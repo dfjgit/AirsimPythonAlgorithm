@@ -39,7 +39,7 @@ class RuntimeVisualizer(BaseVisualizer):
         self.panel_manager.register_panel(env_panel, position='auto')
         
         # 权重面板
-        weight_panel = WeightPanel(width=370, height=180)
+        weight_panel = WeightPanel(width=370, height=280)
         self.panel_manager.register_panel(weight_panel, position='auto')
         
         # 电量面板

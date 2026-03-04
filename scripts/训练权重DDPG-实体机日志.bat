@@ -1,15 +1,15 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul 2>&1
 cls
 
 echo ============================================================
-echo DDPG权重训练（Crazyflie日志-离线）
+echo DDPG权重训练(Crazyflie日志-离线)
 echo ============================================================
 echo.
 echo 本脚本将使用Crazyflie日志数据进行离线训练
 echo.
 echo 重要提示:
-echo   1. 需在JSON配置中提供 log_path（.json/.csv）
+echo   1. 需在JSON配置中提供 log_path(.json/.csv)
 echo   2. 日志仅用于离线训练，不控制实体机
 echo   3. 模型将保存到 multirotor\DDPG_Weight\models\
 echo.
@@ -39,7 +39,7 @@ echo 按任意键开始训练...
 pause >nul
 echo.
 
-REM 激活虚拟环境（如果存在）
+REM 激活虚拟环境(如果存在)
 echo [1/3] 激活Python虚拟环境...
 if exist "%~dp0..\myvenv\Scripts\activate.bat" (
     call "%~dp0..\myvenv\Scripts\activate.bat"
