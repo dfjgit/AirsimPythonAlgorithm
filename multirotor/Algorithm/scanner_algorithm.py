@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import math
 import logging
 from .Vector3 import Vector3
@@ -905,7 +905,7 @@ class ScannerAlgorithm:
                     + final_move_dir.z * self.previous_move_dir.z
                 )
                 dot_product = max(-1.0, min(1.0, dot_product))
-                angle = math.degrees(math.acos(abs(dot_product)))
+                angle = math.degrees(math.acos(dot_product))
 
                 # 只在小角度转向时平滑，大角度时直接使用新方向
                 if angle < 30:
@@ -1172,3 +1172,4 @@ class ScannerAlgorithm:
                 f"ScannerAlgorithm.update_runtime_data: 处理运行时数据时出错: {str(e)}"
             )
             return runtime_data
+

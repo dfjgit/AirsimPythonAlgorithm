@@ -1,4 +1,4 @@
-"""
+﻿"""
 无人机移动环境 - DQN训练
 使用离散动作空间（6方向位移）直接控制无人机移动
 """
@@ -223,7 +223,7 @@ class MovementEnv(gym.Env):
             if self.server:
                 reason = getattr(self, 'last_done_reason', 'manual')
                 print(f"[DQN环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
-                self.server.reset_environment(reason=f"MovementEnv_{reason}")
+                self.server.reset_environment(reason=f"MovementEnv_{reason}", reset_grid=True)
                 # 重置电量
                 if hasattr(self.server, 'reset_battery_voltage'):
                     self.server.reset_battery_voltage(self.drone_name)
@@ -1137,7 +1137,7 @@ class MultiDroneMovementEnv(gym.Env):
             if self.server:
                 reason = getattr(self, 'last_done_reason', 'manual')
                 print(f"[DQN多机环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
-                self.server.reset_environment(reason=f"MultiDroneMovementEnv_{reason}")
+                self.server.reset_environment(reason=f"MultiDroneMovementEnv_{reason}", reset_grid=True)
                 # 重置所有无人机的电量
                 if hasattr(self.server, 'reset_battery_voltage'):
                     for d_name in self.drone_names:
@@ -1700,3 +1700,4 @@ class MultiDroneMovementEnv(gym.Env):
                 return scanned / total
         except:
             return 0.0
+

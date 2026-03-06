@@ -53,7 +53,7 @@ class DroneDiagnosticLogger:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.WARNING)
         console_handler.setFormatter(formatter)
-        self.logger.addHandler(console_handler)
+        # self.logger.addHandler(console_handler)  # 禁用控制台输出
 
         self.logger.info(f"=" * 80)
         self.logger.info(f"无人机诊断日志记录器启动")

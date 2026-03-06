@@ -1,4 +1,4 @@
-import gymnasium as gym
+﻿import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import os
@@ -270,7 +270,7 @@ class HierarchicalMovementEnv(gym.Env):
         else:
             if self.server:
                 print(f"[HRL环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason_str})")
-                self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason_str}")
+                self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason_str}", reset_grid=True)
                 if hasattr(self.server, 'reset_battery_voltage'):
                     self.server.reset_battery_voltage(self.drone_name)
                 time.sleep(1.0)
@@ -364,7 +364,7 @@ class HierarchicalMovementEnv(gym.Env):
         if terminated and self.server:
             reason = getattr(self, 'last_done_reason', 'manual')
             print(f"[HRL环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
-            self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason}")
+            self.server.reset_environment(reason=f"HierarchicalMovementEnv_{reason}", reset_grid=True)
             if hasattr(self.server, 'reset_battery_voltage'):
                 self.server.reset_battery_voltage(self.drone_name)
             time.sleep(1.0)
@@ -996,7 +996,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
                     self.server.reset_battery_voltage(name)
         else:
             if self.server:
-                self.server.reset_environment()
+                self.server.reset_environment(reset_grid=True)
                 if hasattr(self.server, 'reset_battery_voltage'):
                     for name in self.drone_names:
                         self.server.reset_battery_voltage(name)
@@ -1116,7 +1116,7 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         }
         
         if done and self.server:
-            self.server.reset_environment()
+            self.server.reset_environment(reset_grid=True)
             if hasattr(self.server, 'reset_battery_voltage'):
                 for name in self.drone_names:
                     self.server.reset_battery_voltage(name)
@@ -1157,3 +1157,4 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
             return True
         
         return False
+

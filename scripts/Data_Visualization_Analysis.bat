@@ -144,7 +144,19 @@ REM Find latest log file
 echo [Info] Scanning for latest training log...
 set "LATEST_LOG="
 
-REM Check for CSV files
+REM Check for scan_data CSV files (优先选择 - 包含完整轨迹数据)
+for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\scan_data_*.csv" 2^>nul') do (
+    set "LATEST_LOG=%TARGET_LOG_DIR%\%%F"
+    goto :found_csv
+)
+
+REM Check for training_stats CSV files (次选 - 包含训练统计)
+for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\training_stats_*.csv" 2^>nul') do (
+    set "LATEST_LOG=%TARGET_LOG_DIR%\%%F"
+    goto :found_csv
+)
+
+REM Check for other CSV files
 for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\*.csv" 2^>nul') do (
     set "LATEST_LOG=%TARGET_LOG_DIR%\%%F"
     goto :found_csv

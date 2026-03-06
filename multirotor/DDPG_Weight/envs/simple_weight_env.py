@@ -1,4 +1,4 @@
-"""
+﻿"""
 简单的权重学习环境
 使用Stable-Baselines3训练APF权重系数
 """
@@ -7,6 +7,7 @@ import numpy as np
 import gym
 from gym import spaces
 import os
+import time
 
 try:
     from configs.crazyflie_reward_config import CrazyflieRewardConfig
@@ -34,6 +35,7 @@ class SimpleWeightEnv(gym.Env):
         drone_name="UAV1",
         reward_config_path=None,
         reset_unity=True,
+        reset_grid_entropy=True,  # 新增：是否在episode重置时重置网格熵值
         step_duration=5.0,
         safety_limit=True,
         max_weight_delta=0.5,
@@ -43,6 +45,7 @@ class SimpleWeightEnv(gym.Env):
         self.server = server
         self.drone_name = drone_name
         self.reset_unity = reset_unity  # 是否每次episode重置Unity环境
+        self.reset_grid_entropy = reset_grid_entropy  # 是否重置网格熵值（默认True，每个Episode完整重置）
         self.step_duration = step_duration  # 每步飞行时长（秒）
 
         # 加载奖励配置（与实体训练一致）
@@ -117,6 +120,18 @@ class SimpleWeightEnv(gym.Env):
         self._out_of_range_count = 0  # 出圈计数器
         self._out_of_range_start_time = None  # 出圈开始时间
         self._has_initial_action = False
+        # 碰撞事件追踪（防止“近距离但未接触”误判为碰撞）
+        self._last_collision_timestamp = 0
+        self._last_collision_wall_time = 0.0
+        self._episode_wall_start_time = time.time()
+        self.collision_cfg = {
+            "penetration_threshold": 0.03,  # 仅把有明显穿透的事件记为碰撞
+            "minor_penetration_threshold": 0.005,  # 非地面对象的轻微接触阈值
+            "event_cooldown_sec": 0.8,  # 短时间内不重复记同类碰撞
+            "episode_grace_sec": 2.0,  # reset后短暂忽略碰撞抖动
+            "fallback_proximity_distance": 0.35,  # 仅极近距离才用作兜底碰撞
+            "ignored_objects": ("ground", "landscape", "floor", "terrain"),
+        }
 
         # 首次重置标志（用于跳过启动时的物理重置）
         self._first_reset = True
@@ -238,9 +253,9 @@ class SimpleWeightEnv(gym.Env):
                 # 后续 Episode：执行完整的物理重置（如果启用）
                 if self.reset_unity:
                     print(f"🎮 正在重置Unity环境...")
-                    # 使用保存的重置原因
+                    # 使用保存的重置原因，并传递是否重置熵值的标志
                     reason = getattr(self, "_last_reset_reason", "Episode结束")
-                    self.server.reset_environment(reason=reason)
+                    self.server.reset_environment(reason=reason, reset_grid=self.reset_grid_entropy)
 
                     # 等待重置完成
                     for i in range(3):
@@ -295,6 +310,9 @@ class SimpleWeightEnv(gym.Env):
         self._out_of_range_count = 0  # 重置出圈计数
         self._out_of_range_start_time = None  # 重置出圈计时
         self._out_of_range_continuous_count = 0  # 重置连续出圈步数计数
+        self._last_collision_timestamp = 0
+        self._last_collision_wall_time = 0.0
+        self._episode_wall_start_time = time.time()
 
         state = self._get_state()
 
@@ -468,14 +486,8 @@ class SimpleWeightEnv(gym.Env):
             reward = self._calculate_reward(action)
             self.total_episode_reward += reward
 
-            # 更新碰撞计数（基于状态中的距离或服务器数据）
-            if self.server:
-                with self.server.data_lock:
-                    rd = self.server.unity_runtime_data.get(self.drone_name)
-                    if rd:
-                        min_dist = self._get_min_distance_to_others(rd)
-                        if min_dist < 2.0:  # 碰撞阈值
-                            self.collision_count += 1
+            # 更新碰撞计数（使用真实碰撞事件，避免“近距离误判碰撞”）
+            self._update_collision_count()
 
             # 将训练统计信息传递给服务器（用于数据采集）
             if self.server:
@@ -618,11 +630,84 @@ class SimpleWeightEnv(gym.Env):
         if not rd or not rd.otherScannerPositions:
             return 999.0
         pos = rd.position
-        dists = [
-            np.sqrt((pos.x - op.x) ** 2 + (pos.y - op.y) ** 2 + (pos.z - op.z) ** 2)
-            for op in rd.otherScannerPositions
-        ]
+        dists = []
+        for op in rd.otherScannerPositions:
+            dist = np.sqrt((pos.x - op.x) ** 2 + (pos.y - op.y) ** 2 + (pos.z - op.z) ** 2)
+            # 过滤自身点/重复点（距离≈0）
+            if dist > 1e-3:
+                dists.append(dist)
         return min(dists) if dists else 999.0
+
+    def _update_collision_count(self) -> None:
+        """更新碰撞计数：优先使用AirSim真实碰撞事件，距离仅作兜底。"""
+        if not self.server:
+            return
+
+        now = time.time()
+        # reset后短暂忽略碰撞状态抖动，避免刚重置即误判
+        if now - self._episode_wall_start_time < self.collision_cfg["episode_grace_sec"]:
+            return
+
+        # 1) 首选：AirSim真实碰撞事件（按time_stamp去重）
+        try:
+            collision = self.server.drone_controller.check_collision(self.drone_name)
+            if collision and collision.get("has_collided", False):
+                time_stamp = int(collision.get("time_stamp", 0) or 0)
+                penetration = float(collision.get("penetration_depth", 0.0) or 0.0)
+                object_name = str(collision.get("object_name", "") or "")
+                object_name_lower = object_name.lower()
+                is_ignored_object = any(
+                    token in object_name_lower
+                    for token in self.collision_cfg["ignored_objects"]
+                )
+
+                is_new_event = time_stamp > 0 and time_stamp != self._last_collision_timestamp
+                strong_hit = (
+                    penetration >= self.collision_cfg["penetration_threshold"]
+                    or (
+                        bool(object_name)
+                        and not is_ignored_object
+                        and penetration >= self.collision_cfg["minor_penetration_threshold"]
+                    )
+                )
+                cooldown_ok = (
+                    now - self._last_collision_wall_time
+                    >= self.collision_cfg["event_cooldown_sec"]
+                )
+
+                if is_new_event and strong_hit and cooldown_ok:
+                    self.collision_count += 1
+                    self._last_collision_wall_time = now
+                    print(
+                        f"⚠️ 检测到真实碰撞事件: object={object_name or 'Unknown'}, "
+                        f"penetration={penetration:.3f}m, count={self.collision_count}"
+                    )
+
+                if time_stamp > 0:
+                    self._last_collision_timestamp = time_stamp
+                return
+        except Exception as e:
+            print(f"[Warning] 读取AirSim碰撞状态失败，启用距离兜底: {e}")
+
+        # 2) 兜底：仅在极近距离才记碰撞（避免把正常编队/避障当碰撞）
+        try:
+            with self.server.data_lock:
+                rd = self.server.unity_runtime_data.get(self.drone_name)
+            if rd:
+                min_dist = self._get_min_distance_to_others(rd)
+                if (
+                    min_dist < self.collision_cfg["fallback_proximity_distance"]
+                    and now - self._last_collision_wall_time
+                    >= self.collision_cfg["event_cooldown_sec"]
+                ):
+                    self.collision_count += 1
+                    self._last_collision_wall_time = now
+                    print(
+                        f"⚠️ 极近距离兜底碰撞: min_dist={min_dist:.3f}m, "
+                        f"count={self.collision_count}"
+                    )
+        except Exception as e:
+            print(f"[Warning] 距离兜底碰撞检测失败: {e}")
 
     def _get_state(self):
         """获取当前状态（18维）"""
@@ -947,3 +1032,4 @@ if __name__ == "__main__":
     print(f"  动作空间: {env_b.action_space.shape}")
 
     print("\n[OK] 两种模式都可用！")
+

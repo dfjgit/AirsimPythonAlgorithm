@@ -40,9 +40,22 @@ class HexCell:
         """
         center_data = data.get('center', {})
         center = Vector3.from_dict(center_data) if isinstance(center_data, dict) else Vector3()
-        entropy = float(data.get('entropy', 0.0))
+        entropy = cls.clamp_entropy(data.get('entropy', 80.0))
         
         return cls(center=center, entropy=entropy)
+
+    @staticmethod
+    def clamp_entropy(value: Any, default: float = 80.0) -> float:
+        """将熵值限制在[0, 100]范围，避免异常数据污染训练。"""
+        try:
+            entropy = float(value)
+        except (TypeError, ValueError):
+            entropy = float(default)
+        if entropy < 0.0:
+            return 0.0
+        if entropy > 100.0:
+            return 100.0
+        return entropy
 
     def __eq__(self, other: Any) -> bool:
         """重写相等性判断，用于单元格去重和比较"""
@@ -64,17 +77,26 @@ class HexGridDataModel:
     def __init__(self):
         """初始化六边形网格模型"""
         self.cells = []  # 存储所有蜂窝单元
+        self._preserve_entropy = False  # 是否保护熵值不被Unity数据覆盖
 
     def clear(self) -> None:
         """清空所有单元格数据，保持对象引用不变"""
         self.cells = []
         # print("[网格模型] 数据已清空")
 
+    def set_preserve_entropy(self, preserve: bool) -> None:
+        """设置是否保护熵值不被Unity数据覆盖
+        
+        Args:
+            preserve: True表示保护本地熵值，False表示允许Unity数据覆盖
+        """
+        self._preserve_entropy = preserve
+
     def reset_entropy(self) -> None:
-        """重置所有单元格的熵值为初始值(100)，保持对象引用和列表结构不变"""
+        """重置所有单元格的熵值为初始值(80)，保持对象引用和列表结构不变"""
         for cell in self.cells:
-            cell.entropy = 100.0
-        # print("[网格模型] 熵值已重置为100")
+            cell.entropy = 80.0
+        # print("[网格模型] 熵值已重置为80")
 
     def to_dict(self) -> Dict[str, Any]:
         """将对象转换为字典格式，用于JSON序列化"""
@@ -141,7 +163,15 @@ class HexGridDataModel:
                                 
                                 if key in cell_map:
                                     # 更新现有cell的熵值
-                                    cell_map[key].entropy = cell_data.get('entropy', 100.0)
+                                    incoming_entropy = HexCell.clamp_entropy(
+                                        cell_data.get('entropy', 80.0)
+                                    )
+                                    if not self._preserve_entropy:
+                                        # 正常模式：直接使用Unity最新熵值
+                                        cell_map[key].entropy = incoming_entropy
+                                    else:
+                                        # 保护模式：仅允许熵值下降，避免被重置回高熵
+                                        cell_map[key].entropy = min(cell_map[key].entropy, incoming_entropy)
                                     updated_count += 1
                                 else:
                                     # 新cell（添加到列表）

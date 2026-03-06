@@ -29,6 +29,7 @@ class UnitySocketServer:
         # 数据缓冲区
         self.receive_buffer = ""  # 接收缓存
         self.pending_packs = []  # 待发送的数据包列表（使用DataPacks结构）
+        self.pending_lock = threading.Lock()  # 待发送队列锁
 
         # 添加发送锁，解决多线程同时发送导致的粘包问题
         self.send_lock = threading.Lock()
@@ -86,6 +87,19 @@ class UnitySocketServer:
         """检查是否与Unity建立连接"""
         return self.connection is not None
 
+    def clear_pending_packs(self) -> int:
+        """清空待发送队列，避免重置控制命令被历史runtime包淹没。"""
+        try:
+            with self.pending_lock:
+                pending_count = len(self.pending_packs)
+                self.pending_packs.clear()
+            if pending_count > 0:
+                logger.info(f"已清空待发送队列: {pending_count} 个包")
+            return pending_count
+        except Exception as e:
+            logger.warning(f"清空待发送队列失败: {e}")
+            return 0
+
     def send_config(self, config: ScannerConfigData) -> None:
         """发送配置数据到Unity（适配字典类型的pack_data_list）"""
         try:
@@ -94,7 +108,8 @@ class UnitySocketServer:
             pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             pack.pack_data_list = config.to_dict()  # 字典结构（匹配config.json）
             logging.info("发送配置数据")
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
         except Exception as e:
             logger.error(f"配置数据准备失败: {str(e)}")
 
@@ -106,7 +121,8 @@ class UnitySocketServer:
             pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             # 每个runtime数据已包含uavname，无需顶层字段
             pack.pack_data_list = [runtime.to_dict() for runtime in runtimes]
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
             # logger.debug(f"添加了包含{len(pack.pack_data_list)}个运行时数据的数据包")
         except Exception as e:
             logger.error(f"运行时数据准备失败: {str(e)}")
@@ -118,7 +134,8 @@ class UnitySocketServer:
             pack.type = PackType.crazyflie_operate_data
             pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             pack.pack_data_list = [operateData.to_dict() for operateData in operateDatas]
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
             logger.info(f"实体无人机操作指令数据包数据：{pack.pack_data_list}")
         except Exception as e:
             logger.error(f"实体无人机Crazyflie指令数据准备失败: {str(e)}")
@@ -131,7 +148,8 @@ class UnitySocketServer:
             pack.type = PackType.reset_env
             pack.time_span = str(_time.time())
             pack.pack_data_list = {}  # 重置命令不需要额外数据
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
             logger.info("[重置] 已发送环境重置命令到Unity")
         except Exception as e:
             logger.error(f"发送重置命令失败: {str(e)}")
@@ -143,7 +161,8 @@ class UnitySocketServer:
             pack.type = PackType.start_simulation
             pack.time_span = str(_time.time())
             pack.pack_data_list = {}  # 开始仿真命令不需要额外数据
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
             logger.info("[开始仿真] 已发送开始仿真命令到Unity")
         except Exception as e:
             logger.error(f"发送开始仿真命令失败: {str(e)}")
@@ -155,7 +174,8 @@ class UnitySocketServer:
             pack.type = PackType.drone_config
             pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
             pack.pack_data_list = drones_config.get_drones_dict()
-            self.pending_packs.append(pack)
+            with self.pending_lock:
+                self.pending_packs.append(pack)
             logger.info(f"[无人机配置] 已发送无人机配置到Unity，无人机数量: {len(drones_config.get_all_drones())}")
         except Exception as e:
             logger.error(f"发送无人机配置失败: {str(e)}")
@@ -314,8 +334,11 @@ class UnitySocketServer:
 
     def _send_pending_data(self, conn: socket.socket) -> None:
         """发送待处理的数据包"""
-        while self.pending_packs and self.connection:
-            pack = self.pending_packs.pop(0)
+        while self.connection:
+            with self.pending_lock:
+                if not self.pending_packs:
+                    break
+                pack = self.pending_packs.pop(0)
             self._send(conn, pack)
 
     def _send(self, conn: socket.socket, pack: DataPacks) -> None:

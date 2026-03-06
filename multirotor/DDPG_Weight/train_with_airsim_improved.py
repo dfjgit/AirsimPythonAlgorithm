@@ -1,4 +1,4 @@
-"""
+﻿"""
 改进版AirSim环境训练脚本
 
 功能说明：
@@ -708,6 +708,15 @@ def main():
     max_weight_delta = float(
         _get_config_value(None, config, "max_weight_delta", 0.5)
     )  # 权重变化最大幅度
+    reset_grid_entropy = bool(
+        _get_config_value(None, config, "reset_grid_entropy", True)
+    )  # 是否重置网格熵值（默认True，每次重置时重新扫描）
+
+
+    # 新一轮训练强制完整重置，避免复用历史网格熵值
+    if not reset_grid_entropy:
+        print("[Reset] 检测到配置为累积模式，已强制切换为完整重置模式")
+    reset_grid_entropy = True
 
     # 模型覆盖逻辑：默认开启覆盖模式以满足用户需求
     overwrite_model = True
@@ -945,10 +954,12 @@ def main():
         #   - 将DDPG的动作（权重系数）应用到APF算法
         #   - 执行一步飞行并收集状态和奖励
         #   - 支持episode重置（reset_unity=True）
+        #   - 支持扫描进度累积（reset_grid_entropy=False）或每次重置扫描（reset_grid_entropy=True）
         env = SimpleWeightEnv(
             server=server,  # 算法服务器引用
             drone_name=drone_names[0],  # 使用第一台无人机进行DDPG训练（主训练机）
-            reset_unity=True,  # 每个episode结束时重置Unity环境
+            reset_unity=True,  # 每个episode结束时重置Unity环境（无人机位置）
+            reset_grid_entropy=reset_grid_entropy,  # 是否重置网格熵值（默认True，每次重置时重新扫描）
             step_duration=step_duration,  # 每步飞行时长（秒）
             safety_limit=safety_limit,  # 是否启用权重变化安全限制
             max_weight_delta=max_weight_delta,  # 权重变化最大幅度（安全限制）
@@ -966,6 +977,7 @@ def main():
             f"  [Hand] 协同无人机: {', '.join(drone_names[1:]) if len(drone_names) > 1 else '无'}"
         )
         print(f"  [Clock]  每步时长: {step_duration}秒")
+        print(f"  [Scan]  扫描进度: {'累积模式 (Episode间保持已扫描区域)' if not env.reset_grid_entropy else '重置模式 (每个Episode重新扫描)'}")
         print(
             f"  [@] 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * step_duration / 60:.1f}分钟"
         )
@@ -1132,12 +1144,16 @@ def main():
         print("[中断] 正在停止训练...")
         print("=" * 60)
         print("\n请稍候，正在清理资源...")
+        # Ctrl+C中断时以退出码1退出（表示用户主动中断）
+        sys.exit(1)
 
     except Exception as e:
         print(f"\n\n[错误] 训练出错: {str(e)}")
         import traceback
 
         traceback.print_exc()
+        # 训练出错时以退出码1退出
+        sys.exit(1)
 
     finally:
         # 确保清理资源
@@ -1182,13 +1198,7 @@ def main():
             except Exception as e:
                 print(f"[警告] 清理资源时出现错误: {e}")
 
-        print("\n训练已结束")
-        print("按Enter键退出...")
-        try:
-            input()
-        except:
-            pass
-
 
 if __name__ == "__main__":
     main()
+

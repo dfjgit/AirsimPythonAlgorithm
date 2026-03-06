@@ -158,6 +158,11 @@ class MultiDroneAlgorithmServer:
         self._last_reset_time = 0.0  # 记录最后一次重置时间，用于客户端清除缓存
         self._last_reset_reason = ""  # 记录最后一次重置原因
         self._reset_history = []  # 重置历史记录 (时间, 原因)
+        # 重置握手状态（避免旧包误触发 ACK，导致重置后不扫描）
+        self._reset_command_sent_time = 0.0
+        self._reset_runtime_fresh = False
+        self._reset_grid_fresh = False
+        self._reset_ack_delay = 0.5
 
         # 数据采集系统（根据控制模式选择不同的数据目录）
         if control_mode.lower() == "dqn":
@@ -677,6 +682,17 @@ class MultiDroneAlgorithmServer:
             _time.sleep(0.5)  # 减少延迟时间，加快起飞流程
         return all_success
 
+    def _try_set_reset_ack(self) -> None:
+        """当重置后的 runtime 与 grid 都到达后，触发 ACK。"""
+        if (
+            self.resetting
+            and self._reset_runtime_fresh
+            and self._reset_grid_fresh
+            and not self.reset_ack_event.is_set()
+        ):
+            logger.info("[重置] 收到重置后的 runtime + grid 新数据，触发 ACK")
+            self.reset_ack_event.set()
+
     # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
         """处理从Unity接收的新格式数据
@@ -765,12 +781,15 @@ class MultiDroneAlgorithmServer:
                                     )
                                     self.ready_event.set()
                                 else:
-                                    # 重置期间只触发 ACK 信号，由 reset_environment 流程控制最终解锁
-                                    if not self.reset_ack_event.is_set():
-                                        logger.info(
-                                            "[重置] 收到重置后的首帧有效数据，触发 ACK (ready_event保持阻塞)"
-                                        )
-                                        self.reset_ack_event.set()
+                                    # 仅接受 reset 指令发送后的“新数据”，避免旧runtime包误触发 ACK
+                                    now = _time.time()
+                                    if (
+                                        self._reset_command_sent_time > 0
+                                        and now - self._reset_command_sent_time
+                                        >= self._reset_ack_delay
+                                    ):
+                                        self._reset_runtime_fresh = True
+                                        self._try_set_reset_ack()
                         # ---------------------
 
                 # 检查是否包含grid_data字段
@@ -778,9 +797,52 @@ class MultiDroneAlgorithmServer:
                     grid_data = received_data["grid_data"]
                     if isinstance(grid_data, dict) and "cells" in grid_data:
                         cells_count = len(grid_data["cells"])
-                        # logger.debug(f"收到网格数据，包含{cells_count}个单元（Delta更新）")
+                        
+                        # 调试：计算熵值统计
+                        entropies = [c.get('entropy', 100) for c in grid_data['cells']]
+                        avg_entropy = sum(entropies) / len(entropies) if entropies else 100
+                        low_entropy_count = sum(1 for e in entropies if e < 30)
+                        
+                        # 使用warning级别让日志更显眼
+                        # 频率控制：避免日志输出过快
+                        if not hasattr(self, "_last_grid_log_time"):
+                            self._last_grid_log_time = 0
+                            self._last_low_entropy_count = 0
+                        if not hasattr(self, "_last_avg_entropy"):
+                            self._last_avg_entropy = 100
+
+                        current_time = _time.time()
+                        time_diff = current_time - self._last_grid_log_time
+                        entropy_diff = low_entropy_count - self._last_low_entropy_count
+                        
+                        # 只在关键变化时输出日志
+                        should_log = (
+                            time_diff > 3.0 or  # 超过3秒
+                            entropy_diff > 3 or  # 低熵格子显著增加
+                            (self._last_avg_entropy - avg_entropy) > 2  # 平均熵值显著降低
+                        )
+                        
+                        if should_log:
+                            logger.warning(f"🔴 [网格更新] 收到{cells_count}个格子，平均熵值={avg_entropy:.1f}, 低熵格子={low_entropy_count}")
+                            self._last_grid_log_time = current_time
+                            self._last_low_entropy_count = low_entropy_count
+                            self._last_avg_entropy = avg_entropy
+                        
+
                         with self.grid_lock:
                             self.grid_data.update_from_dict(grid_data)
+
+                        # 重置期间：标记 reset 指令后的新 grid 数据
+                        if self.resetting:
+                            now = _time.time()
+                            if (
+                                self._reset_command_sent_time > 0
+                                and now - self._reset_command_sent_time
+                                >= self._reset_ack_delay
+                                and cells_count > 0
+                            ):
+                                self._reset_grid_fresh = True
+                                self._try_set_reset_ack()
                     else:
                         logger.warning(f"网格数据格式错误: {grid_data}")
 
@@ -1569,8 +1631,8 @@ class MultiDroneAlgorithmServer:
     ) -> None:
         """发送处理后的运行时数据到Unity"""
         # 检查是否正在重置（通过checking运行状态）
-        if not self.running:
-            return  # 重置期间不发送数据
+        if not self.running or self.resetting:
+            return  # 重置期间或正在重置时不发送数据，避免发送脏数据
 
         with self.data_lock:
             try:
@@ -1581,7 +1643,7 @@ class MultiDroneAlgorithmServer:
                 self.unity_socket.send_runtime(
                     [self.processed_runtime_data[drone_name]]
                 )
-                # logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
+                # # logger.debug(f"已发送无人机{drone_name}的处理后数据到Unity")
             except Exception as e:
                 # 捕获发送异常，避免影响主流程
                 logger.warning(f"发送运行时数据到Unity失败: {str(e)}")
@@ -1605,8 +1667,15 @@ class MultiDroneAlgorithmServer:
         # 显式声明使用全局time模块（避免Python误认为time是局部变量）
         global _time
         now = _time.time()
+        
+        # 修复：重置后立即清除缓存，确保返回最新数据
+        # 如果上次重置时间晚于缓存时间，强制刷新
+        if self._last_reset_time and self._vis_snapshot_cache_time < self._last_reset_time:
+            self._vis_snapshot_cache = None
+            logger.info("[可视化] 检测到重置，清除快照缓存")
+        
         # 频率限制，避免过度消耗 CPU 序列化大数据
-        # 修复：只有缓存存在且时间差小于阈值时才返回缓存
+        # 只有缓存存在且时间差小于阈值时才返回缓存
         if self._vis_snapshot_cache is not None and (
             now - self._vis_snapshot_cache_time < 0.1
         ):
@@ -1760,27 +1829,37 @@ class MultiDroneAlgorithmServer:
         if current_time_debug - self._last_snapshot_debug_time > 5.0:
             self._last_snapshot_debug_time = current_time_debug
             snap_keys = list(snapshot.keys())
-            logger.info(
-                f"[快照-调试] 📤 准备发送snapshot，字段数: {len(snap_keys)}, 字段列表: {snap_keys}"
-            )
-            # 特别检查关键字段
-            logger.info(
-                f"[快照-调试]   grid_data: {'有' if 'grid_data' in snapshot else '无'}, "
-                + f"unity_runtime_data: {len(snapshot.get('unity_runtime_data', {}))} 个, "
-                + f"obstacles: {len(snapshot.get('obstacles', []))} 个, "
-                + f"current_weights: {len(snapshot.get('current_weights', {}))} 个"
-            )
+            # logger.info(
+            #     f"[快照-调试] 📤 准备发送snapshot，字段数: {len(snap_keys)}, 字段列表: {snap_keys}"
+            # )
+            # # 特别检查关键字段
+            # logger.info(
+            #     f"[快照-调试]   grid_data: {'有' if 'grid_data' in snapshot else '无'}, "
+            #     + f"unity_runtime_data: {len(snapshot.get('unity_runtime_data', {}))} 个, "
+            #     + f"obstacles: {len(snapshot.get('obstacles', []))} 个, "
+            #     + f"current_weights: {len(snapshot.get('current_weights', {}))} 个"
+            # )
 
         self._vis_snapshot_cache = snapshot
         self._vis_snapshot_cache_time = now
         return snapshot
 
-    def reset_environment(self, reason: str = "Unknown") -> None:
-        """重置运行环境（严格闭合流程：停止-物理重置-起飞-清空数据-Unity重置-等待反馈-启动）"""
-        logger.info(f"[重置] 🔄 开始严格重置流程... (原因: {reason})")
+    def reset_environment(self, reason: str = "Unknown", reset_grid: bool = True) -> None:
+        """重置运行环境（严格闭合流程：停止-物理重置-起飞-清空数据-Unity重置-等待反馈-启动）
+
+        Args:
+            reason: 重置原因
+            reset_grid: 是否重置网格熵值（默认True，完全重新扫描）
+                       设为True时会将所有格子的熵值重置为80（完全重新扫描）
+                       设为False时保持已扫描区域的低熵值（累积扫描进度）
+        """
+        logger.info(f"[重置] 🔄 开始严格重置流程... (原因: {reason}, 重置网格熵值: {reset_grid})")
         self.resetting = True
         self.reset_ack_event.clear()
         self.ready_event.clear()  # 确保算法线程在重置期间阻塞
+        self._reset_command_sent_time = 0.0
+        self._reset_runtime_fresh = False
+        self._reset_grid_fresh = False
 
         # 记录重置时间和原因，用于客户端清除缓存
         self._last_reset_time = _time.time()
@@ -1864,12 +1943,11 @@ class MultiDroneAlgorithmServer:
 
         # 2. 清理本地数据状态与电量
         logger.info("[重置] 2/5 清理本地算法与统计数据...")
-        with self.grid_lock:
-            # 修正：使用 reset_entropy() 保持对象引用和全量单元格列表，仅重置数值
-            # 这样能确保外部可视化快照始终包含完整网格，解决重置后热力图消失/卡死问题
-            self.grid_data.reset_entropy()
-
-        self._clear_local_data()
+        self._clear_local_data(reset_grid_entropy=reset_grid)
+        if reset_grid:
+            logger.info("[重置] 网格熵值已重置为80（完全重新扫描）")
+        else:
+            logger.info("[重置] 保持网格熵值（扫描进度累积）")
         with self.dqn_command_lock:
             for k in self.dqn_commands:
                 self.dqn_commands[k] = Vector3(0, 0, 0)
@@ -1881,6 +1959,12 @@ class MultiDroneAlgorithmServer:
         # 3. 发送重置命令到 Unity (重置网格和 Leader)
         if self.unity_socket and self.unity_socket.is_connected():
             logger.info("[重置] 3/5 发送重置命令到 Unity，等待反馈 (ACK)...")
+            cleared = self.unity_socket.clear_pending_packs()
+            if cleared > 0:
+                logger.info(f"[重置] 已清空发送队列历史包: {cleared} 个")
+            self._reset_runtime_fresh = False
+            self._reset_grid_fresh = False
+            self._reset_command_sent_time = _time.time()
             self.unity_socket.send_reset_command()
 
             # 4. 等待 Unity 返回重置完毕的数据 (ACK)
@@ -1893,17 +1977,47 @@ class MultiDroneAlgorithmServer:
                 )
             else:
                 logger.warning("[重置] ⚠️ 等待 Unity 重置反馈超时")
-
-            # 5. 最后发送启动仿真指令
-            logger.info("[重置] 4/5 发送 start_simulation 指令，Leader 开始移动")
-            self.unity_socket.send_start_simulation_command()
+                logger.info("[重置] 尝试重发一次 reset 指令...")
+                self.reset_ack_event.clear()
+                self._reset_runtime_fresh = False
+                self._reset_grid_fresh = False
+                self._reset_command_sent_time = _time.time()
+                retry_start = _time.time()
+                self.unity_socket.send_reset_command()
+                retry_success = self.reset_ack_event.wait(timeout=6.0)
+                if retry_success:
+                    logger.info(
+                        f"[重置] ✅ 重试后收到 Unity 反馈，耗时: {_time.time() - retry_start:.2f}s"
+                    )
+                else:
+                    logger.warning("[重置] ⚠️ 重试后仍未收到 ACK，继续执行启动流程")
+            # 5. 重发配置并启动仿真，确保Unity扫描状态机恢复
+            logger.info("[重置] 4/5 重发无人机与算法配置到Unity...")
+            self.unity_socket.send_drone_config(self.drones_config)
+            self.unity_socket.send_config(self.config_data)
             _time.sleep(0.5)
+
+            logger.info("[重置] 5/5 发送 start_simulation 指令，Leader 开始移动")
+            self.unity_socket.send_start_simulation_command()
+            _time.sleep(1.0)
+            # 二次触发，提升多次重置后的可靠性（幂等）
+            self.unity_socket.send_start_simulation_command()
+
+            # 等待Unity启动熵值收集功能并稳定
+            logger.info("[重置] 熵值收集启动中...")
+            _time.sleep(3.0)
+
+            # 确保Unity准备好接收runtime数据
+            logger.info("[重置] Unity应该已启动熵值收集，算法线程即将发送数据")
         else:
             logger.warning("[重置] Unity 未连接，仅清空本地数据")
             with self.grid_lock:
                 self.grid_data.cells.clear()
 
         # 所有重置流程结束后，显式放行算法线程
+        self._reset_command_sent_time = 0.0
+        self._reset_runtime_fresh = False
+        self._reset_grid_fresh = False
         self.resetting = False
         self.ready_event.set()
         logger.info(
@@ -2034,7 +2148,7 @@ class MultiDroneAlgorithmServer:
 
             # 5. 清理本地数据
             logger.info("[步骤5/8] 清理本地数据...")
-            self._clear_local_data()
+            self._clear_local_data(reset_grid_entropy=True)
 
             # 6. 重新初始化无人机
             logger.info("[步骤6/8] 重新初始化无人机...")
@@ -2071,7 +2185,7 @@ class MultiDroneAlgorithmServer:
                 self.start_mission()
             return False
 
-    def _clear_local_data(self) -> None:
+    def _clear_local_data(self, reset_grid_entropy: bool = True) -> None:
         """清理本地数据状态"""
         try:
             # 重置运行时数据
@@ -2083,10 +2197,13 @@ class MultiDroneAlgorithmServer:
                 self.processed_runtime_data[drone_name] = ScannerRuntimeData()
                 self.last_positions[drone_name] = {}
 
-            # 重置网格数据 (仅重置熵值，保持格子对象引用和列表结构稳定)
+            # 重置网格数据 (按参数决定是否重置熵值，保持格子对象引用和列表结构稳定)
             with self.grid_lock:
-                self.grid_data.reset_entropy()
-
+                if reset_grid_entropy:
+                    self.grid_data.set_preserve_entropy(False)
+                    self.grid_data.reset_entropy()
+                else:
+                    self.grid_data.set_preserve_entropy(True)
             # 重新创建算法实例（所有无人机使用相同的权重）
             self.algorithms = {}
             for name in self.drone_names:
@@ -2182,3 +2299,4 @@ if __name__ == "__main__":
         if "server" in locals():
             server.stop()
         sys.exit(0)
+

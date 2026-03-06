@@ -106,7 +106,7 @@ def normalize_percentage_column(df: pd.DataFrame, column_name: str) -> pd.DataFr
     try:
         df[column_name] = df[column_name].apply(convert_value)
     except Exception as e:
-        LOGGER.warning(f"⚠️  无法转换列 '{column_name}' 的百分比格式: {e}")
+        LOGGER.warning(f"[!]  无法转换列 '{column_name}' 的百分比格式: {e}")
     
     return df
 
@@ -125,7 +125,7 @@ class CrazyflieDataVisualizer:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            LOGGER.info(f"📊 分析 Crazyflie 训练数据: {json_path.name}")
+            LOGGER.info(f"[#] 分析 Crazyflie 训练数据: {json_path.name}")
             
             # 提取元数据
             metadata = data.get('metadata', {})
@@ -157,11 +157,11 @@ class CrazyflieDataVisualizer:
             if episode_stats:
                 self._plot_episode_stats(episode_stats, run_dir)
             
-            LOGGER.info(f"✅ 分析完成，结果保存在: {run_dir}")
+            LOGGER.info(f"[OK] 分析完成，结果保存在: {run_dir}")
             return True
             
         except Exception as e:
-            LOGGER.error(f"❌ 分析 JSON 文件失败: {e}", exc_info=True)
+            LOGGER.error(f"[X] 分析 JSON 文件失败: {e}", exc_info=True)
             return False
     
     def visualize_csv(self, csv_path: Path) -> bool:
@@ -170,10 +170,10 @@ class CrazyflieDataVisualizer:
             df = pd.read_csv(csv_path)
             
             if df.empty:
-                LOGGER.warning(f"⚠️  文件为空: {csv_path.name}")
+                LOGGER.warning(f"[!]  文件为空: {csv_path.name}")
                 return False
             
-            LOGGER.info(f"📊 分析 CSV 文件: {csv_path.name}")
+            LOGGER.info(f"[#] 分析 CSV 文件: {csv_path.name}")
             
             # 判断 CSV 类型
             if 'x' in df.columns and 'y' in df.columns:
@@ -183,11 +183,11 @@ class CrazyflieDataVisualizer:
                 # 权重历史 CSV
                 return self._visualize_weight_csv(csv_path, df)
             else:
-                LOGGER.warning(f"⚠️  未知的 CSV 格式: {csv_path.name}")
+                LOGGER.warning(f"[!]  未知的 CSV 格式: {csv_path.name}")
                 return False
                 
         except Exception as e:
-            LOGGER.error(f"❌ 分析 CSV 文件失败: {e}", exc_info=True)
+            LOGGER.error(f"[X] 分析 CSV 文件失败: {e}", exc_info=True)
             return False
     
     def _plot_flight_data(self, drone_name: str, records: List[Dict], output_dir: Path):
@@ -491,7 +491,7 @@ class CrazyflieDataVisualizer:
         run_dir.mkdir(exist_ok=True)
         
         self._plot_flight_data(drone_name, df.to_dict('records'), run_dir)
-        LOGGER.info(f"✅ 飞行数据分析完成: {run_dir}")
+        LOGGER.info(f"[OK] 飞行数据分析完成: {run_dir}")
         return True
     
     def _visualize_weight_csv(self, csv_path: Path, df: pd.DataFrame) -> bool:
@@ -502,7 +502,7 @@ class CrazyflieDataVisualizer:
         run_dir.mkdir(exist_ok=True)
         
         self._plot_weight_history(df.to_dict('records'), run_dir)
-        LOGGER.info(f"✅ 权重历史分析完成: {run_dir}")
+        LOGGER.info(f"[OK] 权重历史分析完成: {run_dir}")
         return True
 
 
@@ -517,11 +517,11 @@ class ScanDataVisualizer:
     def visualize_csv(self, csv_path: Path) -> bool:
         """分析扫描数据 CSV（完整版，包含10+张图表）"""
         run_name = csv_path.stem
-        LOGGER.info(f"📊 正在分析扫描数据: {csv_path.name}")
+        LOGGER.info(f"[#] 正在分析扫描数据: {csv_path.name}")
         
         # 检查文件大小
         if csv_path.stat().st_size == 0:
-            LOGGER.warning(f"⚠️  文件 {csv_path.name} 是空文件，跳过。")
+            LOGGER.warning(f"[!]  文件 {csv_path.name} 是空文件，跳过。")
             return False
         
         # 智能识别算法类型（根据文件路径）
@@ -540,7 +540,7 @@ class ScanDataVisualizer:
             # 加载数据
             df, e_bins, e_hist, e_cdf = load_and_prepare(csv_path)
             if df.empty:
-                LOGGER.warning(f"⚠️  文件 {csv_path.name} 没有有效数据，跳过。")
+                LOGGER.warning(f"[!]  文件 {csv_path.name} 没有有效数据，跳过。")
                 return False
                 
             drones = _detect_drones(df.columns.tolist())
@@ -653,55 +653,7 @@ class ScanDataVisualizer:
                     except Exception as e:
                         LOGGER.error(f"  [失败] 生成图表 '消除效率分析': {e}", exc_info=True)
 
-            # 图表4: 飞行轨迹 2D
-            if drones:
-                try:
-                    fig3, ax3 = plt.subplots(figsize=(8, 8))
-                    for drone in drones:
-                        x_col, y_col = f"{drone}_x", f"{drone}_y"
-                        if x_col in df.columns and y_col in df.columns:
-                            ax3.plot(df[x_col], df[y_col], label=f"无人机: {drone}", linewidth=1)
-                    ax3.set_xlabel("X (m)")
-                    ax3.set_ylabel("Y (m)")
-                    ax3.set_title("水平面飞行轨迹 (X-Y)")
-                    ax3.grid(True, alpha=0.3)
-                    ax3.legend()
-                    fig3.tight_layout()
-                    fig3.savefig(run_dir / "trajectories_xy.png", dpi=150)
-                    LOGGER.info(f"  [成功] 生成图表: 2D轨迹")
-                    if self.show_plots:
-                        plt.show()
-                    plt.close(fig3)
-                except Exception as e:
-                    LOGGER.error(f"  [失败] 生成图表 '2D轨迹': {e}", exc_info=True)
-
-            # 图表5: 飞行轨迹 3D
-            if drones:
-                try:
-                    fig4 = plt.figure(figsize=(10, 8))
-                    ax4 = fig4.add_subplot(111, projection="3d")
-                    valid_3d = False
-                    for drone in drones:
-                        x, y, z = f"{drone}_x", f"{drone}_y", f"{drone}_z"
-                        if all(c in df.columns for c in [x, y, z]):
-                            ax4.plot(df[x], df[y], df[z], label=drone)
-                            valid_3d = True
-                    if valid_3d:
-                        ax4.set_xlabel("X")
-                        ax4.set_ylabel("Y")
-                        ax4.set_zlabel("Z")
-                        ax4.set_title("3D 空间轨迹")
-                        ax4.legend()
-                        fig4.tight_layout()
-                        fig4.savefig(run_dir / "trajectories_3d.png", dpi=150)
-                        LOGGER.info(f"  [成功] 生成图表: 3D轨迹")
-                        if self.show_plots:
-                            plt.show()
-                    plt.close(fig4)
-                except Exception as e:
-                    LOGGER.error(f"  [失败] 生成图表 '3D轨迹': {e}", exc_info=True)
-
-            # 图表5.5: 按episode分组的轨迹图（解决多轮次混杂问题）
+            # 图表4: 按episode分组的轨迹图（解决多轮次混杂问题）
             if drones and "episode" in df.columns:
                 try:
                     self._visualize_episode_trajectories(df, drones, run_dir)
@@ -881,62 +833,6 @@ class ScanDataVisualizer:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
 
-            # 图表10: 飞行姿态稳定性分析
-            try:
-                attitude_drones = []
-                for drone in drones:
-                    if f"{drone}_roll" in df.columns and f"{drone}_pitch" in df.columns:
-                        attitude_drones.append(drone)
-                
-                if attitude_drones:
-                    fig_att, (ax_att1, ax_att2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-                    
-                    for drone in attitude_drones:
-                        roll_data = df[f"{drone}_roll"]
-                        ax_att1.plot(df["elapsed_time"], roll_data, label=f'{drone} Roll', alpha=0.7)
-                        
-                        pitch_data = df[f"{drone}_pitch"]
-                        ax_att2.plot(df["elapsed_time"], pitch_data, label=f'{drone} Pitch', alpha=0.7)
-                        
-                        roll_jitter = roll_data.std()
-                        pitch_jitter = pitch_data.std()
-                        LOGGER.info(f"  [分析] {drone} 姿态抖动: Roll={roll_jitter:.2f}°, Pitch={pitch_jitter:.2f}°")
-                    
-                    ax_att1.set_ylabel("横滚角 Roll (deg)")
-                    ax_att1.set_title("飞行姿态稳定性分析 (证明无失控风险)", fontsize=14, fontweight='bold')
-                    ax_att1.grid(True, alpha=0.3)
-                    ax_att1.legend(loc='upper right', fontsize=8)
-                    
-                    ax_att2.set_ylabel("俯仰角 Pitch (deg)")
-                    ax_att2.set_xlabel("时间 (s)")
-                    ax_att2.grid(True, alpha=0.3)
-                    ax_att2.legend(loc='upper right', fontsize=8)
-                    
-                    all_roll = pd.concat([df[f"{d}_roll"] for d in attitude_drones])
-                    all_pitch = pd.concat([df[f"{d}_pitch"] for d in attitude_drones])
-                    
-                    max_abs_roll = all_roll.abs().max()
-                    max_abs_pitch = all_pitch.abs().max()
-                    avg_jitter = (all_roll.std() + all_pitch.std()) / 2
-                    
-                    if max_abs_roll < 30 and max_abs_pitch < 30 and avg_jitter < 5:
-                        ax_att1.text(0.02, 0.9, "[OK] 飞行姿态极度平稳", transform=ax_att1.transAxes, 
-                                 color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    elif max_abs_roll < 45 and max_abs_pitch < 45:
-                        ax_att1.text(0.02, 0.9, "[WARN] 飞行存在波动但受控", transform=ax_att1.transAxes, 
-                                 color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    else:
-                        ax_att1.text(0.02, 0.9, "[FAIL] 姿态剧烈震荡/失控风险", transform=ax_att1.transAxes, 
-                                 color='red', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    
-                    fig_att.tight_layout()
-                    fig_att.savefig(run_dir / "flight_attitude_stability.png", dpi=150)
-                    LOGGER.info(f"  [成功] 生成图表: 飞行姿态稳定性")
-                    if self.show_plots:
-                        plt.show()
-                    plt.close(fig_att)
-            except Exception as e:
-                LOGGER.error(f"  [失败] 生成图表 '姿态稳定性': {e}")
 
             # 图表11: 实时训练奖励与策略同步分析
             try:
@@ -983,11 +879,11 @@ class ScanDataVisualizer:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '训练实时同步': {e}")
             
-            LOGGER.info(f"✅ 扫描数据分析完成，结果保存在: {run_dir}")
+            LOGGER.info(f"[OK] 扫描数据分析完成，结果保存在: {run_dir}")
             return True
 
         except Exception as e:
-            LOGGER.error(f"❌ 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
+            LOGGER.error(f"[X] 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
             return False
 
     def _visualize_episode_trajectories(self, df: pd.DataFrame, drones: list, run_dir: Path) -> None:
@@ -1069,8 +965,76 @@ class ScanDataVisualizer:
                     fig3d.savefig(episode_dir / f"episode_{ep:03d}_trajectory_3d.png", dpi=150)
                 plt.close(fig3d)
 
+                # 飞控姿态稳定性图 (每个episode单独显示)
+                try:
+                    fig_att, (ax_att1, ax_att2) = plt.subplots(2, 1, figsize=(10, 8))
+
+                    for drone in drones:
+                        roll_col, pitch_col = f"{drone}_roll", f"{drone}_pitch"
+                        if roll_col in ep_df.columns and pitch_col in ep_df.columns:
+                            # Roll角度变化
+                            ax_att1.plot(ep_df["elapsed_time"], ep_df[roll_col],
+                                       label=f'{drone}', alpha=0.7, linewidth=1)
+                            # Pitch角度变化
+                            ax_att2.plot(ep_df["elapsed_time"], ep_df[pitch_col],
+                                       label=f'{drone}', alpha=0.7, linewidth=1)
+
+                    ax_att1.set_ylabel("横滚角 Roll (deg)")
+                    ax_att1.set_title(f"Episode {ep} - 飞行姿态稳定性分析")
+                    ax_att1.grid(True, alpha=0.3)
+                    ax_att1.legend(loc='best')
+
+                    ax_att2.set_ylabel("俯仰角 Pitch (deg)")
+                    ax_att2.set_xlabel("时间 (s)")
+                    ax_att2.grid(True, alpha=0.3)
+                    ax_att2.legend(loc='best')
+
+                    # 计算姿态抖动统计
+                    for drone in drones:
+                        roll_col, pitch_col = f"{drone}_roll", f"{drone}_pitch"
+                        if roll_col in ep_df.columns and pitch_col in ep_df.columns:
+                            roll_jitter = ep_df[roll_col].std()
+                            pitch_jitter = ep_df[pitch_col].std()
+                            max_abs_roll = ep_df[roll_col].abs().max()
+                            max_abs_pitch = ep_df[pitch_col].abs().max()
+                            stability_status = "[OK]" if max_abs_roll < 30 and max_abs_pitch < 30 else "[!]"
+                            ax_att1.text(0.02, 0.9 - 0.1 * drones.index(drone),
+                                       f"{stability_status} {drone}: Roll抖动={roll_jitter:.2f}°, Max={max_abs_roll:.1f}°",
+                                       transform=ax_att1.transAxes, fontsize=8,
+                                       bbox=dict(boxstyle="round", alpha=0.3))
+
+                    fig_att.tight_layout()
+                    fig_att.savefig(episode_dir / f"episode_{ep:03d}_attitude_stability.png", dpi=150)
+                    plt.close(fig_att)
+                except Exception as e:
+                    LOGGER.warning(f"  [跳过] Episode {ep}姿态图生成失败: {e}")
+
+                # 高度变化图 (每个episode单独显示)
+                try:
+                    has_altitude = False
+                    fig_alt, ax_alt = plt.subplots(figsize=(10, 6))
+
+                    for drone in drones:
+                        z_col = f"{drone}_z"
+                        if z_col in ep_df.columns:
+                            ax_alt.plot(ep_df["elapsed_time"], ep_df[z_col],
+                                       label=f'{drone}', alpha=0.7, linewidth=1.5)
+                            has_altitude = True
+
+                    if has_altitude:
+                        ax_alt.set_xlabel("时间 (s)")
+                        ax_alt.set_ylabel("高度 Z (m)")
+                        ax_alt.set_title(f"Episode {ep} - 飞行高度变化")
+                        ax_alt.grid(True, altitude=0.3)
+                        ax_alt.legend(loc='best')
+                        fig_alt.tight_layout()
+                        fig_alt.savefig(episode_dir / f"episode_{ep:03d}_altitude.png", dpi=150)
+                        plt.close(fig_alt)
+                except Exception as e:
+                    LOGGER.warning(f"  [跳过] Episode {ep}高度图生成失败: {e}")
+
             except Exception as e:
-                LOGGER.error(f"  [失败] 生成Episode {ep}轨迹图: {e}")
+                LOGGER.error(f"  [失败] 生成Episode {ep}图表: {e}")
 
         # 生成汇总图：所有episode的轨迹叠加（用不同颜色）
         try:
@@ -1518,7 +1482,7 @@ class ScanDataVisualizer_ORIGINAL:
     def _ask_save_confirmation(self) -> bool:
         """询问用户是否保存图表"""
         print("\n" + "="*60)
-        print("💾 是否保存图表？")
+        print("[S] 是否保存图表？")
         print("="*60)
         response = input("输入 'y' 或 'yes' 保存，其他任意键取消: ").strip().lower()
         return response in ['y', 'yes', '是']
@@ -1526,11 +1490,11 @@ class ScanDataVisualizer_ORIGINAL:
     def visualize_csv(self, csv_path: Path) -> bool:
         """分析扫描数据 CSV"""
         run_name = csv_path.stem
-        LOGGER.info(f"📊 正在分析扫描数据: {csv_path.name}")
+        LOGGER.info(f"[#] 正在分析扫描数据: {csv_path.name}")
         
         # 检查文件大小
         if csv_path.stat().st_size == 0:
-            LOGGER.warning(f"⚠️  文件 {csv_path.name} 是空文件，跳过。")
+            LOGGER.warning(f"[!]  文件 {csv_path.name} 是空文件，跳过。")
             return False
         
         # 1. 创建独立输出子目录
@@ -1541,7 +1505,7 @@ class ScanDataVisualizer_ORIGINAL:
             # 2. 加载数据
             df, e_bins, e_hist, e_cdf = load_and_prepare(csv_path)
             if df.empty:
-                LOGGER.warning(f"⚠️  文件 {csv_path.name} 没有有效数据，跳过。")
+                LOGGER.warning(f"[!]  文件 {csv_path.name} 没有有效数据，跳过。")
                 return False
                 
             drones = _detect_drones(df.columns.tolist())
@@ -1551,7 +1515,7 @@ class ScanDataVisualizer_ORIGINAL:
             
             if self.show_plots:
                 plt.ion()  # 开启交互模式
-                LOGGER.info("👀 正在生成预览图表...")
+                LOGGER.info("[Eye] 正在生成预览图表...")
 
             # 扫描进度与覆盖效能分析
             try:
@@ -1665,53 +1629,6 @@ class ScanDataVisualizer_ORIGINAL:
                         LOGGER.error(f"  [失败] 生成图表 '消除效率分析': {e}", exc_info=True)
 
             # 飞行轨迹 2D
-            if drones:
-                try:
-                    fig3, ax3 = plt.subplots(figsize=(8, 8))
-                    for drone in drones:
-                        x_col, y_col = f"{drone}_x", f"{drone}_y"
-                        if x_col in df.columns and y_col in df.columns:
-                            ax3.plot(df[x_col], df[y_col], label=f"无人机: {drone}", linewidth=1)
-                    ax3.set_xlabel("X (m)")
-                    ax3.set_ylabel("Y (m)")
-                    ax3.set_title("水平面飞行轨迹 (X-Y)")
-                    ax3.grid(True, alpha=0.3)
-                    ax3.legend()
-                    fig3.tight_layout()
-                    figures.append((fig3, "trajectories_xy.png"))
-                    LOGGER.info(f"  [成功] 生成图表: 2D轨迹")
-                    if self.show_plots:
-                        plt.show()
-                        plt.pause(0.1)
-                except Exception as e:
-                    LOGGER.error(f"  [失败] 生成图表 '2D轨迹': {e}", exc_info=True)
-
-            # 飞行轨迹 3D
-            if drones:
-                try:
-                    fig4 = plt.figure(figsize=(10, 8))
-                    ax4 = fig4.add_subplot(111, projection="3d")
-                    valid_3d = False
-                    for drone in drones:
-                        x, y, z = f"{drone}_x", f"{drone}_y", f"{drone}_z"
-                        if all(c in df.columns for c in [x, y, z]):
-                            ax4.plot(df[x], df[y], df[z], label=drone)
-                            valid_3d = True
-                    if valid_3d:
-                        ax4.set_xlabel("X")
-                        ax4.set_ylabel("Y")
-                        ax4.set_zlabel("Z")
-                        ax4.set_title("3D 空间轨迹")
-                        ax4.legend()
-                        fig4.tight_layout()
-                        figures.append((fig4, "trajectories_3d.png"))
-                        LOGGER.info(f"  [成功] 生成图表: 3D轨迹")
-                        if self.show_plots:
-                            plt.show()
-                            plt.pause(0.1)
-                except Exception as e:
-                    LOGGER.error(f"  [失败] 生成图表 '3D轨迹': {e}", exc_info=True)
-
             # 熵值分布快照
             if e_bins and e_hist:
                 try:
@@ -1889,67 +1806,6 @@ class ScanDataVisualizer_ORIGINAL:
             except Exception as e:
                 LOGGER.error(f"  [失败] 生成图表 '续航分析': {e}")
 
-            # 7. 飞行姿态稳定性分析 (Attitude Stability Analysis)
-            try:
-                # 检查是否存在姿态数据
-                attitude_drones = []
-                for drone in drones:
-                    if f"{drone}_roll" in df.columns and f"{drone}_pitch" in df.columns:
-                        attitude_drones.append(drone)
-                
-                if attitude_drones:
-                    fig_att, (ax_att1, ax_att2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-                    
-                    for drone in attitude_drones:
-                        # Roll 波动
-                        roll_data = df[f"{drone}_roll"]
-                        ax_att1.plot(df["elapsed_time"], roll_data, label=f'{drone} Roll', alpha=0.7)
-                        
-                        # Pitch 波动
-                        pitch_data = df[f"{drone}_pitch"]
-                        ax_att2.plot(df["elapsed_time"], pitch_data, label=f'{drone} Pitch', alpha=0.7)
-                        
-                        # 计算抖动 (Jitter) - 标准差
-                        roll_jitter = roll_data.std()
-                        pitch_jitter = pitch_data.std()
-                        LOGGER.info(f"  [分析] {drone} 姿态抖动: Roll={roll_jitter:.2f}°, Pitch={pitch_jitter:.2f}°")
-                    
-                    ax_att1.set_ylabel("横滚角 Roll (deg)")
-                    ax_att1.set_title("飞行姿态稳定性分析 (证明无失控风险)", fontsize=14, fontweight='bold')
-                    ax_att1.grid(True, alpha=0.3)
-                    ax_att1.legend(loc='upper right', fontsize=8)
-                    
-                    ax_att2.set_ylabel("俯仰角 Pitch (deg)")
-                    ax_att2.set_xlabel("时间 (s)")
-                    ax_att2.grid(True, alpha=0.3)
-                    ax_att2.legend(loc='upper right', fontsize=8)
-                    
-                    # 稳定性判定标准
-                    all_roll = pd.concat([df[f"{d}_roll"] for d in attitude_drones])
-                    all_pitch = pd.concat([df[f"{d}_pitch"] for d in attitude_drones])
-                    
-                    max_abs_roll = all_roll.abs().max()
-                    max_abs_pitch = all_pitch.abs().max()
-                    avg_jitter = (all_roll.std() + all_pitch.std()) / 2
-                    
-                    if max_abs_roll < 30 and max_abs_pitch < 30 and avg_jitter < 5:
-                        ax_att1.text(0.02, 0.9, "[OK] 飞行姿态极度平稳", transform=ax_att1.transAxes, 
-                                 color='green', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    elif max_abs_roll < 45 and max_abs_pitch < 45:
-                        ax_att1.text(0.02, 0.9, "[WARN] 飞行存在波动但受控", transform=ax_att1.transAxes, 
-                                 color='orange', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    else:
-                        ax_att1.text(0.02, 0.9, "[FAIL] 姿态剧烈震荡/失控风险", transform=ax_att1.transAxes, 
-                                 color='red', fontweight='bold', bbox=dict(facecolor='white', alpha=0.8))
-                    
-                    fig_att.tight_layout()
-                    figures.append((fig_att, "flight_attitude_stability.png"))
-                    LOGGER.info(f"  [成功] 生成图表: 飞行姿态稳定性")
-                    if self.show_plots:
-                        plt.show()
-                        plt.pause(0.1)
-            except Exception as e:
-                LOGGER.error(f"  [失败] 生成图表 '姿态稳定性': {e}")
 
             # 8. 实时训练奖励与策略同步分析 (Training Sync Analysis)
             try:
@@ -2010,13 +1866,13 @@ class ScanDataVisualizer_ORIGINAL:
                 if self._ask_save_confirmation():
                     for fig, filename in figures:
                         fig.savefig(run_dir / filename, dpi=150)
-                    LOGGER.info(f"✅ 图表已保存到: {run_dir}")
+                    LOGGER.info(f"[OK] 图表已保存到: {run_dir}")
                     # 关闭所有图表
                     for fig, _ in figures:
                         plt.close(fig)
                     return True
                 else:
-                    LOGGER.info("❌ 已取消保存")
+                    LOGGER.info("[X] 已取消保存")
                     # 关闭所有图表
                     for fig, _ in figures:
                         plt.close(fig)
@@ -2026,11 +1882,11 @@ class ScanDataVisualizer_ORIGINAL:
                 for fig, filename in figures:
                     fig.savefig(run_dir / filename, dpi=150)
                     plt.close(fig)
-                LOGGER.info(f"✅ 扫描数据分析完成，结果保存在: {run_dir}")
+                LOGGER.info(f"[OK] 扫描数据分析完成，结果保存在: {run_dir}")
                 return True
 
         except Exception as e:
-            LOGGER.error(f"❌ 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
+            LOGGER.error(f"[X] 分析扫描数据失败 {csv_path.name}: {e}", exc_info=True)
             return False
 
 
@@ -2114,10 +1970,10 @@ class DataComparer:
     def compare_scan_data(self, csv_files: List[Path]) -> bool:
         """对比多份扫描数据"""
         if len(csv_files) < 2:
-            LOGGER.warning("⚠️  对比分析至少需要 2 份数据文件")
+            LOGGER.warning("[!]  对比分析至少需要 2 份数据文件")
             return False
         
-        LOGGER.info(f"📊 开始对比分析 {len(csv_files)} 份扫描数据...")
+        LOGGER.info(f"[#] 开始对比分析 {len(csv_files)} 份扫描数据...")
         
         all_data = []
         for f in csv_files:
@@ -2127,7 +1983,7 @@ class DataComparer:
                     display_name = self._get_display_name(df, f.stem)
                     all_data.append((display_name, df))
             except Exception as e:
-                LOGGER.error(f"❌ 读取对比文件失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取对比文件失败 {f.name}: {e}")
         
         if not all_data:
             return False
@@ -2255,7 +2111,7 @@ class DataComparer:
         if len(files) < 2:
             return False
             
-        LOGGER.info(f"📊 开始跨格式对比分析 {len(files)} 份训练奖励数据...")
+        LOGGER.info(f"[#] 开始跨格式对比分析 {len(files)} 份训练奖励数据...")
         
         all_stats = []
         for f in files:
@@ -2280,10 +2136,10 @@ class DataComparer:
                         display_name = self._get_display_name(df, f.stem)
                         all_stats.append((display_name, df))
             except Exception as e:
-                LOGGER.error(f"❌ 读取训练对比文件失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取训练对比文件失败 {f.name}: {e}")
                 
         if not all_stats:
-            LOGGER.warning("⚠️ 没有找到有效的训练统计数据进行对比")
+            LOGGER.warning("[!] 没有找到有效的训练统计数据进行对比")
             return False
             
         compare_dir = self.output_dir / "comparison_training"
@@ -2337,7 +2193,7 @@ class DataComparer:
         else:
             plt.close(fig2)
             
-        LOGGER.info(f"✅ 训练对比分析完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"[OK] 训练对比分析完成，结果保存在: {compare_dir}")
         
         if self.show_plots:
             plt.show()
@@ -2356,7 +2212,7 @@ class DataComparer:
         Returns:
             bool: 对比分析是否成功
         """
-        LOGGER.info("📊 开始 DDPG vs DQN 算法对比分析...")
+        LOGGER.info("[#] 开始 DDPG vs DQN 算法对比分析...")
         
         # 自动发现文件
         if not ddpg_files:
@@ -2385,7 +2241,7 @@ class DataComparer:
                 dqn_files.extend(dqn_csv_files)
         
         if not ddpg_files and not dqn_files:
-            LOGGER.warning("⚠️ 未找到任何 DDPG 或 DQN 训练数据文件")
+            LOGGER.warning("[!] 未找到任何 DDPG 或 DQN 训练数据文件")
             return False
         
         LOGGER.info(f"  发现 {len(ddpg_files)} 个 DDPG 训练数据，{len(dqn_files)} 个 DQN 训练数据")
@@ -2408,7 +2264,7 @@ class DataComparer:
                     if not df.empty and 'reward' in df.columns:
                         ddpg_data.append((f"DDPG-{f.stem}", df, 'DDPG'))
             except Exception as e:
-                LOGGER.error(f"❌ 读取 DDPG 文件失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取 DDPG 文件失败 {f.name}: {e}")
         
         # 加载 DQN 数据
         dqn_data = []
@@ -2429,11 +2285,11 @@ class DataComparer:
                             if not df.empty and 'reward' in df.columns:
                                 dqn_data.append((f"DQN-{f.parent.name}", df, 'DQN'))
             except Exception as e:
-                LOGGER.error(f"❌ 读取 DQN 文件失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取 DQN 文件失败 {f.name}: {e}")
         
         all_data = ddpg_data + dqn_data
         if len(all_data) < 2:
-            LOGGER.warning("⚠️ 对比分析至少需要 2 份有效数据（1份DDPG + 1份DQN）")
+            LOGGER.warning("[!] 对比分析至少需要 2 份有效数据（1份DDPG + 1份DQN）")
             return False
         
         # 创建对比结果目录
@@ -2621,9 +2477,9 @@ class DataComparer:
             report.write("  - 可结合使用：DQN控制移动 + DDPG优化APF权重\n")
             report.write("\n" + "="*80 + "\n")
         
-        LOGGER.info(f"✅ DDPG vs DQN 对比分析完成，结果保存在: {compare_dir}")
-        LOGGER.info(f"  📈 生成图表: reward_curves, convergence_speed, final_performance, stability")
-        LOGGER.info(f"  📄 生成报告: {report_path.name}")
+        LOGGER.info(f"[OK] DDPG vs DQN 对比分析完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"  [^] 生成图表: reward_curves, convergence_speed, final_performance, stability")
+        LOGGER.info(f"  [File] 生成报告: {report_path.name}")
         
         if self.show_plots:
             plt.show()
@@ -2644,7 +2500,7 @@ class DataComparer:
         Returns:
             bool: 对比分析是否成功
         """
-        LOGGER.info("📊 开始 DDPG vs DQN 全方位对比分析（环境、电量、扫描）...")
+        LOGGER.info("[#] 开始 DDPG vs DQN 全方位对比分析（环境、电量、扫描）...")
         
         # 自动发现文件
         if not ddpg_scan_files:
@@ -2660,7 +2516,7 @@ class DataComparer:
                 dqn_scan_files.extend(list(dqn_scan_dir.glob("scan_data_*.csv")))
         
         if not ddpg_scan_files and not dqn_scan_files:
-            LOGGER.warning("⚠️  未找到任何 DDPG 或 DQN 的扫描数据文件")
+            LOGGER.warning("[!]  未找到任何 DDPG 或 DQN 的扫描数据文件")
             return False
         
         LOGGER.info(f"  发现 {len(ddpg_scan_files)} 个 DDPG 扫描数据，{len(dqn_scan_files)} 个 DQN 扫描数据")
@@ -2675,7 +2531,7 @@ class DataComparer:
                     df = normalize_percentage_column(df, 'scan_ratio')
                     ddpg_data.append((f"DDPG-{f.stem}", df, 'DDPG'))
             except Exception as e:
-                LOGGER.error(f"❌ 读取 DDPG 扫描数据失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取 DDPG 扫描数据失败 {f.name}: {e}")
         
         # 加载 DQN 扫描数据
         dqn_data = []
@@ -2687,11 +2543,11 @@ class DataComparer:
                     df = normalize_percentage_column(df, 'scan_ratio')
                     dqn_data.append((f"DQN-{f.stem}", df, 'DQN'))
             except Exception as e:
-                LOGGER.error(f"❌ 读取 DQN 扫描数据失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取 DQN 扫描数据失败 {f.name}: {e}")
         
         all_data = ddpg_data + dqn_data
         if len(all_data) < 2:
-            LOGGER.warning("⚠️  全方位对比至少需要 2 份有效数据（1份DDPG + 1份DQN）")
+            LOGGER.warning("[!]  全方位对比至少需要 2 份有效数据（1份DDPG + 1份DQN）")
             return False
         
         # 创建对比结果目录
@@ -2927,9 +2783,9 @@ class DataComparer:
             report.write("  - 建议根据具体场景选择或结合使用\n")
             report.write("\n" + "="*80 + "\n")
         
-        LOGGER.info(f"✅ DDPG vs DQN 全方位对比完成，结果保存在: {compare_dir}")
-        LOGGER.info(f"  📈 生成图表: scan_coverage, entropy_reduction, battery_consumption, scan_efficiency, energy_efficiency, completion_time")
-        LOGGER.info(f"  📄 生成报告: {report_path.name}")
+        LOGGER.info(f"[OK] DDPG vs DQN 全方位对比完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"  [^] 生成图表: scan_coverage, entropy_reduction, battery_consumption, scan_efficiency, energy_efficiency, completion_time")
+        LOGGER.info(f"  [File] 生成报告: {report_path.name}")
         
         if self.show_plots:
             plt.show()
@@ -2941,7 +2797,7 @@ class DataComparer:
         if len(csv_files) < 2:
             return False
             
-        LOGGER.info(f"📊 开始对比分析 {len(csv_files)} 份 Crazyflie 数据...")
+        LOGGER.info(f"[#] 开始对比分析 {len(csv_files)} 份 Crazyflie 数据...")
         
         all_data = []
         for f in csv_files:
@@ -2950,7 +2806,7 @@ class DataComparer:
                 if not df.empty:
                     all_data.append((f.stem, df))
             except Exception as e:
-                LOGGER.error(f"❌ 读取对比文件失败 {f.name}: {e}")
+                LOGGER.error(f"[X] 读取对比文件失败 {f.name}: {e}")
                 
         if not all_data:
             return False
@@ -2977,7 +2833,7 @@ class DataComparer:
         else:
             plt.close(fig)
             
-        LOGGER.info(f"✅ 对比分析完成，结果保存在: {compare_dir}")
+        LOGGER.info(f"[OK] 对比分析完成，结果保存在: {compare_dir}")
         
         if self.show_plots:
             plt.show()
@@ -3012,7 +2868,7 @@ def main():
     
     # 处理输入参数
     if args.auto:
-        LOGGER.info("🔍 自动扫描数据文件...")
+        LOGGER.info("[Magnifier] 自动扫描数据文件...")
         crazyflie_files, scan_files, dqn_data_files = auto_discover_data()
         files_to_process.extend(crazyflie_files)
         files_to_process.extend(scan_files)
@@ -3042,7 +2898,7 @@ def main():
                 files_to_process.extend(list(dir_path.glob("*.csv")))
     
     if not files_to_process and not dqn_files:
-        LOGGER.error("❌ 未找到任何数据文件")
+        LOGGER.error("[X] 未找到任何数据文件")
         LOGGER.info("提示: 使用 --auto 自动扫描，或使用 --json/--csv/--dir 指定文件")
         return 1
     
@@ -3053,27 +2909,27 @@ def main():
     # DDPG vs DQN 算法对比分析
     if args.compare_algorithms:
         LOGGER.info("\n" + "="*60)
-        LOGGER.info("🔎 准备执行 DDPG vs DQN 基础对比分析...")
+        LOGGER.info("[Search] 准备执行 DDPG vs DQN 基础对比分析...")
         LOGGER.info("="*60)
         comparer = DataComparer(output_dir, show_plots=args.show)
         result = comparer.compare_ddpg_vs_dqn()
         if result:
-            LOGGER.info("✅ 基础对比分析完成")
+            LOGGER.info("[OK] 基础对比分析完成")
         else:
-            LOGGER.warning("⚠️  基础对比分析未生成结果（可能是缺少训练奖励数据文件）")
+            LOGGER.warning("[!]  基础对比分析未生成结果（可能是缺少训练奖励数据文件）")
         LOGGER.info("="*60 + "\n")
     
     # DDPG vs DQN 全方位对比分析（包含环境数据、电量、效率等）
     if args.compare_algorithms_full:
         LOGGER.info("\n" + "="*60)
-        LOGGER.info("🔎 准备执行 DDPG vs DQN 全方位对比分析...")
+        LOGGER.info("[Search] 准备执行 DDPG vs DQN 全方位对比分析...")
         LOGGER.info("="*60)
         comparer = DataComparer(output_dir, show_plots=args.show)
         result = comparer.compare_ddpg_vs_dqn_full()
         if result:
-            LOGGER.info("✅ 全方位对比分析完成")
+            LOGGER.info("[OK] 全方位对比分析完成")
         else:
-            LOGGER.warning("⚠️  全方位对比分析未生成结果（可能是缺少 scan_data 文件）")
+            LOGGER.warning("[!]  全方位对比分析未生成结果（可能是缺少 scan_data 文件）")
         LOGGER.info("="*60 + "\n")
     
     # 对比分析
@@ -3105,12 +2961,12 @@ def main():
     
     # 处理 DDPG/Crazyflie/Scan 数据
     LOGGER.info("\n" + "="*60)
-    LOGGER.info("📋 开始处理单独数据分析...")
+    LOGGER.info("[Mode] 开始处理单独数据分析...")
     LOGGER.info("="*60)
     
     for file_path in files_to_process:
         if not file_path.exists():
-            LOGGER.warning(f"⚠️  文件不存在: {file_path}")
+            LOGGER.warning(f"[!]  文件不存在: {file_path}")
             fail_count += 1
             continue
         
@@ -3136,21 +2992,21 @@ def main():
                     else:
                         fail_count += 1
                 else:
-                    LOGGER.warning(f"⚠️  未知的 CSV 类型: {file_path.name}")
+                    LOGGER.warning(f"[!]  未知的 CSV 类型: {file_path.name}")
                     fail_count += 1
         except Exception as e:
-            LOGGER.error(f"❌ 处理文件失败 {file_path.name}: {e}")
+            LOGGER.error(f"[X] 处理文件失败 {file_path.name}: {e}")
             fail_count += 1
     
     # 处理 DQN 数据
     if dqn_files:
         LOGGER.info("\n" + "-"*60)
-        LOGGER.info("🤖 开始处理 DQN 训练数据分析...")
+        LOGGER.info("[Robot] 开始处理 DQN 训练数据分析...")
         LOGGER.info("-"*60)
     
     for dqn_meta_path in dqn_files:
         if not dqn_meta_path.exists():
-            LOGGER.warning(f"⚠️  文件不存在: {dqn_meta_path}")
+            LOGGER.warning(f"[!]  文件不存在: {dqn_meta_path}")
             fail_count += 1
             continue
         
@@ -3168,7 +3024,7 @@ def main():
                         else:
                             fail_count += 1
                     else:
-                        LOGGER.warning(f"⚠️  DQN 训练统计 CSV 不存在: {csv_path}")
+                        LOGGER.warning(f"[!]  DQN 训练统计 CSV 不存在: {csv_path}")
                         fail_count += 1
             elif dqn_meta_path.suffix == '.csv':
                 # 直接处理 CSV 文件
@@ -3178,21 +3034,21 @@ def main():
                 else:
                     fail_count += 1
         except Exception as e:
-            LOGGER.error(f"❌ 处理 DQN 文件失败 {dqn_meta_path.name}: {e}")
+            LOGGER.error(f"[X] 处理 DQN 文件失败 {dqn_meta_path.name}: {e}")
             fail_count += 1
     
     LOGGER.info(f"\n{'='*60}")
     LOGGER.info(f"处理完成!")
     LOGGER.info(f"{'='*60}")
-    LOGGER.info(f"  ✅ 成功: {success_count} 个")
+    LOGGER.info(f"  [OK] 成功: {success_count} 个")
     if scan_success > 0:
         LOGGER.info(f"     - 扫描数据分析 (DDPG/DQN): {scan_success} 个")
     if dqn_success > 0:
         LOGGER.info(f"     - DQN 训练分析: {dqn_success} 个")
     if other_success > 0:
         LOGGER.info(f"     - 其他数据分析: {other_success} 个")
-    LOGGER.info(f"  ❌ 失败: {fail_count} 个")
-    LOGGER.info(f"  📁 结果目录: {output_dir.absolute()}")
+    LOGGER.info(f"  [X] 失败: {fail_count} 个")
+    LOGGER.info(f"  [Folder] 结果目录: {output_dir.absolute()}")
     LOGGER.info(f"{'='*60}\n")
     
     if args.show:
