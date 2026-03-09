@@ -129,6 +129,9 @@ class DDPGTrainingVisualizer(BaseVisualizer):
             reward_history = cts.get("reward_history")
             if isinstance(reward_history, list):
                 data["reward_history"] = reward_history
+            episode_reward_history = cts.get("episode_reward_history")
+            if isinstance(episode_reward_history, list):
+                data["episode_reward_history"] = episode_reward_history
 
             for key in (
                 "avg_reward",
@@ -147,6 +150,7 @@ class DDPGTrainingVisualizer(BaseVisualizer):
             data["current_episode_reward"] = self.current_episode_reward
             data["steps_per_sec"] = self._compute_steps_per_sec()
             data["reward_history"] = list(self.reward_history)
+            data["episode_reward_history"] = list(self.reward_history)
             data["total_training_time"] = time.time() - self.training_start_time
 
             if self.episode_rewards:

@@ -421,12 +421,29 @@ class MultiDroneAlgorithmServer:
             if len(reward_history) > 500:
                 reward_history.pop(0)
 
-            if reward_history:
-                self.current_training_stats["avg_reward"] = sum(reward_history) / len(
-                    reward_history
+            if "episode_reward_history" not in self.current_training_stats:
+                self.current_training_stats["episode_reward_history"] = []
+            if "last_reward_history_episode" not in self.current_training_stats:
+                self.current_training_stats["last_reward_history_episode"] = -1
+            episode_reward_history = self.current_training_stats["episode_reward_history"]
+            last_reward_history_episode = int(
+                self.current_training_stats.get("last_reward_history_episode", -1)
+            )
+            if step > 0 and episode != last_reward_history_episode:
+                episode_reward_history.append(total_reward)
+                self.current_training_stats["last_reward_history_episode"] = episode
+            elif step > 0 and episode_reward_history:
+                episode_reward_history[-1] = total_reward
+            if len(episode_reward_history) > 500:
+                episode_reward_history.pop(0)
+
+            reward_stats_source = episode_reward_history if episode_reward_history else reward_history
+            if reward_stats_source:
+                self.current_training_stats["avg_reward"] = sum(reward_stats_source) / len(
+                    reward_stats_source
                 )
-                self.current_training_stats["max_reward"] = max(reward_history)
-                self.current_training_stats["min_reward"] = min(reward_history)
+                self.current_training_stats["max_reward"] = max(reward_stats_source)
+                self.current_training_stats["min_reward"] = min(reward_stats_source)
             else:
                 self.current_training_stats["avg_reward"] = 0.0
                 self.current_training_stats["max_reward"] = 0.0
