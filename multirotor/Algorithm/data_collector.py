@@ -1,4 +1,4 @@
-"""
+﻿"""
 数据采集模块
 功能：独立的数据采集系统，定期统计AOI区域内栅格的侦察状态和权重值
 """
@@ -35,7 +35,9 @@ class DataCollector:
         self.csv_writer = None
         self.training_csv_file = None  # 新增：训练数据 CSV 文件
         self.training_csv_writer = None  # 新增：训练数据 CSV writer
-        self.start_time = time.time()
+        self.global_start_time = time.time()
+        self.start_time = self.global_start_time
+        self.episode_start_time = self.global_start_time
         self.header_written = False  # 表头是否已写入
         self.training_header_written = False  # 新增：训练数据表头是否已写入
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
@@ -50,6 +52,7 @@ class DataCollector:
         self.current_episode_reward = 0.0
         self.current_episode_length = 0
         self.current_episode_weights = []  # 记录当前 episode 的权重用于取平均
+        self.current_episode_elapsed_time = 0.0
         self.last_episode = -1  # 用于检测 episode 切换
         self.last_step = -1     # 用于检测 step 切换
         self.last_scanned_count = 0  # 记录最近一次扫描数
@@ -90,8 +93,9 @@ class DataCollector:
             self.training_csv_filename = training_csv_filename
                     
             # 写入训练数据表头 (新增元数据字段以支持跨算法比较)
-            header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'timestamp', 'scan_efficiency',
+            header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
                       'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
+                      'reset_reason', 'collision_count', 'out_of_range_count', 'max_global_scan_ratio', 'min_global_avg_entropy',
                       'algorithm_type', 'env_type', 'control_mode']
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
@@ -159,7 +163,16 @@ class DataCollector:
             return
         
         self.running = True
-        self.start_time = time.time()
+        self.global_start_time = time.time()
+        self.start_time = self.global_start_time
+        self.episode_start_time = self.global_start_time
+        self.current_episode_reward = 0.0
+        self.current_episode_length = 0
+        self.current_episode_weights = []
+        self.current_episode_elapsed_time = 0.0
+        self.last_episode = -1
+        self.last_step = -1
+        self.last_scanned_count = 0
         
         # 兼容旧版本调用（如果没有传锁）
         if data_lock is None:
@@ -216,19 +229,18 @@ class DataCollector:
                 logger.error(f"关闭训练数据文件失败: {str(e)}")
     
     def _flush_training_data(self):
-        """确保最后的训练数据被写入文件"""
+        """???????????????"""
         if self.training_csv_writer and self.last_episode >= 0 and self.current_episode_length > 0:
             try:
-                elapsed_time = time.time() - self.start_time
+                elapsed_time = time.time() - self.global_start_time
+                episode_elapsed_time = float(self.current_episode_elapsed_time)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                scan_efficiency = self.last_scanned_count / max(elapsed_time, 1.0)
-                
-                # 计算平均权重
+                scan_efficiency = self.last_scanned_count / max(episode_elapsed_time, 1.0)
+
                 avg_weights = [0.0] * 5
                 if self.current_episode_weights:
                     avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
-                # 获取元数据 (默认空字符串)
                 with self.external_data_lock:
                     algo_type = self.external_data.get('algorithm_type', '')
                     env_type = self.external_data.get('env_type', '')
@@ -239,8 +251,9 @@ class DataCollector:
                     f"{self.current_episode_reward:.2f}",
                     self.current_episode_length,
                     self.last_scanned_count,
-                    int(elapsed_time), # 此处 elapsed_time 作为训练步长累计的一个参考
+                    int(elapsed_time),
                     f"{elapsed_time:.2f}",
+                    f"{episode_elapsed_time:.2f}",
                     timestamp,
                     f"{scan_efficiency:.2f}",
                     f"{avg_weights[0]:.3f}",
@@ -248,20 +261,26 @@ class DataCollector:
                     f"{avg_weights[2]:.3f}",
                     f"{avg_weights[3]:.3f}",
                     f"{avg_weights[4]:.3f}",
+                    self.external_data.get('reset_reason', ''),
+                    int(self.external_data.get('collision_count', 0)),
+                    int(self.external_data.get('out_of_range_count', 0)),
+                    f"{float(self.external_data.get('max_global_scan_ratio', 0.0)):.2f}%",
+                    f"{float(self.external_data.get('min_global_avg_entropy', 100.0)):.2f}",
                     algo_type,
                     env_type,
-                    ctrl_mode
+                    ctrl_mode,
                 ]
                 self.training_csv_writer.writerow(training_row)
                 self.training_csv_file.flush()
-                logger.info(f"✅ 已记录 Episode {self.last_episode} 统计数据 (奖励: {self.current_episode_reward:.2f}, 长度: {self.current_episode_length})")
-                # 重置防止重复写入
+                logger.info(
+                    f"??? Episode {self.last_episode} ???? (??: {self.current_episode_reward:.2f}, ??: {self.current_episode_length})"
+                )
                 self.last_episode = -1
                 self.current_episode_length = 0
+                self.current_episode_elapsed_time = 0.0
                 self.current_episode_weights = []
             except Exception as e:
-                logger.error(f"冲刷训练数据失败: {e}")
-
+                logger.error(f"????????: {e}")
     def _collection_thread(self,
                           get_grid_data_func,
                           get_runtime_data_func,
@@ -418,15 +437,27 @@ class DataCollector:
                 # 如果表头未写入，先写入表头
                 if self.csv_writer and not self.header_written:
                     header = [
-                        'episode',        # 新增：训练轮次标识
+                        'episode',
                         'timestamp',
                         'elapsed_time',
+                        'episode_elapsed_time',
+                        'episode_step',
+                        'step_reward',
+                        'episode_reward',
                         'scanned_count',
                         'unscanned_count',
                         'total_count',
+                        'global_scanned_count',
+                        'global_total_count',
                         'scan_ratio',
+                        'local_scan_ratio',
                         'global_avg_entropy',
                         'global_scan_ratio',
+                        'reset_reason',
+                        'collision_count',
+                        'out_of_range_count',
+                        'max_global_scan_ratio',
+                        'min_global_avg_entropy',
                         'entropy_bins',
                         'entropy_hist',
                         'entropy_cdf',
@@ -435,15 +466,15 @@ class DataCollector:
                         'distance_coefficient',
                         'leader_range_coefficient',
                         'direction_retention_coefficient',
-                        'hl_action',      # 新增：分层强化学习高层动作索引
-                        'hl_goal_x',      # 新增：分层强化学习高层目标X
-                        'hl_goal_y',      # 新增：分层强化学习高层目标Y
-                        'hl_goal_z',      # 新增：分层强化学习高层目标Z
-                        'algorithm_type', # 新增：实验标签
-                        'env_type',       # 新增：实验标签
-                        'control_mode'    # 新增：实验标签
+                        'hl_action',
+                        'hl_goal_x',
+                        'hl_goal_y',
+                        'hl_goal_z',
+                        'algorithm_type',
+                        'env_type',
+                        'control_mode'
                     ]
-                    # 为每个无人机添加坐标列
+                    # ?????????????????
                     for drone_name in self.drone_names_list:
                         header.append(f'{drone_name}_x')
                         header.append(f'{drone_name}_y')
@@ -464,7 +495,7 @@ class DataCollector:
                 # 记录到 scan_data CSV 文件（不包含训练数据）
                 if self.csv_writer:
                     current_time = time.time()
-                    elapsed_time = current_time - self.start_time
+                    elapsed_time = current_time - self.global_start_time
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     bins, hist, cdf = self._calc_entropy_distribution(entropies)
@@ -478,20 +509,45 @@ class DataCollector:
                         algo_type = self.external_data.get('algorithm_type', '')
                         env_type = self.external_data.get('env_type', '')
                         ctrl_mode = self.external_data.get('control_mode', '')
+                        reset_reason = self.external_data.get('reset_reason', '')
+                        collision_count = int(self.external_data.get('collision_count', 0))
+                        out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
+                        max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
+                        min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', global_avg_entropy))
 
                     # 获取当前episode（从training_data或external_data）
                     current_episode = training_data.get('episode', self.external_data.get('episode', -1))
+                    current_step = training_data.get('step', self.external_data.get('step', -1))
+                    episode_elapsed_time = float(
+                        training_data.get('episode_elapsed_time', self.external_data.get('episode_elapsed_time', 0.0))
+                    )
+                    step_reward = float(training_data.get('step_reward', training_data.get('reward', 0.0)))
+                    episode_reward = float(
+                        training_data.get('episode_reward', training_data.get('total_reward', self.external_data.get('episode_reward', 0.0)))
+                    )
 
                     row = [
-                        current_episode,  # 新增：episode字段
+                        current_episode,
                         timestamp,
                         f"{elapsed_time:.2f}",
+                        f"{episode_elapsed_time:.2f}",
+                        current_step,
+                        f"{step_reward:.4f}",
+                        f"{episode_reward:.4f}",
                         scanned_count,
                         unscanned_count,
                         total_count,
+                        global_scanned_count,
+                        global_total_count,
+                        f"{scan_ratio:.2f}%",
                         f"{scan_ratio:.2f}%",
                         f"{global_avg_entropy:.2f}",
                         f"{global_scan_ratio:.2f}%",
+                        reset_reason,
+                        collision_count,
+                        out_of_range_count,
+                        f"{max_global_scan_ratio:.2f}%",
+                        f"{min_global_avg_entropy:.2f}",
                         json.dumps(bins, ensure_ascii=False),
                         json.dumps(hist, ensure_ascii=False),
                         json.dumps(cdf, ensure_ascii=False),
@@ -540,11 +596,11 @@ class DataCollector:
                 
                 # 写入训练数据（每个 episode 完成时）
                 if self.training_csv_writer and training_data:
-                    current_episode = training_data.get('episode', 0)
-                    current_step = training_data.get('step', -1)
-                    step_reward = training_data.get('reward', 0.0)
-                    
-                    # 提取当前权重
+                    current_episode = int(training_data.get('episode', 0))
+                    current_step = int(training_data.get('step', -1))
+                    step_reward = float(training_data.get('step_reward', training_data.get('reward', 0.0)))
+                    episode_elapsed_time = float(training_data.get('episode_elapsed_time', 0.0))
+
                     current_weights = [
                         weights.get('repulsionCoefficient', 0.0),
                         weights.get('entropyCoefficient', 0.0),
@@ -552,32 +608,35 @@ class DataCollector:
                         weights.get('leaderRangeCoefficient', 0.0),
                         weights.get('directionRetentionCoefficient', 0.0)
                     ]
-                    
-                    # 累计 episode 数据
+
                     if current_episode != self.last_episode:
-                        # Episode 切换，写入上一个 episode 的数据
                         if self.last_episode >= 0 and self.current_episode_length > 0:
-                            # 计算上一个 episode 的平均权重
                             avg_weights = [0.0] * 5
                             if self.current_episode_weights:
                                 avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
-                            # 获取元数据
                             with self.external_data_lock:
                                 algo_type = self.external_data.get('algorithm_type', '')
                                 env_type = self.external_data.get('env_type', '')
                                 ctrl_mode = self.external_data.get('control_mode', '')
 
-                            elapsed_time = time.time() - self.start_time
-                            scan_efficiency = self.last_scanned_count / max(elapsed_time, 1.0)
-                            
+                                reset_reason = self.external_data.get('reset_reason', '')
+                                collision_count = int(self.external_data.get('collision_count', 0))
+                                out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
+                                max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
+                                min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', 100.0))
+                            elapsed_time = time.time() - self.global_start_time
+                            previous_episode_elapsed = float(self.current_episode_elapsed_time)
+                            scan_efficiency = self.last_scanned_count / max(previous_episode_elapsed, 1.0)
+
                             training_row = [
                                 self.last_episode,
                                 f"{self.current_episode_reward:.2f}",
                                 self.current_episode_length,
                                 self.last_scanned_count,
-                                int(elapsed_time),  # timestep
+                                int(elapsed_time),
                                 f"{elapsed_time:.2f}",
+                                f"{previous_episode_elapsed:.2f}",
                                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 f"{scan_efficiency:.2f}",
                                 f"{avg_weights[0]:.3f}",
@@ -585,31 +644,42 @@ class DataCollector:
                                 f"{avg_weights[2]:.3f}",
                                 f"{avg_weights[3]:.3f}",
                                 f"{avg_weights[4]:.3f}",
+                                reset_reason,
+                                collision_count,
+                                out_of_range_count,
+                                f"{max_global_scan_ratio:.2f}%",
+                                f"{min_global_avg_entropy:.2f}",
                                 algo_type,
                                 env_type,
                                 ctrl_mode
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()
-                            logger.info(f"✅ 已记录 Episode {self.last_episode} 统计数据 (奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length})")
-                        
-                        # 重置计数器
+                            logger.info(f"??? Episode {self.last_episode} ???? (??: {self.current_episode_reward:.2f}, ??: {self.current_episode_length})")
+
                         self.last_episode = current_episode
-                        self.current_episode_reward = step_reward
-                        self.current_episode_length = 1
+                        self.current_episode_elapsed_time = episode_elapsed_time
                         self.last_step = current_step
-                        self.current_episode_weights = [current_weights]
-                    elif current_step != self.last_step:
-                        # 同一 episode，且是新的一步，才累计奖励和长度
-                        self.current_episode_reward += step_reward
-                        self.current_episode_length += 1
-                        self.last_step = current_step
-                        self.current_episode_weights.append(current_weights)
-                
+                        if current_step > 0:
+                            self.current_episode_reward = step_reward
+                            self.current_episode_length = 1
+                            self.current_episode_weights = [current_weights]
+                        else:
+                            self.current_episode_reward = 0.0
+                            self.current_episode_length = 0
+                            self.current_episode_weights = []
+                    else:
+                        self.current_episode_elapsed_time = episode_elapsed_time
+                        if current_step > 0 and current_step != self.last_step:
+                            self.current_episode_reward += step_reward
+                            self.current_episode_length += 1
+                            self.last_step = current_step
+                            self.current_episode_weights.append(current_weights)
             except Exception as e:
                 logger.error(f"数据采集线程出错: {str(e)}")
                 logger.debug(traceback.format_exc())
                 time.sleep(1)  # 出错后等待1秒再继续
         
         logger.info("数据采集线程已停止")
+
 

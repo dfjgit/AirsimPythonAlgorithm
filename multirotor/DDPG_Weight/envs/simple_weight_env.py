@@ -39,6 +39,12 @@ class SimpleWeightEnv(gym.Env):
         step_duration=5.0,
         safety_limit=True,
         max_weight_delta=0.5,
+        action_smoothing=0.35,
+        weight_edge_margin=0.35,
+        weight_edge_push=0.25,
+        min_distance_weight=1.0,
+        max_entropy_weight=4.5,
+        max_leader_weight=4.5,
     ):
         super(SimpleWeightEnv, self).__init__()
 
@@ -112,10 +118,32 @@ class SimpleWeightEnv(gym.Env):
         self.episode_count = 0  # 记录Episode编号
         self.total_episode_reward = 0.0  # 记录当前Episode的总奖励
         self.last_action = np.zeros(7)  # 记录上一步的动作（7维），用于电量消耗计算
+        self._episode_max_global_scan_ratio = 0.0
+        self._episode_min_global_entropy = 100.0
         self.prev_velocity = np.zeros(3, dtype=np.float32)
         self.prev_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
         self.safety_limit = safety_limit
         self.max_weight_delta = max_weight_delta
+        self.action_smoothing = float(np.clip(action_smoothing, 0.0, 1.0))
+        self.weight_edge_margin = max(0.0, float(weight_edge_margin))
+        self.weight_edge_push = float(np.clip(weight_edge_push, 0.0, 1.0))
+        self.min_distance_weight = float(np.clip(min_distance_weight, self.reward_config.weight_min, self.reward_config.weight_max))
+        self.max_entropy_weight = float(np.clip(max_entropy_weight, self.reward_config.weight_min, self.reward_config.weight_max))
+        self.max_leader_weight = float(np.clip(max_leader_weight, self.reward_config.weight_min, self.reward_config.weight_max))
+        self._apf_lower_bounds = np.array([
+            self.reward_config.weight_min,
+            self.reward_config.weight_min,
+            self.min_distance_weight,
+            self.reward_config.weight_min,
+            self.reward_config.weight_min,
+        ], dtype=np.float32)
+        self._apf_upper_bounds = np.array([
+            self.reward_config.weight_max,
+            self.max_entropy_weight,
+            self.reward_config.weight_max,
+            self.max_leader_weight,
+            self.reward_config.weight_max,
+        ], dtype=np.float32)
         self._last_reset_reason = ""  # 记录上次重置原因
         self._out_of_range_count = 0  # 出圈计数器
         self._out_of_range_start_time = None  # 出圈开始时间
@@ -139,6 +167,27 @@ class SimpleWeightEnv(gym.Env):
     def _first_reset_logic(self):
         """处理首次重置逻辑"""
         pass  # Placeholder if needed, or just keep as is in reset()
+
+    def _stabilize_apf_action(self, apf_action: np.ndarray) -> np.ndarray:
+        """??????????????????????"""
+        stabilized = np.array(apf_action, dtype=np.float32)
+
+        if self.action_smoothing > 0.0 and (self.step_count > 0 or self._has_initial_action):
+            last_apf = self.last_action[:5].astype(np.float32)
+            stabilized = (1.0 - self.action_smoothing) * last_apf + self.action_smoothing * stabilized
+
+        if self.weight_edge_margin > 0.0 and self.weight_edge_push > 0.0:
+            centers = (self._apf_lower_bounds + self._apf_upper_bounds) / 2.0
+            lower_trigger = np.minimum(self._apf_lower_bounds + self.weight_edge_margin, centers)
+            upper_trigger = np.maximum(self._apf_upper_bounds - self.weight_edge_margin, centers)
+
+            for idx in range(len(stabilized)):
+                if stabilized[idx] < lower_trigger[idx]:
+                    stabilized[idx] += (lower_trigger[idx] - stabilized[idx]) * self.weight_edge_push
+                elif stabilized[idx] > upper_trigger[idx]:
+                    stabilized[idx] -= (stabilized[idx] - upper_trigger[idx]) * self.weight_edge_push
+
+        return np.clip(stabilized, self._apf_lower_bounds, self._apf_upper_bounds)
 
     def _apply_unified_config(self):
         """应用统一环境配置，确保物理规则一致性（方案 B）"""
@@ -313,6 +362,8 @@ class SimpleWeightEnv(gym.Env):
         self._last_collision_timestamp = 0
         self._last_collision_wall_time = 0.0
         self._episode_wall_start_time = time.time()
+        self._episode_max_global_scan_ratio = 0.0
+        self._episode_min_global_entropy = 100.0
 
         state = self._get_state()
 
@@ -383,6 +434,7 @@ class SimpleWeightEnv(gym.Env):
                 apf_action = np.clip(
                     apf_action, self.reward_config.weight_min, self.reward_config.weight_max
                 )
+            apf_action = self._stabilize_apf_action(apf_action)
             self._has_initial_action = False
 
             # 合并动作
@@ -488,6 +540,7 @@ class SimpleWeightEnv(gym.Env):
 
             # 更新碰撞计数（使用真实碰撞事件，避免“近距离误判碰撞”）
             self._update_collision_count()
+            episode_metrics = self._collect_episode_metrics()
 
             # 将训练统计信息传递给服务器（用于数据采集）
             if self.server:
@@ -498,6 +551,29 @@ class SimpleWeightEnv(gym.Env):
                     total_reward=float(self.total_episode_reward),
                 )
 
+                self.server.data_collector.set_external_data(
+                    "collision_count", int(self.collision_count)
+                )
+                self.server.data_collector.set_external_data(
+                    "out_of_range_count", int(self._out_of_range_count)
+                )
+                self.server.data_collector.set_external_data(
+                    "max_global_scan_ratio",
+                    float(episode_metrics["episode_max_global_scan_ratio"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "min_global_avg_entropy",
+                    float(episode_metrics["episode_min_global_entropy"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "global_scanned_count",
+                    int(episode_metrics["global_scanned_count"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "global_total_count",
+                    int(episode_metrics["global_total_count"]),
+                )
+                self.server.data_collector.set_external_data("reset_reason", "")
             # 记录当前动作
             self.last_action = action.copy()
 
@@ -597,6 +673,32 @@ class SimpleWeightEnv(gym.Env):
             if done:
                 # 保存重置原因，供下次 reset 使用
                 self._last_reset_reason = reset_reason
+                if self.server:
+                    self.server.data_collector.set_external_data(
+                        "reset_reason", reset_reason
+                    )
+                    self.server.data_collector.set_external_data(
+                        "collision_count", int(self.collision_count)
+                    )
+                    self.server.data_collector.set_external_data(
+                        "out_of_range_count", int(self._out_of_range_count)
+                    )
+                    self.server.data_collector.set_external_data(
+                        "max_global_scan_ratio",
+                        float(episode_metrics["episode_max_global_scan_ratio"]),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "min_global_avg_entropy",
+                        float(episode_metrics["episode_min_global_entropy"]),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "global_scanned_count",
+                        int(episode_metrics["global_scanned_count"]),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "global_total_count",
+                        int(episode_metrics["global_total_count"]),
+                    )
                 print(f"\n{'=' * 60}")
                 print(f"✅ Episode #{self.episode_count} 完成！共 {self.step_count} 步")
                 print(f"📌 重置原因: {reset_reason}")
@@ -605,7 +707,17 @@ class SimpleWeightEnv(gym.Env):
                 print(f"{'=' * 60}\n")
 
             # 额外信息
-            info = {"weights": weights, "scanned_cells": self.prev_scanned_cells}
+            info = {
+                "weights": weights,
+                "scanned_cells": self.prev_scanned_cells,
+                "reset_reason": reset_reason,
+                "collision_count": int(self.collision_count),
+                "out_of_range_count": int(self._out_of_range_count),
+                "max_global_scan_ratio": float(episode_metrics["episode_max_global_scan_ratio"]),
+                "min_global_avg_entropy": float(episode_metrics["episode_min_global_entropy"]),
+                "global_scanned_count": int(episode_metrics["global_scanned_count"]),
+                "global_total_count": int(episode_metrics["global_total_count"]),
+            }
 
             return next_state, reward, done, info
 
@@ -767,6 +879,44 @@ class SimpleWeightEnv(gym.Env):
         except Exception as e:
             print(f"获取状态失败: {str(e)}")
             return np.zeros(18, dtype=np.float32)
+
+    def _collect_episode_metrics(self):
+        global_scan_ratio = 0.0
+        global_avg_entropy = 100.0
+        global_scanned_count = 0
+        global_total_count = 0
+
+        if self.server:
+            with self.server.data_lock:
+                grid_data = self.server.grid_data
+                if grid_data and grid_data.cells:
+                    global_total_count = len(grid_data.cells)
+                    global_scanned_count = sum(
+                        1
+                        for cell in grid_data.cells
+                        if cell.entropy < self.reward_config.scan_entropy_threshold
+                    )
+                    if global_total_count > 0:
+                        global_scan_ratio = global_scanned_count / global_total_count * 100.0
+                    entropy_values = [float(cell.entropy) for cell in grid_data.cells]
+                    if entropy_values:
+                        global_avg_entropy = float(np.mean(entropy_values))
+
+        self._episode_max_global_scan_ratio = max(
+            self._episode_max_global_scan_ratio, global_scan_ratio
+        )
+        self._episode_min_global_entropy = min(
+            self._episode_min_global_entropy, global_avg_entropy
+        )
+
+        return {
+            "global_scan_ratio": global_scan_ratio,
+            "global_avg_entropy": global_avg_entropy,
+            "global_scanned_count": global_scanned_count,
+            "global_total_count": global_total_count,
+            "episode_max_global_scan_ratio": self._episode_max_global_scan_ratio,
+            "episode_min_global_entropy": self._episode_min_global_entropy,
+        }
 
     def _calculate_reward(self, action: np.ndarray) -> float:
         """计算奖励（尽量与实体奖励结构一致）"""
@@ -1006,9 +1156,7 @@ class SimpleWeightEnv(gym.Env):
             return
 
         # 裁剪到有效范围
-        apf_weights = np.clip(
-            weights[:5], self.reward_config.weight_min, self.reward_config.weight_max
-        )
+        apf_weights = np.clip(weights[:5], self._apf_lower_bounds, self._apf_upper_bounds)
         obstacle_params = np.clip(weights[5:], [5.0, 1.0], [30.0, 15.0])
         weights = np.concatenate([apf_weights, obstacle_params])
 
@@ -1032,4 +1180,5 @@ if __name__ == "__main__":
     print(f"  动作空间: {env_b.action_space.shape}")
 
     print("\n[OK] 两种模式都可用！")
+
 

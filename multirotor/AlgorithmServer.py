@@ -220,7 +220,9 @@ class MultiDroneAlgorithmServer:
             "episode_count": 0,
             "total_steps": 0,
             "current_episode_steps": 0,
+            "current_step_reward": 0.0,
             "current_episode_reward": 0.0,
+            "episode_elapsed_time": 0.0,
             "avg_reward": 0.0,
             "max_reward": 0.0,
             "min_reward": 0.0,
@@ -392,35 +394,52 @@ class MultiDroneAlgorithmServer:
     def set_training_stats(
         self, episode: int, step: int, reward: float, total_reward: float
     ):
-        """设置训练统计信息，用于数据采集记录和IPC可视化"""
-        if self.data_collector:
-            self.data_collector.set_external_data("episode", episode)
-            self.data_collector.set_external_data("step", step)
-            self.data_collector.set_external_data("reward", reward)
-            self.data_collector.set_external_data("total_reward", total_reward)
+        """?????????????????? IPC ????"""
+        now = _time.time()
 
-        # 同时更新 current_training_stats（用于IPC可视化进程）
         with self._training_stats_lock:
+            previous_episode = self.current_training_stats.get("episode_count", -1)
+            if episode != previous_episode or step <= 0:
+                self._episode_start_time = now
+
+            episode_elapsed_time = max(0.0, now - self._episode_start_time)
+
             self.current_training_stats["episode_count"] = episode
             self.current_training_stats["total_steps"] = step
-            self.current_training_stats["current_episode_reward"] = reward
+            self.current_training_stats["current_step_reward"] = reward
+            self.current_training_stats["current_episode_reward"] = total_reward
             self.current_training_stats["current_episode_steps"] = step
+            self.current_training_stats["episode_elapsed_time"] = episode_elapsed_time
 
-            # 更新奖励历史（保留最近500个）
             if "reward_history" not in self.current_training_stats:
                 self.current_training_stats["reward_history"] = []
             reward_history = self.current_training_stats["reward_history"]
-            reward_history.append(reward)
+            if step > 0:
+                reward_history.append(total_reward)
             if len(reward_history) > 500:
                 reward_history.pop(0)
 
-            # 计算统计数据
             if reward_history:
                 self.current_training_stats["avg_reward"] = sum(reward_history) / len(
                     reward_history
                 )
                 self.current_training_stats["max_reward"] = max(reward_history)
                 self.current_training_stats["min_reward"] = min(reward_history)
+            else:
+                self.current_training_stats["avg_reward"] = 0.0
+                self.current_training_stats["max_reward"] = 0.0
+                self.current_training_stats["min_reward"] = 0.0
+
+        if self.data_collector:
+            self.data_collector.set_external_data("episode", episode)
+            self.data_collector.set_external_data("step", step)
+            self.data_collector.set_external_data("reward", reward)
+            self.data_collector.set_external_data("step_reward", reward)
+            self.data_collector.set_external_data("total_reward", total_reward)
+            self.data_collector.set_external_data("episode_reward", total_reward)
+            self.data_collector.set_external_data(
+                "episode_elapsed_time", episode_elapsed_time
+            )
 
     def set_experiment_meta(
         self, algorithm_type: str, env_type: str, control_mode: str
@@ -442,15 +461,30 @@ class MultiDroneAlgorithmServer:
         return self.battery_manager.get_all_battery_data()
 
     def _get_training_data(self) -> Dict[str, Any]:
-        """获取当前训练数据（用于数据采集）"""
-        if hasattr(self, 'current_training_stats'):
-            stats = self.current_training_stats
+        """?????????????????"""
+        if hasattr(self, "current_training_stats"):
+            with self._training_stats_lock:
+                stats = dict(self.current_training_stats)
+            step_reward = float(stats.get("current_step_reward", 0.0))
+            episode_reward = float(stats.get("current_episode_reward", 0.0))
             return {
-                'episode': stats.get('episode_count', -1),
-                'step': stats.get('total_steps', -1),
-                'reward': stats.get('current_episode_reward', 0.0),
+                "episode": stats.get("episode_count", -1),
+                "step": stats.get("total_steps", -1),
+                "reward": step_reward,
+                "step_reward": step_reward,
+                "episode_reward": episode_reward,
+                "total_reward": episode_reward,
+                "episode_elapsed_time": float(stats.get("episode_elapsed_time", 0.0)),
             }
-        return {'episode': -1, 'step': -1, 'reward': 0.0}
+        return {
+            "episode": -1,
+            "step": -1,
+            "reward": 0.0,
+            "step_reward": 0.0,
+            "episode_reward": 0.0,
+            "total_reward": 0.0,
+            "episode_elapsed_time": 0.0,
+        }
 
     def set_battery_consumption_rate(self, drone_name: str, rate: float) -> None:
         """设置指定无人机的电量消耗率"""

@@ -707,18 +707,30 @@ def main():
     )  # 权重变化安全限制
     max_weight_delta = float(
         _get_config_value(None, config, "max_weight_delta", 0.5)
-    )  # 权重变化最大幅度
+    )  # ????????
+    action_smoothing = float(
+        _get_config_value(None, config, "action_smoothing", 0.35)
+    )
+    weight_edge_margin = float(
+        _get_config_value(None, config, "weight_edge_margin", 0.35)
+    )
+    weight_edge_push = float(
+        _get_config_value(None, config, "weight_edge_push", 0.25)
+    )
+    min_distance_weight = float(
+        _get_config_value(None, config, "min_distance_weight", 1.0)
+    )
+    max_entropy_weight = float(
+        _get_config_value(None, config, "max_entropy_weight", 4.5)
+    )
+    max_leader_weight = float(
+        _get_config_value(None, config, "max_leader_weight", 4.5)
+    )
     reset_grid_entropy = bool(
         _get_config_value(None, config, "reset_grid_entropy", True)
-    )  # 是否重置网格熵值（默认True，每次重置时重新扫描）
+    )  # ???????????True???????????
 
-
-    # 新一轮训练强制完整重置，避免复用历史网格熵值
-    if not reset_grid_entropy:
-        print("[Reset] 检测到配置为累积模式，已强制切换为完整重置模式")
-    reset_grid_entropy = True
-
-    # 模型覆盖逻辑：默认开启覆盖模式以满足用户需求
+    # ??????????????????????
     overwrite_model = True
 
     # 允许命令行覆盖此默认值
@@ -959,10 +971,16 @@ def main():
             server=server,  # 算法服务器引用
             drone_name=drone_names[0],  # 使用第一台无人机进行DDPG训练（主训练机）
             reset_unity=True,  # 每个episode结束时重置Unity环境（无人机位置）
-            reset_grid_entropy=reset_grid_entropy,  # 是否重置网格熵值（默认True，每次重置时重新扫描）
-            step_duration=step_duration,  # 每步飞行时长（秒）
-            safety_limit=safety_limit,  # 是否启用权重变化安全限制
-            max_weight_delta=max_weight_delta,  # 权重变化最大幅度（安全限制）
+            reset_grid_entropy=reset_grid_entropy,  # ???????????True???????????
+            step_duration=step_duration,  # ?????????
+            safety_limit=safety_limit,  # ????????????
+            max_weight_delta=max_weight_delta,  # ??????????????
+            action_smoothing=action_smoothing,
+            weight_edge_margin=weight_edge_margin,
+            weight_edge_push=weight_edge_push,
+            min_distance_weight=min_distance_weight,
+            max_entropy_weight=max_entropy_weight,
+            max_leader_weight=max_leader_weight,
         )
         if use_initial_weights and initial_weights:
             training_weights = initial_weights.get(

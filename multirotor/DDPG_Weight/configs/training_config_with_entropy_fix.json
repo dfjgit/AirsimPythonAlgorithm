@@ -1,4 +1,4 @@
-{
+﻿{
   "_comment": "DDPG训练配置示例 - 包含熵值累积修复",
 
   "drone_names": ["UAV1", "UAV2", "UAV3"],
@@ -11,13 +11,19 @@
   "_comment_reset_grid_entropy": "是否重置网格熵值（重要：影响扫描进度累积）",
   "_comment_false": "false = 保持扫描进度累积（推荐，适合长期训练）",
   "_comment_true": "true = 每个Episode重新扫描（适合独立任务训练）",
-  "reset_grid_entropy": false,
+  "reset_grid_entropy": true,
 
   "safety_limit": true,
   "max_weight_delta": 0.5,
+  "action_smoothing": 0.35,
+  "weight_edge_margin": 0.35,
+  "weight_edge_push": 0.25,
+  "min_distance_weight": 1.0,
+  "max_entropy_weight": 4.5,
+  "max_leader_weight": 4.5,
 
   "model_name": "weight_predictor_airsim",
-  "use_initial_weights": true,
+  "use_initial_weights": false,
   "initial_model_path": null,
 
   "_comment_entropy_fix_details": "修复说明：",
