@@ -8,6 +8,8 @@ import gym
 from gym import spaces
 import os
 import time
+import json
+from collections import deque
 
 try:
     from configs.crazyflie_reward_config import CrazyflieRewardConfig
@@ -97,6 +99,10 @@ class SimpleWeightEnv(gym.Env):
             "timeout_low_progress_penalty": 20.0,
             "battery_reward_scale": 0.25,
             "center_reward_scale": 0.5,
+            "obstacle_warning_distance": 4.0,
+            "obstacle_danger_distance": 2.2,
+            "obstacle_warning_penalty": 3.0,
+            "obstacle_danger_penalty": 9.0,
         }
 
         # 出圈计数器
@@ -196,6 +202,8 @@ class SimpleWeightEnv(gym.Env):
         }
         self._last_collision_object_name = ""
         self._last_collision_penetration = 0.0
+        self._last_collision_position = ""
+        self._recent_trajectory = deque(maxlen=6)
         self._ground_collision_streak = 0
 
         # 首次重置标志（用于跳过启动时的物理重置）
@@ -400,6 +408,8 @@ class SimpleWeightEnv(gym.Env):
         self._last_collision_wall_time = 0.0
         self._last_collision_object_name = ""
         self._last_collision_penetration = 0.0
+        self._last_collision_position = ""
+        self._recent_trajectory.clear()
         self._ground_collision_streak = 0
         self._episode_wall_start_time = time.time()
         self._episode_max_global_scan_ratio = 0.0
@@ -707,6 +717,12 @@ class SimpleWeightEnv(gym.Env):
                     "collision_penetration_depth",
                     float(self._last_collision_penetration),
                 )
+                self.server.data_collector.set_external_data(
+                    "collision_position", self._last_collision_position
+                )
+                self.server.data_collector.set_external_data(
+                    "recent_trajectory", self._get_recent_trajectory_json()
+                )
                 self.server.data_collector.set_external_data("reset_reason", "")
 
             # 显示奖励信息
@@ -769,6 +785,12 @@ class SimpleWeightEnv(gym.Env):
                         "collision_penetration_depth",
                         float(self._last_collision_penetration),
                     )
+                    self.server.data_collector.set_external_data(
+                        "collision_position", self._last_collision_position
+                    )
+                    self.server.data_collector.set_external_data(
+                        "recent_trajectory", self._get_recent_trajectory_json()
+                    )
                 print(f"\n{'=' * 60}")
                 print(f"✅ Episode #{self.episode_count} 完成！共 {self.step_count} 步")
                 print(f"📌 重置原因: {reset_reason}")
@@ -789,6 +811,8 @@ class SimpleWeightEnv(gym.Env):
                 "global_total_count": int(episode_metrics["global_total_count"]),
                 "collision_object_name": self._last_collision_object_name,
                 "collision_penetration_depth": float(self._last_collision_penetration),
+                "collision_position": self._last_collision_position,
+                "recent_trajectory": self._get_recent_trajectory_json(),
             }
 
             return next_state, reward, done, info
@@ -847,6 +871,158 @@ class SimpleWeightEnv(gym.Env):
         return any(
             token in object_name_lower for token in self.collision_cfg["ground_aliases"]
         )
+
+    def _get_runtime_position(self):
+        """Return current drone position from runtime data."""
+        if not self.server:
+            return None
+        try:
+            with self.server.data_lock:
+                rd = self.server.unity_runtime_data.get(self.drone_name)
+            if rd and getattr(rd, "position", None) is not None:
+                return rd.position
+        except Exception:
+            pass
+        return None
+
+    def _format_position(self, position) -> str:
+        if position is None:
+            return ""
+        try:
+            return f"{float(position.x):.2f},{float(position.y):.2f},{float(position.z):.2f}"
+        except Exception:
+            return ""
+
+    def _append_recent_trajectory(self, position) -> None:
+        formatted = self._format_position(position)
+        if not formatted:
+            return
+        if not self._recent_trajectory or self._recent_trajectory[-1] != formatted:
+            self._recent_trajectory.append(formatted)
+
+    def _get_recent_trajectory_json(self) -> str:
+        return json.dumps(list(self._recent_trajectory), ensure_ascii=False)
+
+    def _get_normal_obstacles(self):
+        if not self.server:
+            return []
+        try:
+            unity_socket = getattr(self.server, "unity_socket", None)
+            obstacles = getattr(unity_socket, "received_obstacles", None)
+            if not isinstance(obstacles, list):
+                return []
+            result = []
+            for obstacle in obstacles:
+                if not isinstance(obstacle, dict):
+                    continue
+                category = str(obstacle.get("category", "normal") or "normal").lower()
+                if category == "restricted":
+                    continue
+                result.append(obstacle)
+            return result
+        except Exception:
+            return []
+
+    def _distance_to_obstacle_surface(self, position, obstacle):
+        if position is None or not obstacle:
+            return None
+
+        try:
+            pos = np.array(
+                [float(position.x), float(position.y), float(position.z)],
+                dtype=np.float32,
+            )
+            shape_type = obstacle.get("shapeType")
+            center = obstacle.get("center") or {}
+            vertices = obstacle.get("vertices") or []
+            radius = float(obstacle.get("radius", 0.0) or 0.0)
+
+            center_vec = None
+            if center:
+                center_vec = np.array(
+                    [
+                        float(center.get("x", 0.0) or 0.0),
+                        float(center.get("y", 0.0) or 0.0),
+                        float(center.get("z", 0.0) or 0.0),
+                    ],
+                    dtype=np.float32,
+                )
+
+            shape_name = str(shape_type).lower()
+            if center_vec is not None and (
+                shape_name in {"1", "3", "sphere", "circle"} or radius > 0.0
+            ):
+                return max(float(np.linalg.norm(pos - center_vec)) - radius, 0.0)
+
+            if vertices:
+                vertex_array = np.array(
+                    [
+                        [
+                            float(vertex.get("x", 0.0) or 0.0),
+                            float(vertex.get("y", 0.0) or 0.0),
+                            float(vertex.get("z", 0.0) or 0.0),
+                        ]
+                        for vertex in vertices
+                    ],
+                    dtype=np.float32,
+                )
+                mins = vertex_array.min(axis=0)
+                maxs = vertex_array.max(axis=0)
+                clipped = np.minimum(np.maximum(pos, mins), maxs)
+                if np.all(pos >= mins) and np.all(pos <= maxs):
+                    return 0.0
+                return float(np.linalg.norm(pos - clipped))
+
+            if center_vec is not None:
+                return float(np.linalg.norm(pos - center_vec))
+        except Exception:
+            return None
+
+        return None
+
+    def _apply_obstacle_proximity_penalty(self, runtime_data) -> float:
+        position = getattr(runtime_data, "position", None)
+        if position is None:
+            return 0.0
+
+        nearest_distance = None
+        nearest_name = ""
+        for obstacle in self._get_normal_obstacles():
+            distance = self._distance_to_obstacle_surface(position, obstacle)
+            if distance is None:
+                continue
+            if nearest_distance is None or distance < nearest_distance:
+                nearest_distance = distance
+                nearest_name = str(obstacle.get("name", "") or "")
+
+        if nearest_distance is None:
+            return 0.0
+
+        warning_distance = max(
+            float(self.reward_shaping_cfg["obstacle_warning_distance"]), 1e-6
+        )
+        danger_distance = min(
+            float(self.reward_shaping_cfg["obstacle_danger_distance"]),
+            warning_distance,
+        )
+        if nearest_distance > warning_distance:
+            return 0.0
+
+        if nearest_distance <= danger_distance:
+            penalty = float(self.reward_shaping_cfg["obstacle_danger_penalty"])
+        else:
+            ratio = (warning_distance - nearest_distance) / max(
+                warning_distance - danger_distance, 1e-6
+            )
+            penalty = float(self.reward_shaping_cfg["obstacle_warning_penalty"]) + ratio * (
+                float(self.reward_shaping_cfg["obstacle_danger_penalty"])
+                - float(self.reward_shaping_cfg["obstacle_warning_penalty"])
+            )
+
+        print(
+            f"?? ?????: name={nearest_name or 'Unknown'}, distance={nearest_distance:.2f}m, ??-{penalty:.2f}"
+        )
+        return penalty
 
     def _update_collision_count(self) -> None:
         """更新碰撞计数：优先使用AirSim真实碰撞事件，距离仅作兜底。"""
@@ -921,6 +1097,7 @@ class SimpleWeightEnv(gym.Env):
                     self._last_collision_wall_time = now
                     self._last_collision_object_name = object_name or "Unknown"
                     self._last_collision_penetration = penetration
+                    self._last_collision_position = self._format_position(self._get_runtime_position())
                     print(
                         f"⚠️ 检测到真实碰撞事件: object={object_name or 'Unknown'}, "
                         f"penetration={penetration:.3f}m, count={self.collision_count}"
@@ -958,6 +1135,9 @@ class SimpleWeightEnv(gym.Env):
                 ):
                     self.collision_count += 1
                     self._last_collision_wall_time = now
+                    self._last_collision_object_name = "NEAR_DRONE"
+                    self._last_collision_penetration = 0.0
+                    self._last_collision_position = self._format_position(self._get_runtime_position())
                     print(
                         f"⚠️ 极近距离兜底碰撞: min_dist={min_dist:.3f}m, "
                         f"count={self.collision_count}"
@@ -1122,6 +1302,8 @@ class SimpleWeightEnv(gym.Env):
                 runtime_data = self.server.unity_runtime_data[self.drone_name]
                 grid_data = self.server.grid_data
 
+            self._append_recent_trajectory(getattr(runtime_data, "position", None))
+
             # 1. 速度奖励与超速惩罚
             vel = runtime_data.finalMoveDir
             current_velocity = np.array(
@@ -1249,14 +1431,17 @@ class SimpleWeightEnv(gym.Env):
                                 reward += center_reward
                                 print(f"🎯 朝向中心飞行: 奖励+{center_reward:.2f}")
 
-            # 6. 动作变化与幅度惩罚
+            # 6. Obstacle proximity penalty
+            reward -= self._apply_obstacle_proximity_penalty(runtime_data)
+
+            # 7. Action change and magnitude penalty
             action_delta = float(np.linalg.norm(action - self.last_action))
             reward -= self.reward_config.action_change_penalty * action_delta
             reward -= self.reward_config.action_magnitude_penalty * float(
                 np.linalg.norm(action)
             )
 
-            # 7. 电量奖励机制
+            # 8. Battery reward logic
             current_voltage = self.server.get_battery_voltage(self.drone_name)
             if (
                 self.reward_config.battery_optimal_min
