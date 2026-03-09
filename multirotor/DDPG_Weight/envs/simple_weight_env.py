@@ -171,10 +171,20 @@ class SimpleWeightEnv(gym.Env):
             "penetration_threshold": 0.03,  # 仅把有明显穿透的事件记为碰撞
             "minor_penetration_threshold": 0.005,  # 非地面对象的轻微接触阈值
             "event_cooldown_sec": 0.8,  # 短时间内不重复记同类碰撞
-            "episode_grace_sec": 2.0,  # reset后短暂忽略碰撞抖动
+            "episode_grace_sec": 4.0,  # reset后短暂忽略碰撞抖动
+            "ground_episode_grace_sec": 6.0,  # 起飞稳定前更长时间忽略地面碰撞
             "fallback_proximity_distance": 0.35,  # 仅极近距离才用作兜底碰撞
+            "ignored_object_penetration_threshold": 0.25,
+            "ground_penetration_threshold": 0.18,
+            "ground_safe_height": 1.2,
+            "ground_collision_event_threshold": 3,
+            "unnamed_object_penetration_threshold": 0.20,
+            "min_steps_before_unnamed_collision": 3,
             "ignored_objects": ("ground", "landscape", "floor", "terrain"),
         }
+        self._last_collision_object_name = ""
+        self._last_collision_penetration = 0.0
+        self._ground_collision_streak = 0
 
         # 首次重置标志（用于跳过启动时的物理重置）
         self._first_reset = True
@@ -376,6 +386,9 @@ class SimpleWeightEnv(gym.Env):
         self._out_of_range_continuous_count = 0  # 重置连续出圈步数计数
         self._last_collision_timestamp = 0
         self._last_collision_wall_time = 0.0
+        self._last_collision_object_name = ""
+        self._last_collision_penetration = 0.0
+        self._ground_collision_streak = 0
         self._episode_wall_start_time = time.time()
         self._episode_max_global_scan_ratio = 0.0
         self._episode_min_global_entropy = 100.0
@@ -642,6 +655,10 @@ class SimpleWeightEnv(gym.Env):
 
             # 将训练统计信息传递给服务器（用于数据采集）
             if self.server:
+                self.server._last_collision_object_name = self._last_collision_object_name
+                self.server._last_collision_penetration_depth = float(
+                    self._last_collision_penetration
+                )
                 self.server.set_training_stats(
                     episode=self.episode_count,
                     step=self.step_count,
@@ -671,6 +688,13 @@ class SimpleWeightEnv(gym.Env):
                     "global_total_count",
                     int(episode_metrics["global_total_count"]),
                 )
+                self.server.data_collector.set_external_data(
+                    "collision_object_name", self._last_collision_object_name
+                )
+                self.server.data_collector.set_external_data(
+                    "collision_penetration_depth",
+                    float(self._last_collision_penetration),
+                )
                 self.server.data_collector.set_external_data("reset_reason", "")
 
             # 显示奖励信息
@@ -695,6 +719,12 @@ class SimpleWeightEnv(gym.Env):
                 # 保存重置原因，供下次 reset 使用
                 self._last_reset_reason = reset_reason
                 if self.server:
+                    self.server._last_collision_object_name = (
+                        self._last_collision_object_name
+                    )
+                    self.server._last_collision_penetration_depth = float(
+                        self._last_collision_penetration
+                    )
                     self.server.data_collector.set_external_data(
                         "reset_reason", reset_reason
                     )
@@ -720,6 +750,13 @@ class SimpleWeightEnv(gym.Env):
                         "global_total_count",
                         int(episode_metrics["global_total_count"]),
                     )
+                    self.server.data_collector.set_external_data(
+                        "collision_object_name", self._last_collision_object_name
+                    )
+                    self.server.data_collector.set_external_data(
+                        "collision_penetration_depth",
+                        float(self._last_collision_penetration),
+                    )
                 print(f"\n{'=' * 60}")
                 print(f"✅ Episode #{self.episode_count} 完成！共 {self.step_count} 步")
                 print(f"📌 重置原因: {reset_reason}")
@@ -738,6 +775,8 @@ class SimpleWeightEnv(gym.Env):
                 "min_global_avg_entropy": float(episode_metrics["episode_min_global_entropy"]),
                 "global_scanned_count": int(episode_metrics["global_scanned_count"]),
                 "global_total_count": int(episode_metrics["global_total_count"]),
+                "collision_object_name": self._last_collision_object_name,
+                "collision_penetration_depth": float(self._last_collision_penetration),
             }
 
             return next_state, reward, done, info
@@ -771,6 +810,19 @@ class SimpleWeightEnv(gym.Env):
                 dists.append(dist)
         return min(dists) if dists else 999.0
 
+    def _get_current_height(self) -> float:
+        """读取当前无人机高度，优先使用 Unity 运行时高度。"""
+        if not self.server:
+            return 0.0
+        try:
+            with self.server.data_lock:
+                rd = self.server.unity_runtime_data.get(self.drone_name)
+            if rd and getattr(rd, "position", None) is not None:
+                return float(rd.position.y)
+        except Exception:
+            pass
+        return 0.0
+
     def _update_collision_count(self) -> None:
         """更新碰撞计数：优先使用AirSim真实碰撞事件，距离仅作兜底。"""
         if not self.server:
@@ -788,21 +840,55 @@ class SimpleWeightEnv(gym.Env):
                 time_stamp = int(collision.get("time_stamp", 0) or 0)
                 penetration = float(collision.get("penetration_depth", 0.0) or 0.0)
                 object_name = str(collision.get("object_name", "") or "")
+                object_name = object_name.strip()
                 object_name_lower = object_name.lower()
                 is_ignored_object = any(
                     token in object_name_lower
                     for token in self.collision_cfg["ignored_objects"]
                 )
+                has_named_object = bool(object_name)
+                current_height = self._get_current_height()
 
                 is_new_event = time_stamp > 0 and time_stamp != self._last_collision_timestamp
-                strong_hit = (
-                    penetration >= self.collision_cfg["penetration_threshold"]
-                    or (
-                        bool(object_name)
-                        and not is_ignored_object
-                        and penetration >= self.collision_cfg["minor_penetration_threshold"]
+                named_hit = (
+                    has_named_object
+                    and not is_ignored_object
+                    and penetration >= self.collision_cfg["minor_penetration_threshold"]
+                )
+                unnamed_hit = (
+                    not has_named_object
+                    and self.step_count
+                    > self.collision_cfg["min_steps_before_unnamed_collision"]
+                    and penetration
+                    >= self.collision_cfg["unnamed_object_penetration_threshold"]
+                )
+                ground_grace_elapsed = (
+                    now - self._episode_wall_start_time
+                    >= self.collision_cfg["ground_episode_grace_sec"]
+                )
+                safe_height_reached = (
+                    current_height >= self.collision_cfg["ground_safe_height"]
+                )
+
+                if is_new_event:
+                    if is_ignored_object and penetration >= self.collision_cfg["ground_penetration_threshold"]:
+                        self._ground_collision_streak += 1
+                    else:
+                        self._ground_collision_streak = 0
+
+                ground_hit = (
+                    has_named_object
+                    and is_ignored_object
+                    and penetration >= self.collision_cfg["ground_penetration_threshold"]
+                    and ground_grace_elapsed
+                    and self.step_count > self.collision_cfg["min_steps_before_unnamed_collision"]
+                    and (
+                        safe_height_reached
+                        or self._ground_collision_streak
+                        >= self.collision_cfg["ground_collision_event_threshold"]
                     )
                 )
+                strong_hit = named_hit or ground_hit or unnamed_hit
                 cooldown_ok = (
                     now - self._last_collision_wall_time
                     >= self.collision_cfg["event_cooldown_sec"]
@@ -811,14 +897,29 @@ class SimpleWeightEnv(gym.Env):
                 if is_new_event and strong_hit and cooldown_ok:
                     self.collision_count += 1
                     self._last_collision_wall_time = now
+                    self._last_collision_object_name = object_name or "Unknown"
+                    self._last_collision_penetration = penetration
                     print(
                         f"⚠️ 检测到真实碰撞事件: object={object_name or 'Unknown'}, "
                         f"penetration={penetration:.3f}m, count={self.collision_count}"
                     )
+                elif is_new_event and not strong_hit:
+                    if is_ignored_object:
+                        print(
+                            f"ℹ️ 忽略地面碰撞事件: object={object_name or 'Unknown'}, "
+                            f"penetration={penetration:.3f}m, height={current_height:.2f}m, "
+                            f"streak={self._ground_collision_streak}, step={self.step_count}"
+                        )
+                    else:
+                        print(
+                            f"ℹ️ 忽略碰撞事件: object={object_name or 'Unknown'}, "
+                            f"penetration={penetration:.3f}m, step={self.step_count}"
+                        )
 
                 if time_stamp > 0:
                     self._last_collision_timestamp = time_stamp
                 return
+            self._ground_collision_streak = 0
         except Exception as e:
             print(f"[Warning] 读取AirSim碰撞状态失败，启用距离兜底: {e}")
 

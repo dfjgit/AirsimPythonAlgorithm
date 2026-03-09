@@ -157,7 +157,9 @@ class MultiDroneAlgorithmServer:
         self._vis_snapshot_cache_time = 0.0
         self._last_reset_time = 0.0  # 记录最后一次重置时间，用于客户端清除缓存
         self._last_reset_reason = ""  # 记录最后一次重置原因
-        self._reset_history = []  # 重置历史记录 (时间, 原因)
+        self._last_collision_object_name = ""
+        self._last_collision_penetration_depth = 0.0
+        self._reset_history = []  # 重置历史记录
         # 重置握手状态（避免旧包误触发 ACK，导致重置后不扫描）
         self._reset_command_sent_time = 0.0
         self._reset_runtime_fresh = False
@@ -1816,6 +1818,10 @@ class MultiDroneAlgorithmServer:
         # 5. 添加重置原因和历史记录
         snapshot["last_reset_reason"] = self._last_reset_reason
         snapshot["last_reset_time"] = self._last_reset_time
+        snapshot["last_collision_object_name"] = self._last_collision_object_name
+        snapshot["last_collision_penetration_depth"] = (
+            self._last_collision_penetration_depth
+        )
         snapshot["reset_history"] = list(self._reset_history)
 
         # 4. 提取障碍物数据（用于可视化绘制）
@@ -1898,8 +1904,19 @@ class MultiDroneAlgorithmServer:
         # 记录重置时间和原因，用于客户端清除缓存
         self._last_reset_time = _time.time()
         self._last_reset_reason = reason
+        collision_object_name = getattr(self, "_last_collision_object_name", "")
+        collision_penetration_depth = float(
+            getattr(self, "_last_collision_penetration_depth", 0.0) or 0.0
+        )
         # 添加到重置历史（保留最近20条）
-        self._reset_history.append((self._last_reset_time, reason))
+        self._reset_history.append(
+            {
+                "time": self._last_reset_time,
+                "reason": reason,
+                "collision_object_name": collision_object_name,
+                "collision_penetration_depth": collision_penetration_depth,
+            }
+        )
         if len(self._reset_history) > 20:
             self._reset_history = self._reset_history[-20:]
 
@@ -2333,4 +2350,3 @@ if __name__ == "__main__":
         if "server" in locals():
             server.stop()
         sys.exit(0)
-

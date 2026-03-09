@@ -92,6 +92,8 @@ class SnapshotServerProxy:
         self.current_weights = {}  # 当前权重数据
         self.last_reset_reason = ""  # 最后重置原因
         self.last_reset_time = 0.0  # 最后重置时间
+        self.last_collision_object_name = ""
+        self.last_collision_penetration_depth = 0.0
         self.reset_history = []  # 重置历史
 
         # 创建算法代理（用于DDPGTrainingVisualizer访问权重）
@@ -185,6 +187,10 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     # reset info mapping (for training reset visualization)
     proxy.last_reset_reason = snap.get("last_reset_reason", "")
     proxy.last_reset_time = snap.get("last_reset_time", 0)
+    proxy.last_collision_object_name = snap.get("last_collision_object_name", "")
+    proxy.last_collision_penetration_depth = float(
+        snap.get("last_collision_penetration_depth", 0.0) or 0.0
+    )
     proxy.reset_history = snap.get("reset_history", [])
 
 

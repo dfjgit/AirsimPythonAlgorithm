@@ -96,6 +96,7 @@ class DataCollector:
             header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
                       'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
                       'reset_reason', 'collision_count', 'out_of_range_count', 'max_global_scan_ratio', 'min_global_avg_entropy',
+                      'collision_object_name', 'collision_penetration_depth',
                       'algorithm_type', 'env_type', 'control_mode']
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
@@ -266,6 +267,8 @@ class DataCollector:
                     int(self.external_data.get('out_of_range_count', 0)),
                     f"{float(self.external_data.get('max_global_scan_ratio', 0.0)):.2f}%",
                     f"{float(self.external_data.get('min_global_avg_entropy', 100.0)):.2f}",
+                    self.external_data.get('collision_object_name', ''),
+                    f"{float(self.external_data.get('collision_penetration_depth', 0.0)):.3f}",
                     algo_type,
                     env_type,
                     ctrl_mode,
@@ -458,6 +461,8 @@ class DataCollector:
                         'out_of_range_count',
                         'max_global_scan_ratio',
                         'min_global_avg_entropy',
+                        'collision_object_name',
+                        'collision_penetration_depth',
                         'entropy_bins',
                         'entropy_hist',
                         'entropy_cdf',
@@ -514,6 +519,8 @@ class DataCollector:
                         out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
                         max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
                         min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', global_avg_entropy))
+                        collision_object_name = self.external_data.get('collision_object_name', '')
+                        collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
 
                     # 获取当前episode（从training_data或external_data）
                     current_episode = training_data.get('episode', self.external_data.get('episode', -1))
@@ -548,6 +555,8 @@ class DataCollector:
                         out_of_range_count,
                         f"{max_global_scan_ratio:.2f}%",
                         f"{min_global_avg_entropy:.2f}",
+                        collision_object_name,
+                        f"{collision_penetration_depth:.3f}",
                         json.dumps(bins, ensure_ascii=False),
                         json.dumps(hist, ensure_ascii=False),
                         json.dumps(cdf, ensure_ascii=False),
@@ -625,6 +634,8 @@ class DataCollector:
                                 out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
                                 max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
                                 min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', 100.0))
+                                collision_object_name = self.external_data.get('collision_object_name', '')
+                                collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
                             elapsed_time = time.time() - self.global_start_time
                             previous_episode_elapsed = float(self.current_episode_elapsed_time)
                             scan_efficiency = self.last_scanned_count / max(previous_episode_elapsed, 1.0)
@@ -649,6 +660,8 @@ class DataCollector:
                                 out_of_range_count,
                                 f"{max_global_scan_ratio:.2f}%",
                                 f"{min_global_avg_entropy:.2f}",
+                                collision_object_name,
+                                f"{collision_penetration_depth:.3f}",
                                 algo_type,
                                 env_type,
                                 ctrl_mode

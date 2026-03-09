@@ -65,6 +65,35 @@ class ResetInfoPanel(BasePanel):
         else:
             return f"{int(elapsed / 3600)}小时前"
 
+    def _parse_history_entry(self, entry) -> Tuple[float, str, str, float]:
+        """兼容旧版 tuple 和新版 dict 的重置历史结构。"""
+        if isinstance(entry, dict):
+            return (
+                float(entry.get("time", 0.0) or 0.0),
+                str(entry.get("reason", "") or ""),
+                str(entry.get("collision_object_name", "") or ""),
+                float(entry.get("collision_penetration_depth", 0.0) or 0.0),
+            )
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            return float(entry[0] or 0.0), str(entry[1] or ""), "", 0.0
+        return 0.0, "", "", 0.0
+
+    def _format_collision_detail(
+        self, reason: str, object_name: str, penetration_depth: float
+    ) -> str:
+        if not reason:
+            return ""
+        reason_lower = reason.lower()
+        if "碰撞" not in reason and "collision" not in reason_lower:
+            return ""
+        if object_name:
+            if penetration_depth > 0:
+                return f"对象: {object_name}  深度: {penetration_depth:.3f}m"
+            return f"对象: {object_name}"
+        if penetration_depth > 0:
+            return f"穿透深度: {penetration_depth:.3f}m"
+        return ""
+
     def draw(self, screen: pygame.Surface, data: Dict[str, Any]):
         """绘制重置信息"""
         self._init_fonts()
@@ -81,6 +110,10 @@ class ResetInfoPanel(BasePanel):
         # 获取重置信息
         last_reason = data.get("last_reset_reason", "")
         last_reset_time = data.get("last_reset_time", 0)
+        last_collision_object_name = data.get("last_collision_object_name", "")
+        last_collision_penetration_depth = float(
+            data.get("last_collision_penetration_depth", 0.0) or 0.0
+        )
         reset_history = data.get("reset_history", [])
 
         # 如果有新的重置原因，更新显示时间
@@ -91,7 +124,8 @@ class ResetInfoPanel(BasePanel):
         # 统计重置原因
         reason_counts = {}
         if reset_history:
-            for ts, reason in reset_history:
+            for entry in reset_history:
+                ts, reason, _, _ = self._parse_history_entry(entry)
                 # 简化原因分类
                 reason_lower = reason.lower()
                 if "时间" in reason or "max_elapsed" in reason_lower:
@@ -135,6 +169,18 @@ class ResetInfoPanel(BasePanel):
                 time_ago = self._format_time_ago(last_reset_time)
                 time_text = self._small_font.render(f"({time_ago})", True, self.GRAY)
                 screen.blit(time_text, (text_x + 250, y + 2))
+
+            collision_detail = self._format_collision_detail(
+                last_reason,
+                last_collision_object_name,
+                last_collision_penetration_depth,
+            )
+            if collision_detail:
+                y += 18
+                detail_text = self._small_font.render(
+                    f"    {collision_detail}", True, self.LIGHT_BLUE
+                )
+                screen.blit(detail_text, (text_x, y))
 
         y += 35
 
@@ -193,7 +239,10 @@ class ResetInfoPanel(BasePanel):
 
             # 显示最近3条
             recent = reset_history[-3:] if len(reset_history) >= 3 else reset_history
-            for ts, reason in reversed(recent):
+            for entry in reversed(recent):
+                ts, reason, collision_object_name, collision_penetration_depth = (
+                    self._parse_history_entry(entry)
+                )
                 icon = self._get_reason_icon(reason)
                 time_ago = self._format_time_ago(ts)
                 # 截断过长的原因
@@ -206,3 +255,13 @@ class ResetInfoPanel(BasePanel):
                 time_text = self._small_font.render(time_ago, True, self.DARK_GRAY)
                 screen.blit(time_text, (self.x + self.width - 70, y))
                 y += 16
+
+                collision_detail = self._format_collision_detail(
+                    reason, collision_object_name, collision_penetration_depth
+                )
+                if collision_detail:
+                    detail_text = self._small_font.render(
+                        f"    {collision_detail[:34]}", True, self.DARK_GRAY
+                    )
+                    screen.blit(detail_text, (text_x, y))
+                    y += 14
