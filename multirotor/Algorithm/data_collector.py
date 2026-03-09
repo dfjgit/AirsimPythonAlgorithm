@@ -56,6 +56,9 @@ class DataCollector:
         self.last_episode = -1  # 用于检测 episode 切换
         self.last_step = -1     # 用于检测 step 切换
         self.last_scanned_count = 0  # 记录最近一次扫描数
+        self.last_scan_episode = -1  # 用于检测 scan_data 的 episode 切换
+        self.terminal_scan_episode = None  # 记录已写入 terminal 帧的 episode
+        self.terminal_scan_step = None  # 记录 terminal 帧对应 step
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -533,68 +536,93 @@ class DataCollector:
                         training_data.get('episode_reward', training_data.get('total_reward', self.external_data.get('episode_reward', 0.0)))
                     )
 
-                    row = [
-                        current_episode,
-                        timestamp,
-                        f"{elapsed_time:.2f}",
-                        f"{episode_elapsed_time:.2f}",
-                        current_step,
-                        f"{step_reward:.4f}",
-                        f"{episode_reward:.4f}",
-                        scanned_count,
-                        unscanned_count,
-                        total_count,
-                        global_scanned_count,
-                        global_total_count,
-                        f"{scan_ratio:.2f}%",
-                        f"{scan_ratio:.2f}%",
-                        f"{global_avg_entropy:.2f}",
-                        f"{global_scan_ratio:.2f}%",
-                        reset_reason,
-                        collision_count,
-                        out_of_range_count,
-                        f"{max_global_scan_ratio:.2f}%",
-                        f"{min_global_avg_entropy:.2f}",
-                        collision_object_name,
-                        f"{collision_penetration_depth:.3f}",
-                        json.dumps(bins, ensure_ascii=False),
-                        json.dumps(hist, ensure_ascii=False),
-                        json.dumps(cdf, ensure_ascii=False),
-                        weights.get('repulsionCoefficient', 0.0),
-                        weights.get('entropyCoefficient', 0.0),
-                        weights.get('distanceCoefficient', 0.0),
-                        weights.get('leaderRangeCoefficient', 0.0),
-                        weights.get('directionRetentionCoefficient', 0.0),
-                        hl_action_val,
-                        hl_goal_x_val,
-                        hl_goal_y_val,
-                        hl_goal_z_val,
-                        algo_type,
-                        env_type,
-                        ctrl_mode
-                    ]
-                    
-                    # 添加所有无人机的坐标和姿态
-                    for drone_name in self.drone_names_list:
-                        state = drone_states.get(drone_name, {'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0})
-                        row.append(f"{state['x']:.3f}")
-                        row.append(f"{state['y']:.3f}")
-                        row.append(f"{state['z']:.3f}")
-                        row.append(f"{state['roll']:.2f}")
-                        row.append(f"{state['pitch']:.2f}")
-                        row.append(f"{state['yaw']:.2f}")
-                    
-                    # 添加所有无人机的电量
-                    for drone_name in self.drone_names_list:
-                        drone_battery = battery_data.get(drone_name, {})
-                        voltage = drone_battery.get('voltage', 0.0)
-                        row.append(f"{voltage:.3f}")
-                    
-                    self.csv_writer.writerow(row)
-                    self.csv_file.flush()  # 立即刷新到文件
+                    try:
+                        current_episode_int = int(current_episode)
+                    except (TypeError, ValueError):
+                        current_episode_int = -1
+                    try:
+                        current_step_int = int(current_step)
+                    except (TypeError, ValueError):
+                        current_step_int = -1
+
+                    if current_episode_int != self.last_scan_episode:
+                        self.last_scan_episode = current_episode_int
+                        self.terminal_scan_episode = None
+                        self.terminal_scan_step = None
+
+                    terminal_reason = str(reset_reason).strip()
+                    is_terminal_frame = bool(terminal_reason) and current_step_int > 0
+                    should_skip_scan_row = (
+                        self.terminal_scan_episode == current_episode_int
+                    )
+
+                    if not should_skip_scan_row:
+                        row = [
+                            current_episode,
+                            timestamp,
+                            f"{elapsed_time:.2f}",
+                            f"{episode_elapsed_time:.2f}",
+                            current_step,
+                            f"{step_reward:.4f}",
+                            f"{episode_reward:.4f}",
+                            scanned_count,
+                            unscanned_count,
+                            total_count,
+                            global_scanned_count,
+                            global_total_count,
+                            f"{scan_ratio:.2f}%",
+                            f"{scan_ratio:.2f}%",
+                            f"{global_avg_entropy:.2f}",
+                            f"{global_scan_ratio:.2f}%",
+                            reset_reason,
+                            collision_count,
+                            out_of_range_count,
+                            f"{max_global_scan_ratio:.2f}%",
+                            f"{min_global_avg_entropy:.2f}",
+                            collision_object_name,
+                            f"{collision_penetration_depth:.3f}",
+                            json.dumps(bins, ensure_ascii=False),
+                            json.dumps(hist, ensure_ascii=False),
+                            json.dumps(cdf, ensure_ascii=False),
+                            weights.get('repulsionCoefficient', 0.0),
+                            weights.get('entropyCoefficient', 0.0),
+                            weights.get('distanceCoefficient', 0.0),
+                            weights.get('leaderRangeCoefficient', 0.0),
+                            weights.get('directionRetentionCoefficient', 0.0),
+                            hl_action_val,
+                            hl_goal_x_val,
+                            hl_goal_y_val,
+                            hl_goal_z_val,
+                            algo_type,
+                            env_type,
+                            ctrl_mode
+                        ]
+                        
+                        # 添加所有无人机的坐标和姿态
+                        for drone_name in self.drone_names_list:
+                            state = drone_states.get(drone_name, {'x': 0.0, 'y': 0.0, 'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0})
+                            row.append(f"{state['x']:.3f}")
+                            row.append(f"{state['y']:.3f}")
+                            row.append(f"{state['z']:.3f}")
+                            row.append(f"{state['roll']:.2f}")
+                            row.append(f"{state['pitch']:.2f}")
+                            row.append(f"{state['yaw']:.2f}")
+                        
+                        # 添加所有无人机的电量
+                        for drone_name in self.drone_names_list:
+                            drone_battery = battery_data.get(drone_name, {})
+                            voltage = drone_battery.get('voltage', 0.0)
+                            row.append(f"{voltage:.3f}")
+                        
+                        self.csv_writer.writerow(row)
+                        self.csv_file.flush()  # 立即刷新到文件
+
+                        if is_terminal_frame:
+                            self.terminal_scan_episode = current_episode_int
+                            self.terminal_scan_step = current_step_int
                     
                     # 仅在启用DEBUG打印时输出（训练时启用）
-                    if self.enable_debug_print:
+                    if self.enable_debug_print and not should_skip_scan_row:
                         logger.debug(
                             f"数据采集: 时间={elapsed_time:.1f}s, "
                             f"已侦察={scanned_count}, 未侦察={unscanned_count}, "

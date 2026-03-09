@@ -91,6 +91,8 @@ class SimpleWeightEnv(gym.Env):
             "early_failure_steps": 3,
             "early_failure_penalty": 120.0,
             "collision_terminal_penalty": 40.0,
+            "short_collision_penalty": 80.0,
+            "short_collision_reward_cap": -30.0,
             "out_of_range_terminal_penalty": 35.0,
             "timeout_low_progress_penalty": 20.0,
             "battery_reward_scale": 0.25,
@@ -181,6 +183,16 @@ class SimpleWeightEnv(gym.Env):
             "unnamed_object_penetration_threshold": 0.20,
             "min_steps_before_unnamed_collision": 3,
             "ignored_objects": ("ground", "landscape", "floor", "terrain"),
+            "ground_aliases": (
+                "diban",
+                "floor",
+                "ground",
+                "terrain",
+                "landscape",
+                "groundplane",
+                "plane",
+                "room_diban",
+            ),
         }
         self._last_collision_object_name = ""
         self._last_collision_penetration = 0.0
@@ -823,6 +835,19 @@ class SimpleWeightEnv(gym.Env):
             pass
         return 0.0
 
+    def _is_ground_object_name(self, object_name: str) -> bool:
+        """识别场景中不同命名方式的地面对象。"""
+        if not object_name:
+            return False
+        object_name_lower = object_name.strip().lower()
+        if any(
+            token in object_name_lower for token in self.collision_cfg["ignored_objects"]
+        ):
+            return True
+        return any(
+            token in object_name_lower for token in self.collision_cfg["ground_aliases"]
+        )
+
     def _update_collision_count(self) -> None:
         """更新碰撞计数：优先使用AirSim真实碰撞事件，距离仅作兜底。"""
         if not self.server:
@@ -842,10 +867,7 @@ class SimpleWeightEnv(gym.Env):
                 object_name = str(collision.get("object_name", "") or "")
                 object_name = object_name.strip()
                 object_name_lower = object_name.lower()
-                is_ignored_object = any(
-                    token in object_name_lower
-                    for token in self.collision_cfg["ignored_objects"]
-                )
+                is_ignored_object = self._is_ground_object_name(object_name)
                 has_named_object = bool(object_name)
                 current_height = self._get_current_height()
 
@@ -1064,6 +1086,8 @@ class SimpleWeightEnv(gym.Env):
 
         if reset_reason == "碰撞":
             penalty += self.reward_shaping_cfg["collision_terminal_penalty"]
+            if self.step_count <= self.reward_shaping_cfg["early_failure_steps"]:
+                penalty += self.reward_shaping_cfg["short_collision_penalty"]
         elif reset_reason == "出圈":
             penalty += self.reward_shaping_cfg["out_of_range_terminal_penalty"]
         elif (
@@ -1075,7 +1099,16 @@ class SimpleWeightEnv(gym.Env):
         print(
             f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
         )
-        return reward - penalty
+        adjusted_reward = reward - penalty
+        if (
+            reset_reason == "碰撞"
+            and self.step_count <= self.reward_shaping_cfg["early_failure_steps"]
+        ):
+            adjusted_reward = min(
+                adjusted_reward,
+                self.reward_shaping_cfg["short_collision_reward_cap"],
+            )
+        return adjusted_reward
 
     def _calculate_reward(self, action: np.ndarray) -> float:
         """计算奖励（尽量与实体奖励结构一致）"""
