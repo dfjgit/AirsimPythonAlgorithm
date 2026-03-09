@@ -81,6 +81,21 @@ class SimpleWeightEnv(gym.Env):
             "center_reward": 3.0,  # 朝向中心飞行奖励
             "max_reset_penalty": 15.0,  # 出圈重置最大惩罚（降低避免过度惩罚）
         }
+        self.reward_shaping_cfg = {
+            "base_step_cost": 2.0,
+            "no_progress_penalty": 3.0,
+            "scan_complete_bonus": 120.0,
+            "failure_base_penalty": 25.0,
+            "poor_progress_scan_ratio": 5.0,
+            "poor_progress_penalty": 80.0,
+            "early_failure_steps": 3,
+            "early_failure_penalty": 120.0,
+            "collision_terminal_penalty": 40.0,
+            "out_of_range_terminal_penalty": 35.0,
+            "timeout_low_progress_penalty": 20.0,
+            "battery_reward_scale": 0.25,
+            "center_reward_scale": 0.5,
+        }
 
         # 出圈计数器
         self.out_of_range_count = 0
@@ -536,44 +551,10 @@ class SimpleWeightEnv(gym.Env):
 
             # 计算奖励
             reward = self._calculate_reward(action)
-            self.total_episode_reward += reward
 
             # 更新碰撞计数（使用真实碰撞事件，避免“近距离误判碰撞”）
             self._update_collision_count()
             episode_metrics = self._collect_episode_metrics()
-
-            # 将训练统计信息传递给服务器（用于数据采集）
-            if self.server:
-                self.server.set_training_stats(
-                    episode=self.episode_count,
-                    step=self.step_count,
-                    reward=float(reward),
-                    total_reward=float(self.total_episode_reward),
-                )
-
-                self.server.data_collector.set_external_data(
-                    "collision_count", int(self.collision_count)
-                )
-                self.server.data_collector.set_external_data(
-                    "out_of_range_count", int(self._out_of_range_count)
-                )
-                self.server.data_collector.set_external_data(
-                    "max_global_scan_ratio",
-                    float(episode_metrics["episode_max_global_scan_ratio"]),
-                )
-                self.server.data_collector.set_external_data(
-                    "min_global_avg_entropy",
-                    float(episode_metrics["episode_min_global_entropy"]),
-                )
-                self.server.data_collector.set_external_data(
-                    "global_scanned_count",
-                    int(episode_metrics["global_scanned_count"]),
-                )
-                self.server.data_collector.set_external_data(
-                    "global_total_count",
-                    int(episode_metrics["global_total_count"]),
-                )
-                self.server.data_collector.set_external_data("reset_reason", "")
             # 记录当前动作
             self.last_action = action.copy()
 
@@ -651,6 +632,46 @@ class SimpleWeightEnv(gym.Env):
                                     print(f"[终止] 覆盖率达成: {scan_ratio:.2%}")
                                     done = True
                                     reset_reason = "扫描完成"
+
+            if done:
+                reward = self._apply_terminal_reward_adjustment(
+                    reward, reset_reason, episode_metrics
+                )
+
+            self.total_episode_reward += reward
+
+            # 将训练统计信息传递给服务器（用于数据采集）
+            if self.server:
+                self.server.set_training_stats(
+                    episode=self.episode_count,
+                    step=self.step_count,
+                    reward=float(reward),
+                    total_reward=float(self.total_episode_reward),
+                )
+
+                self.server.data_collector.set_external_data(
+                    "collision_count", int(self.collision_count)
+                )
+                self.server.data_collector.set_external_data(
+                    "out_of_range_count", int(self._out_of_range_count)
+                )
+                self.server.data_collector.set_external_data(
+                    "max_global_scan_ratio",
+                    float(episode_metrics["episode_max_global_scan_ratio"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "min_global_avg_entropy",
+                    float(episode_metrics["episode_min_global_entropy"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "global_scanned_count",
+                    int(episode_metrics["global_scanned_count"]),
+                )
+                self.server.data_collector.set_external_data(
+                    "global_total_count",
+                    int(episode_metrics["global_total_count"]),
+                )
+                self.server.data_collector.set_external_data("reset_reason", "")
 
             # 显示奖励信息
             print(f"\n📈 本步奖励: {reward:+.2f}")
@@ -918,12 +939,49 @@ class SimpleWeightEnv(gym.Env):
             "episode_min_global_entropy": self._episode_min_global_entropy,
         }
 
+    def _apply_terminal_reward_adjustment(
+        self, reward: float, reset_reason: str, episode_metrics: dict
+    ) -> float:
+        if reset_reason == "扫描完成":
+            return reward + self.reward_shaping_cfg["scan_complete_bonus"]
+
+        max_scan_ratio = float(
+            episode_metrics.get("episode_max_global_scan_ratio", 0.0)
+        )
+        poor_progress_threshold = max(
+            self.reward_shaping_cfg["poor_progress_scan_ratio"], 1e-6
+        )
+        progress_scale = min(max_scan_ratio / poor_progress_threshold, 1.0)
+
+        penalty = self.reward_shaping_cfg["failure_base_penalty"]
+        penalty += self.reward_shaping_cfg["poor_progress_penalty"] * (
+            1.0 - progress_scale
+        )
+
+        if self.step_count <= self.reward_shaping_cfg["early_failure_steps"]:
+            penalty += self.reward_shaping_cfg["early_failure_penalty"]
+
+        if reset_reason == "碰撞":
+            penalty += self.reward_shaping_cfg["collision_terminal_penalty"]
+        elif reset_reason == "出圈":
+            penalty += self.reward_shaping_cfg["out_of_range_terminal_penalty"]
+        elif (
+            reset_reason == "超时"
+            and max_scan_ratio < self.reward_shaping_cfg["poor_progress_scan_ratio"]
+        ):
+            penalty += self.reward_shaping_cfg["timeout_low_progress_penalty"]
+
+        print(
+            f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
+        )
+        return reward - penalty
+
     def _calculate_reward(self, action: np.ndarray) -> float:
         """计算奖励（尽量与实体奖励结构一致）"""
         if not self.server:
             return 0.0
 
-        reward = 0.0
+        reward = -self.reward_shaping_cfg["base_step_cost"]
 
         try:
             with self.server.data_lock:
@@ -981,6 +1039,8 @@ class SimpleWeightEnv(gym.Env):
             new_scanned = current_scanned - self.prev_scanned_cells
             if new_scanned > 0:
                 reward += self.reward_config.scan_reward * new_scanned
+            else:
+                reward -= self.reward_shaping_cfg["no_progress_penalty"]
             self.prev_scanned_cells = current_scanned
 
             # 5. 边界控制奖励（渐进式边界惩罚 + 朝向中心奖励）
@@ -1048,7 +1108,9 @@ class SimpleWeightEnv(gym.Env):
                             # 奖励朝向中心飞行（只在靠近边界时才给奖励）
                             if alignment > 0.3 and distance_ratio > 0.5:
                                 center_reward = (
-                                    self.boundary_cfg["center_reward"] * alignment
+                                    self.boundary_cfg["center_reward"]
+                                    * self.reward_shaping_cfg["center_reward_scale"]
+                                    * alignment
                                 )
                                 reward += center_reward
                                 print(f"🎯 朝向中心飞行: 奖励+{center_reward:.2f}")
@@ -1067,9 +1129,13 @@ class SimpleWeightEnv(gym.Env):
                 <= current_voltage
                 <= self.reward_config.battery_optimal_max
             ):
-                reward += self.reward_config.battery_optimal_reward
+                battery_reward = (
+                    self.reward_config.battery_optimal_reward
+                    * self.reward_shaping_cfg["battery_reward_scale"]
+                )
+                reward += battery_reward
                 print(
-                    f"🔋 电量奖励: +{self.reward_config.battery_optimal_reward:.2f} (电量{current_voltage:.2f}V在最优范围)"
+                    f"🔋 电量奖励: +{battery_reward:.2f} (电量{current_voltage:.2f}V在最优范围)"
                 )
             elif current_voltage < self.reward_config.battery_low_threshold:
                 reward -= self.reward_config.battery_low_penalty

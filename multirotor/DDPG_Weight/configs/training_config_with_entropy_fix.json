@@ -24,6 +24,7 @@
 
   "model_name": "weight_predictor_airsim",
   "use_initial_weights": false,
+  "overwrite_model": true,
   "initial_model_path": null,
 
   "_comment_entropy_fix_details": "修复说明：",
