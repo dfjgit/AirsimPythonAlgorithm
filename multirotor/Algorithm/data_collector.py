@@ -556,11 +556,21 @@ class DataCollector:
                         self.terminal_scan_episode = None
                         self.terminal_scan_step = None
 
-                    terminal_reason = str(reset_reason).strip()
-                    is_terminal_frame = bool(terminal_reason) and current_step_int > 0
+                    valid_step_frame = current_episode_int >= 0 and current_step_int > 0
+                    terminal_reason = str(reset_reason).strip() if valid_step_frame else ""
+                    is_terminal_frame = bool(terminal_reason)
                     should_skip_scan_row = (
-                        self.terminal_scan_episode == current_episode_int
+                        not valid_step_frame
+                        or self.terminal_scan_episode == current_episode_int
                     )
+
+                    row_reset_reason = terminal_reason if is_terminal_frame else ""
+                    row_collision_count = collision_count if is_terminal_frame else 0
+                    row_out_of_range_count = out_of_range_count if is_terminal_frame else 0
+                    row_collision_object_name = collision_object_name if is_terminal_frame else ""
+                    row_collision_penetration_depth = collision_penetration_depth if is_terminal_frame else 0.0
+                    row_collision_position = collision_position if is_terminal_frame else ""
+                    row_recent_trajectory = recent_trajectory if is_terminal_frame else ""
 
                     if not should_skip_scan_row:
                         row = [
@@ -580,15 +590,15 @@ class DataCollector:
                             f"{scan_ratio:.2f}%",
                             f"{global_avg_entropy:.2f}",
                             f"{global_scan_ratio:.2f}%",
-                            reset_reason,
-                            collision_count,
-                            out_of_range_count,
+                            row_reset_reason,
+                            row_collision_count,
+                            row_out_of_range_count,
                             f"{max_global_scan_ratio:.2f}%",
                             f"{min_global_avg_entropy:.2f}",
-                            collision_object_name,
-                            f"{collision_penetration_depth:.3f}",
-                            collision_position,
-                            recent_trajectory,
+                            row_collision_object_name,
+                            f"{row_collision_penetration_depth:.3f}",
+                            row_collision_position,
+                            row_recent_trajectory,
                             json.dumps(bins, ensure_ascii=False),
                             json.dumps(hist, ensure_ascii=False),
                             json.dumps(cdf, ensure_ascii=False),

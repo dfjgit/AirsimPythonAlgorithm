@@ -87,8 +87,10 @@ class SimpleWeightEnv(gym.Env):
             "base_step_cost": 2.0,
             "no_progress_penalty": 3.0,
             "scan_complete_bonus": 120.0,
+            "time_limit_completion_bonus": 30.0,
             "failure_base_penalty": 25.0,
             "poor_progress_scan_ratio": 5.0,
+            "healthy_time_limit_scan_ratio": 8.0,
             "poor_progress_penalty": 80.0,
             "early_failure_steps": 3,
             "early_failure_penalty": 120.0,
@@ -96,13 +98,23 @@ class SimpleWeightEnv(gym.Env):
             "short_collision_penalty": 80.0,
             "short_collision_reward_cap": -30.0,
             "out_of_range_terminal_penalty": 35.0,
-            "timeout_low_progress_penalty": 20.0,
+            "time_limit_low_progress_penalty": 20.0,
             "battery_reward_scale": 0.25,
             "center_reward_scale": 0.5,
             "obstacle_warning_distance": 4.0,
             "obstacle_danger_distance": 2.2,
             "obstacle_warning_penalty": 3.0,
             "obstacle_danger_penalty": 9.0,
+            "hotspot_obstacle_warning_distance": 5.5,
+            "hotspot_obstacle_danger_distance": 3.2,
+            "hotspot_obstacle_warning_penalty": 6.0,
+            "hotspot_obstacle_danger_penalty": 16.0,
+            "collision_hotspot_center_x": 0.25,
+            "collision_hotspot_center_z": -11.50,
+            "collision_hotspot_warning_radius": 2.20,
+            "collision_hotspot_danger_radius": 1.10,
+            "collision_hotspot_warning_penalty": 4.0,
+            "collision_hotspot_danger_penalty": 12.0,
         }
 
         # 出圈计数器
@@ -645,7 +657,7 @@ class SimpleWeightEnv(gym.Env):
                 if elapsed_time >= self.term_cfg["max_elapsed_time_sec"]:
                     print(f"[终止] 达到最大仿真时间: {elapsed_time:.1f}s")
                     done = True
-                    reset_reason = "超时"
+                    reset_reason = "达到时长上限"
                 elif self.collision_count >= self.term_cfg["max_collision_count"]:
                     print(f"[终止] 发生碰撞: {self.collision_count}")
                     done = True
@@ -1005,22 +1017,91 @@ class SimpleWeightEnv(gym.Env):
             float(self.reward_shaping_cfg["obstacle_danger_distance"]),
             warning_distance,
         )
+        warning_penalty = float(self.reward_shaping_cfg["obstacle_warning_penalty"])
+        danger_penalty = float(self.reward_shaping_cfg["obstacle_danger_penalty"])
+
+        # Obstacle (2) is a confirmed hotspot in the current scene, so give it
+        # a wider buffer and stronger penalty before actual contact.
+        if nearest_name.strip().lower() == "obstacle (2)":
+            warning_distance = max(
+                float(self.reward_shaping_cfg["hotspot_obstacle_warning_distance"]),
+                warning_distance,
+            )
+            danger_distance = min(
+                float(self.reward_shaping_cfg["hotspot_obstacle_danger_distance"]),
+                warning_distance,
+            )
+            warning_penalty = max(
+                float(self.reward_shaping_cfg["hotspot_obstacle_warning_penalty"]),
+                warning_penalty,
+            )
+            danger_penalty = max(
+                float(self.reward_shaping_cfg["hotspot_obstacle_danger_penalty"]),
+                danger_penalty,
+            )
+
         if nearest_distance > warning_distance:
             return 0.0
 
         if nearest_distance <= danger_distance:
-            penalty = float(self.reward_shaping_cfg["obstacle_danger_penalty"])
+            penalty = danger_penalty
         else:
             ratio = (warning_distance - nearest_distance) / max(
                 warning_distance - danger_distance, 1e-6
             )
-            penalty = float(self.reward_shaping_cfg["obstacle_warning_penalty"]) + ratio * (
-                float(self.reward_shaping_cfg["obstacle_danger_penalty"])
-                - float(self.reward_shaping_cfg["obstacle_warning_penalty"])
+            penalty = warning_penalty + ratio * (danger_penalty - warning_penalty)
+
+        print(
+            f"🚧 障碍物接近惩罚: name={nearest_name or 'Unknown'}, "
+            f"distance={nearest_distance:.2f}m, penalty=-{penalty:.2f}"
+        )
+        return penalty
+
+    def _apply_collision_hotspot_penalty(self, runtime_data) -> float:
+        position = getattr(runtime_data, "position", None)
+        if position is None:
+            return 0.0
+
+        try:
+            dx = float(position.x) - float(
+                self.reward_shaping_cfg["collision_hotspot_center_x"]
+            )
+            dz = float(position.z) - float(
+                self.reward_shaping_cfg["collision_hotspot_center_z"]
+            )
+        except Exception:
+            return 0.0
+
+        horizontal_distance = float(np.sqrt(dx * dx + dz * dz))
+        warning_radius = max(
+            float(self.reward_shaping_cfg["collision_hotspot_warning_radius"]), 1e-6
+        )
+        danger_radius = min(
+            float(self.reward_shaping_cfg["collision_hotspot_danger_radius"]),
+            warning_radius,
+        )
+
+        if horizontal_distance > warning_radius:
+            return 0.0
+
+        if horizontal_distance <= danger_radius:
+            penalty = float(self.reward_shaping_cfg["collision_hotspot_danger_penalty"])
+        else:
+            ratio = (warning_radius - horizontal_distance) / max(
+                warning_radius - danger_radius, 1e-6
+            )
+            penalty = float(
+                self.reward_shaping_cfg["collision_hotspot_warning_penalty"]
+            ) + ratio * (
+                float(self.reward_shaping_cfg["collision_hotspot_danger_penalty"])
+                - float(self.reward_shaping_cfg["collision_hotspot_warning_penalty"])
             )
 
         print(
-            f"?? ?????: name={nearest_name or 'Unknown'}, distance={nearest_distance:.2f}m, ??-{penalty:.2f}"
+            f"📍 热点区避让惩罚: center=("
+            f"{self.reward_shaping_cfg['collision_hotspot_center_x']:.2f},"
+            f"{self.reward_shaping_cfg['collision_hotspot_center_z']:.2f}), "
+            f"distance={horizontal_distance:.2f}m, penalty=-{penalty:.2f}"
         )
         return penalty
 
@@ -1254,7 +1335,27 @@ class SimpleWeightEnv(gym.Env):
         poor_progress_threshold = max(
             self.reward_shaping_cfg["poor_progress_scan_ratio"], 1e-6
         )
+        healthy_time_limit_threshold = max(
+            self.reward_shaping_cfg["healthy_time_limit_scan_ratio"], 1e-6
+        )
         progress_scale = min(max_scan_ratio / poor_progress_threshold, 1.0)
+
+        if reset_reason == "达到时长上限":
+            if max_scan_ratio >= healthy_time_limit_threshold:
+                bonus = self.reward_shaping_cfg["time_limit_completion_bonus"]
+                print(
+                    f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 奖励+{bonus:.2f}"
+                )
+                return reward + bonus
+            penalty = self.reward_shaping_cfg["time_limit_low_progress_penalty"]
+            if max_scan_ratio < self.reward_shaping_cfg["poor_progress_scan_ratio"]:
+                penalty += self.reward_shaping_cfg["poor_progress_penalty"] * (
+                    1.0 - progress_scale
+                )
+            print(
+                f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
+            )
+            return reward - penalty
 
         penalty = self.reward_shaping_cfg["failure_base_penalty"]
         penalty += self.reward_shaping_cfg["poor_progress_penalty"] * (
@@ -1270,11 +1371,6 @@ class SimpleWeightEnv(gym.Env):
                 penalty += self.reward_shaping_cfg["short_collision_penalty"]
         elif reset_reason == "出圈":
             penalty += self.reward_shaping_cfg["out_of_range_terminal_penalty"]
-        elif (
-            reset_reason == "超时"
-            and max_scan_ratio < self.reward_shaping_cfg["poor_progress_scan_ratio"]
-        ):
-            penalty += self.reward_shaping_cfg["timeout_low_progress_penalty"]
 
         print(
             f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
@@ -1433,6 +1529,7 @@ class SimpleWeightEnv(gym.Env):
 
             # 6. Obstacle proximity penalty
             reward -= self._apply_obstacle_proximity_penalty(runtime_data)
+            reward -= self._apply_collision_hotspot_penalty(runtime_data)
 
             # 7. Action change and magnitude penalty
             action_delta = float(np.linalg.norm(action - self.last_action))
@@ -1565,5 +1662,6 @@ if __name__ == "__main__":
     print(f"  动作空间: {env_b.action_space.shape}")
 
     print("\n[OK] 两种模式都可用！")
+
 
 
