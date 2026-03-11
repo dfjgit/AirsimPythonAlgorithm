@@ -59,6 +59,8 @@ class DataCollector:
         self.last_scan_episode = -1  # 用于检测 scan_data 的 episode 切换
         self.terminal_scan_episode = None  # 记录已写入 terminal 帧的 episode
         self.terminal_scan_step = None  # 记录 terminal 帧对应 step
+        self.last_written_scan_episode = None  # 记录最近一次已写入的 episode
+        self.last_written_scan_step = None  # 记录最近一次已写入的 step
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -555,12 +557,19 @@ class DataCollector:
                         self.last_scan_episode = current_episode_int
                         self.terminal_scan_episode = None
                         self.terminal_scan_step = None
+                        self.last_written_scan_episode = None
+                        self.last_written_scan_step = None
 
                     valid_step_frame = current_episode_int >= 0 and current_step_int > 0
                     terminal_reason = str(reset_reason).strip() if valid_step_frame else ""
                     is_terminal_frame = bool(terminal_reason)
+                    is_duplicate_step_frame = (
+                        current_episode_int == self.last_written_scan_episode
+                        and current_step_int == self.last_written_scan_step
+                    )
                     should_skip_scan_row = (
                         not valid_step_frame
+                        or is_duplicate_step_frame
                         or self.terminal_scan_episode == current_episode_int
                     )
 
@@ -634,6 +643,8 @@ class DataCollector:
                         
                         self.csv_writer.writerow(row)
                         self.csv_file.flush()  # 立即刷新到文件
+                        self.last_written_scan_episode = current_episode_int
+                        self.last_written_scan_step = current_step_int
 
                         if is_terminal_frame:
                             self.terminal_scan_episode = current_episode_int
@@ -744,5 +755,6 @@ class DataCollector:
                 time.sleep(1)  # 出错后等待1秒再继续
         
         logger.info("数据采集线程已停止")
+
 
 

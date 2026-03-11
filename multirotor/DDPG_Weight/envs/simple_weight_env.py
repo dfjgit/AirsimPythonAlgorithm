@@ -105,16 +105,19 @@ class SimpleWeightEnv(gym.Env):
             "obstacle_danger_distance": 2.2,
             "obstacle_warning_penalty": 3.0,
             "obstacle_danger_penalty": 9.0,
-            "hotspot_obstacle_warning_distance": 5.5,
-            "hotspot_obstacle_danger_distance": 3.2,
-            "hotspot_obstacle_warning_penalty": 6.0,
-            "hotspot_obstacle_danger_penalty": 16.0,
-            "collision_hotspot_center_x": 0.25,
-            "collision_hotspot_center_z": -11.50,
-            "collision_hotspot_warning_radius": 2.20,
-            "collision_hotspot_danger_radius": 1.10,
-            "collision_hotspot_warning_penalty": 4.0,
-            "collision_hotspot_danger_penalty": 12.0,
+            "hotspot_obstacle_warning_distance": 6.5,
+            "hotspot_obstacle_danger_distance": 3.8,
+            "hotspot_obstacle_warning_penalty": 8.0,
+            "hotspot_obstacle_danger_penalty": 20.0,
+            "collision_hotspot_center_x": -0.50,
+            "collision_hotspot_center_z": -10.50,
+            "collision_hotspot_warning_radius": 2.80,
+            "collision_hotspot_danger_radius": 1.40,
+            "collision_hotspot_warning_penalty": 6.0,
+            "collision_hotspot_danger_penalty": 16.0,
+            "collision_hotspot_corridor_half_width_x": 2.20,
+            "collision_hotspot_corridor_half_width_z": 2.70,
+            "collision_hotspot_corridor_penalty": 6.0,
         }
 
         # 出圈计数器
@@ -1105,6 +1108,49 @@ class SimpleWeightEnv(gym.Env):
         )
         return penalty
 
+
+    def _apply_collision_hotspot_corridor_penalty(self, runtime_data) -> float:
+        position = getattr(runtime_data, "position", None)
+        if position is None:
+            return 0.0
+
+        try:
+            dx = abs(
+                float(position.x) - float(self.reward_shaping_cfg["collision_hotspot_center_x"])
+            )
+            dz = abs(
+                float(position.z) - float(self.reward_shaping_cfg["collision_hotspot_center_z"])
+            )
+        except Exception:
+            return 0.0
+
+        half_width_x = max(
+            float(self.reward_shaping_cfg["collision_hotspot_corridor_half_width_x"]),
+            1e-6,
+        )
+        half_width_z = max(
+            float(self.reward_shaping_cfg["collision_hotspot_corridor_half_width_z"]),
+            1e-6,
+        )
+
+        if dx > half_width_x or dz > half_width_z:
+            return 0.0
+
+        ratio_x = 1.0 - min(dx / half_width_x, 1.0)
+        ratio_z = 1.0 - min(dz / half_width_z, 1.0)
+        penalty = (
+            float(self.reward_shaping_cfg["collision_hotspot_corridor_penalty"])
+            * ratio_x
+            * ratio_z
+        )
+        if penalty <= 0.0:
+            return 0.0
+
+        print(
+            f"🧱 热点通道惩罚: dx={dx:.2f}m, dz={dz:.2f}m, penalty=-{penalty:.2f}"
+        )
+        return penalty
+
     def _update_collision_count(self) -> None:
         """更新碰撞计数：优先使用AirSim真实碰撞事件，距离仅作兜底。"""
         if not self.server:
@@ -1530,6 +1576,7 @@ class SimpleWeightEnv(gym.Env):
             # 6. Obstacle proximity penalty
             reward -= self._apply_obstacle_proximity_penalty(runtime_data)
             reward -= self._apply_collision_hotspot_penalty(runtime_data)
+            reward -= self._apply_collision_hotspot_corridor_penalty(runtime_data)
 
             # 7. Action change and magnitude penalty
             action_delta = float(np.linalg.norm(action - self.last_action))
@@ -1662,6 +1709,7 @@ if __name__ == "__main__":
     print(f"  动作空间: {env_b.action_space.shape}")
 
     print("\n[OK] 两种模式都可用！")
+
 
 
 
