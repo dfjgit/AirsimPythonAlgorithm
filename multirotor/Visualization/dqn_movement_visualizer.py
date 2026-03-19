@@ -31,12 +31,12 @@ class ActionDistributionPanel(BasePanel):
     def __init__(self, width: int = 370, height: int = 250):
         super().__init__("action_distribution", width, height)
         self.action_names = {
-            0: "前进",
-            1: "后退", 
+            0: "上升",
+            1: "下降",
             2: "左移",
             3: "右移",
-            4: "上升",
-            5: "下降"
+            4: "前进",
+            5: "后退",
         }
     
     def draw(self, screen: pygame.Surface, data: Dict[str, Any]):
@@ -167,7 +167,7 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         self.panel_manager.register_panel(training_panel, position='auto')
 
         # 当前动作输出面板 (新增)
-        action_out_panel = ActionOutputPanel(width=370, height=150)
+        action_out_panel = ActionOutputPanel(width=370, height=260)
         self.panel_manager.register_panel(action_out_panel, position='auto')
         
         # 奖励曲线面板

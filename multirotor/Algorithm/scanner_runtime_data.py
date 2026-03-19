@@ -71,7 +71,7 @@ class ScannerRuntimeData:
 
             # Leader信息
             'leaderPosition': self.leader_position.to_dict(),
-            'leaderScanRadius': self.leader_scan_radius,
+            'leaderScanRadius': float(self.leader_scan_radius),
 
             # 已访问记录和其它扫描者坐标
             'visitedCells': [cell.to_dict() for cell in self.visited_cells],

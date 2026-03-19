@@ -87,23 +87,27 @@ class BaseVisualizer(ABC):
         self._data_update_interval = 0.05  # 50ms更新一次
     
     def _init_colors(self):
-        """初始化颜色常量"""
-        self.BLACK = (0, 0, 0)
-        self.WHITE = (255, 255, 255)
-        self.RED = (255, 0, 0)
-        self.GREEN = (0, 255, 0)
-        self.BLUE = (0, 0, 255)
-        self.YELLOW = (255, 255, 0)
-        self.CYAN = (0, 255, 255)
-        self.MAGENTA = (255, 0, 255)
-        self.ORANGE = (255, 165, 0)
-        self.PURPLE = (128, 0, 128)
-        self.GRAY = (128, 128, 128)
-        self.LIGHT_GRAY = (200, 200, 200)
-        self.DARK_GRAY = (64, 64, 64)
-        self.LIGHT_BLUE = (173, 216, 230)
-        self.DRONE_GREEN = (50, 205, 50)
-        self.SCAN_RANGE_COLOR = (0, 255, 0)
+        """??????????"""
+        self.SCREEN_BACKGROUND = (220, 225, 232)
+        self.PANEL_BACKGROUND = (232, 236, 241)
+        self.TEXT_PRIMARY = (44, 52, 64)
+        self.TEXT_SECONDARY = (95, 106, 123)
+        self.BLACK = self.SCREEN_BACKGROUND
+        self.WHITE = self.TEXT_PRIMARY
+        self.RED = (178, 108, 101)
+        self.GREEN = (87, 137, 114)
+        self.BLUE = (102, 145, 180)
+        self.YELLOW = (176, 140, 82)
+        self.CYAN = (86, 133, 166)
+        self.MAGENTA = (165, 111, 126)
+        self.ORANGE = (189, 133, 94)
+        self.PURPLE = (126, 112, 170)
+        self.GRAY = (205, 213, 223)
+        self.LIGHT_GRAY = (95, 106, 123)
+        self.DARK_GRAY = (137, 147, 162)
+        self.LIGHT_BLUE = (72, 104, 146)
+        self.DRONE_GREEN = (88, 145, 136)
+        self.SCAN_RANGE_COLOR = (58, 120, 128)
     
     def world_to_screen(self, vector) -> Tuple[int, int]:
         """
@@ -149,17 +153,19 @@ class BaseVisualizer(ABC):
             entropy_normalized = max(0, min(1, entropy_value / 100.0))
             
             if entropy_normalized < 0.5:
-                red = int(510 * entropy_normalized)
-                green = 255
+                ratio = entropy_normalized / 0.5
+                low = (72, 116, 176)
+                mid = (178, 132, 74)
+                color = tuple(int(low[i] + (mid[i] - low[i]) * ratio) for i in range(3))
             else:
-                red = 255
-                green = int(255 * (2 - 2 * entropy_normalized))
-            
-            color = (red, green, 0)
+                ratio = (entropy_normalized - 0.5) / 0.5
+                mid = (178, 132, 74)
+                high = (154, 78, 78)
+                color = tuple(int(mid[i] + (high[i] - mid[i]) * ratio) for i in range(3))
             
             # 只绘制可见区域
             if 0 <= screen_x <= self.SCREEN_WIDTH and 0 <= screen_y <= self.SCREEN_HEIGHT:
-                radius = 2 if cell.entropy < 30 else (3 if cell.entropy < 70 else 4)
+                radius = 2 if cell.entropy < 45 else (2 if cell.entropy < 80 else 3)
                 pygame.draw.circle(self.screen, color, (screen_x, screen_y), radius)
     
     def draw_drones(self, runtime_data_dict: Dict):
@@ -184,8 +190,11 @@ class BaseVisualizer(ABC):
                 scan_radius_meters = self.server.config_data.scanRadius
             
             scan_radius_pixels = scan_radius_meters * self.scale
-            pygame.draw.circle(self.screen, self.SCAN_RANGE_COLOR, (screen_x, screen_y), 
-                             int(scan_radius_pixels), 2)
+            scan_surface = pygame.Surface((int(scan_radius_pixels * 2) + 6, int(scan_radius_pixels * 2) + 6), pygame.SRCALPHA)
+            pygame.draw.circle(scan_surface, (*self.SCAN_RANGE_COLOR, 156), (int(scan_radius_pixels) + 3, int(scan_radius_pixels) + 3), int(scan_radius_pixels), 4)
+            pygame.draw.circle(scan_surface, (46, 86, 98, 72), (int(scan_radius_pixels) + 3, int(scan_radius_pixels) + 3), int(scan_radius_pixels) + 1, 1)
+            pygame.draw.circle(scan_surface, (*self.WHITE, 52), (int(scan_radius_pixels) + 3, int(scan_radius_pixels) + 3), int(scan_radius_pixels), 1)
+            self.screen.blit(scan_surface, (screen_x - int(scan_radius_pixels) - 3, screen_y - int(scan_radius_pixels) - 3))
             
             # 绘制无人机主体
             pygame.draw.circle(self.screen, self.DRONE_GREEN, (screen_x, screen_y), 10)
@@ -234,7 +243,11 @@ class BaseVisualizer(ABC):
             # 绘制扫描范围
             if 'leaderScanRadius' in first_drone_data and first_drone_data['leaderScanRadius'] > 0:
                 radius = first_drone_data['leaderScanRadius'] * self.scale
-                pygame.draw.circle(self.screen, self.LIGHT_BLUE, (screen_x, screen_y), int(radius), 3)
+                leader_surface = pygame.Surface((int(radius * 2) + 6, int(radius * 2) + 6), pygame.SRCALPHA)
+                pygame.draw.circle(leader_surface, (52, 76, 112, 92), (int(radius) + 3, int(radius) + 3), int(radius) + 1, 1)
+                pygame.draw.circle(leader_surface, (*self.LIGHT_BLUE, 182), (int(radius) + 3, int(radius) + 3), int(radius), 6)
+                pygame.draw.circle(leader_surface, (*self.WHITE, 86), (int(radius) + 3, int(radius) + 3), int(radius), 1)
+                self.screen.blit(leader_surface, (screen_x - int(radius) - 3, screen_y - int(radius) - 3))
             
             # 绘制标签
             if self.font:
@@ -259,9 +272,9 @@ class BaseVisualizer(ABC):
             background_rect = pygame.Rect(legend_x, legend_y, legend_width, legend_height)
             s = pygame.Surface((legend_width, legend_height))
             s.set_alpha(180)
-            s.fill((0, 0, 0))
+            s.fill(self.PANEL_BACKGROUND)
             self.screen.blit(s, (legend_x, legend_y))
-            pygame.draw.rect(self.screen, self.WHITE, background_rect, 1)
+            pygame.draw.rect(self.screen, self.DARK_GRAY, background_rect, 1)
             
             # 标题
             if not hasattr(self, '_legend_font'):
@@ -270,7 +283,7 @@ class BaseVisualizer(ABC):
                 except:
                     self._legend_font = pygame.font.Font(None, 14)
             
-            title = self._legend_font.render("Entropy", True, self.WHITE)
+            title = self._legend_font.render("Entropy", True, self.DARK_GRAY)
             self.screen.blit(title, (legend_x + 5, legend_y + 5))
             
             # 渐变颜色条
@@ -282,20 +295,22 @@ class BaseVisualizer(ABC):
             for i in range(bar_width):
                 entropy_normalized = i / bar_width
                 if entropy_normalized < 0.5:
-                    red = int(510 * entropy_normalized)
-                    green = 255
+                    ratio = entropy_normalized / 0.5
+                    low = (72, 116, 176)
+                    mid = (178, 132, 74)
+                    color = tuple(int(low[j] + (mid[j] - low[j]) * ratio) for j in range(3))
                 else:
-                    red = 255
-                    green = int(255 * (2 - 2 * entropy_normalized))
-                
-                color = (red, green, 0)
+                    ratio = (entropy_normalized - 0.5) / 0.5
+                    mid = (178, 132, 74)
+                    high = (154, 78, 78)
+                    color = tuple(int(mid[j] + (high[j] - mid[j]) * ratio) for j in range(3))
                 pygame.draw.line(self.screen, color, (bar_x + i, bar_y), (bar_x + i, bar_y + bar_height))
             
             # 刻度标签
-            label_0 = self._legend_font.render("0", True, self.WHITE)
+            label_0 = self._legend_font.render("0", True, self.DARK_GRAY)
             self.screen.blit(label_0, (bar_x, bar_y + bar_height + 2))
             
-            label_100 = self._legend_font.render("100", True, self.WHITE)
+            label_100 = self._legend_font.render("100", True, self.DARK_GRAY)
             label_100_rect = label_100.get_rect(right=bar_x + bar_width)
             self.screen.blit(label_100, (label_100_rect.x, bar_y + bar_height + 2))
         except Exception as e:
@@ -353,11 +368,11 @@ class BaseVisualizer(ABC):
                 # 根据类别选择颜色
                 if is_restricted:
                     # 禁飞区：红色半透明
-                    color = (255, 50, 50, 100)
+                    color = (190, 140, 132, 72)
                     border_color = self.RED
                 else:
                     # 普通障碍物：橙色半透明
-                    color = (255, 165, 0, 100)
+                    color = (202, 174, 138, 64)
                     border_color = self.ORANGE
 
                 # 处理多边形类型（Unity: Polygon=2, Box=4）
@@ -570,7 +585,7 @@ class BaseVisualizer(ABC):
         while self.running:
             try:
                 self.handle_events()
-                self.screen.fill(self.BLACK)
+                self.screen.fill(self.SCREEN_BACKGROUND)
                 
                 # 更新数据
                 grid_data, runtime_data_dict = self.update_data()

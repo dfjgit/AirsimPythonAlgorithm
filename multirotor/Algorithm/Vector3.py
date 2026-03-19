@@ -10,9 +10,17 @@ class Vector3:
     z: float
 
     def __init__(self, x: float = 0.0, y: float = 0.0, z: float = 0.0):
-        self.x = x
-        self.y = y
-        self.z = z
+        self.x = self._coerce_scalar(x)
+        self.y = self._coerce_scalar(y)
+        self.z = self._coerce_scalar(z)
+
+    @staticmethod
+    def _coerce_scalar(value) -> float:
+        """Convert numpy scalar-like values to builtin float for AirSim/JSON."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
     def __repr__(self) -> str:
         return f"Vector3({self.x:.3f}, {self.y:.3f}, {self.z:.3f})"
@@ -71,20 +79,20 @@ class Vector3:
     
     def to_dict(self) -> Dict[str, float]:
         """转换为字典格式"""
-        return {"x": self.x, "y": self.y, "z": self.z}
+        return {"x": float(self.x), "y": float(self.y), "z": float(self.z)}
 
     @classmethod
     def from_dict(cls, data):
         """从字典创建Vector3实例，添加类型检查以防止TypeError"""
         if isinstance(data, dict):
             return cls(
-                x=data.get("x", 0.0),
-                y=data.get("y", 0.0),
-                z=data.get("z", 0.0)
+                x=float(data.get("x", 0.0) or 0.0),
+                y=float(data.get("y", 0.0) or 0.0),
+                z=float(data.get("z", 0.0) or 0.0)
             )
         elif hasattr(data, 'x') and hasattr(data, 'y') and hasattr(data, 'z'):
             # 如果是对象类型且有x,y,z属性
-            return cls(x=data.x, y=data.y, z=data.z)
+            return cls(x=float(data.x), y=float(data.y), z=float(data.z))
         else:
             # 记录错误信息但不抛出异常，避免程序崩溃
             logging.warning(f"Vector3.from_dict: 数据类型无效: {type(data).__name__}, 数据值: {data}")

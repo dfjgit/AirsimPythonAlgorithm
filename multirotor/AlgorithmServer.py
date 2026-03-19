@@ -9,6 +9,7 @@ import sys
 from typing import Dict, Any, Optional, List, Tuple
 import traceback
 from pathlib import Path
+from datetime import datetime
 import numpy as np
 
 # 配置日志系统
@@ -104,6 +105,8 @@ class MultiDroneAlgorithmServer:
         self.last_positions: Dict[str, Dict[str, float]] = {
             name: {} for name in self.drone_names
         }
+        self.reset_trace_path: Optional[Path] = None
+        self._reset_trace_lock = threading.Lock()
 
         # 加载无人机配置
         self.drones_config = DronesConfig()
@@ -129,6 +132,7 @@ class MultiDroneAlgorithmServer:
         self.reset_ack_event = threading.Event()  # 用于重置闭环同步
         self.resetting = False  # 正在重置标志
         self.running = False
+        self.unity_connect_timeout_sec: Optional[float] = None
         self.drone_threads: Dict[str, Optional[threading.Thread]] = {
             name: None for name in self.drone_names
         }
@@ -137,7 +141,10 @@ class MultiDroneAlgorithmServer:
         self.timeout_lock = threading.Lock()  # 超时重置锁
 
         # 记录每台无人机起飞后的初始位置（用于 reset_environment 水平偏移判定）
-        self.home_positions: Dict[str, Tuple[float, float]] = {}
+        self.home_positions: Dict[str, Tuple[float, float, float]] = {}
+        self._home_positions_captured_from_runtime = False
+        self.leader_home_position: Optional[Tuple[float, float, float]] = None
+        self._leader_home_captured_from_runtime = False
 
         # 熵值记录
         self.entropy_history: List[Tuple[float, float]] = []
@@ -185,6 +192,19 @@ class MultiDroneAlgorithmServer:
             )
 
         # 注册Unity数据接收回调
+        timeout_env = os.environ.get("UNITY_CONNECT_TIMEOUT_SEC", "").strip()
+        if timeout_env:
+            try:
+                parsed_timeout = float(timeout_env)
+                if parsed_timeout > 0:
+                    self.unity_connect_timeout_sec = parsed_timeout
+                else:
+                    self.unity_connect_timeout_sec = None
+            except ValueError:
+                logger.warning(
+                    f"????? UNITY_CONNECT_TIMEOUT_SEC={timeout_env!r}?????? Unity ??"
+                )
+
         self.unity_socket.set_callback(self._handle_unity_data)
 
         # 调试：初始化后检查received_obstacles状态
@@ -206,6 +226,15 @@ class MultiDroneAlgorithmServer:
         self.dqn_commands: Dict[str, Vector3] = {
             name: Vector3(0, 0, 0) for name in self.drone_names
         }  # 存储DQN移动指令
+        self.dqn_command_ticks_remaining: Dict[str, int] = {
+            name: 0 for name in self.drone_names
+        }
+        self.dqn_stop_sent: Dict[str, bool] = {
+            name: True for name in self.drone_names
+        }
+        self.dqn_idle_ticks: Dict[str, int] = {
+            name: 0 for name in self.drone_names
+        }
         self.dqn_command_lock = threading.Lock()  # DQN指令锁
 
         # DDPG权重预测（仅在APF模式下使用）
@@ -248,6 +277,9 @@ class MultiDroneAlgorithmServer:
         except Exception as e:
             logger.warning(f"⚠️ 诊断日志初始化失败: {e}")
             self.diagnostic_logger = None
+
+        self._last_obstacle_log_time = 0
+        self._init_reset_trace_logger()
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
         """解析配置文件路径，默认使用项目根目录下的apf_algorithm_config.json"""
@@ -394,23 +426,27 @@ class MultiDroneAlgorithmServer:
         return self.battery_manager.reset_voltage(drone_name)
 
     def set_training_stats(
-        self, episode: int, step: int, reward: float, total_reward: float
+        self,
+        episode: int,
+        step: int,
+        reward: float,
+        total_reward: float,
+        current_episode_steps: Optional[int] = None,
     ):
-        """?????????????????? IPC ????"""
-        now = _time.time()
-
+        """Update in-memory training stats and mirror them to the data collector."""
         with self._training_stats_lock:
-            previous_episode = self.current_training_stats.get("episode_count", -1)
-            if episode != previous_episode or step <= 0:
-                self._episode_start_time = now
-
+            now = _time.time()
             episode_elapsed_time = max(0.0, now - self._episode_start_time)
 
             self.current_training_stats["episode_count"] = episode
             self.current_training_stats["total_steps"] = step
             self.current_training_stats["current_step_reward"] = reward
             self.current_training_stats["current_episode_reward"] = total_reward
-            self.current_training_stats["current_episode_steps"] = step
+            self.current_training_stats["current_episode_steps"] = (
+                int(current_episode_steps)
+                if current_episode_steps is not None
+                else int(self.current_training_stats.get("current_episode_steps", 0))
+            )
             self.current_training_stats["episode_elapsed_time"] = episode_elapsed_time
 
             if "reward_history" not in self.current_training_stats:
@@ -439,9 +475,7 @@ class MultiDroneAlgorithmServer:
 
             reward_stats_source = episode_reward_history if episode_reward_history else reward_history
             if reward_stats_source:
-                self.current_training_stats["avg_reward"] = sum(reward_stats_source) / len(
-                    reward_stats_source
-                )
+                self.current_training_stats["avg_reward"] = sum(reward_stats_source) / len(reward_stats_source)
                 self.current_training_stats["max_reward"] = max(reward_stats_source)
                 self.current_training_stats["min_reward"] = min(reward_stats_source)
             else:
@@ -474,6 +508,103 @@ class MultiDroneAlgorithmServer:
             self.data_collector.set_external_data("env_type", env_type)
             self.data_collector.set_external_data("control_mode", control_mode)
             logger.info(f"实验元数据已设置: {algorithm_type}/{env_type}/{control_mode}")
+
+    def _init_reset_trace_logger(self) -> None:
+        """Create a dedicated persistent reset diagnostic log for DQN runs."""
+        try:
+            if self.control_mode != "dqn":
+                return
+            log_dir = (
+                Path(__file__).resolve().parent
+                / "DQN_Movement"
+                / "scripts"
+                / "logs"
+                / "movement_dqn_airsim"
+                / "reset_diagnostics"
+            )
+            log_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.reset_trace_path = log_dir / f"reset_trace_{timestamp}.jsonl"
+            self._write_reset_trace(
+                "trace_initialized",
+                {
+                    "drone_names": list(self.drone_names),
+                    "control_mode": self.control_mode,
+                    "config_path": str(self.config_path),
+                },
+            )
+        except Exception as exc:
+            logger.warning(f"[ResetTrace] ?????: {exc}")
+            self.reset_trace_path = None
+
+    def _collect_reset_trace_state(self) -> Dict[str, Any]:
+        """Collect a compact snapshot of home/runtime/AirSim state."""
+        snapshot: Dict[str, Any] = {
+            "resetting": bool(self.resetting),
+            "ready_event": bool(self.ready_event.is_set()),
+            "home_positions": {},
+            "leader_home_position": list(self.leader_home_position)
+            if self.leader_home_position is not None
+            else None,
+            "leader_position": None,
+            "airsim_positions": {},
+            "runtime_positions": {},
+        }
+
+        for drone_name, home in self.home_positions.items():
+            snapshot["home_positions"][drone_name] = [float(v) for v in home]
+
+        try:
+            with self.data_lock:
+                for drone_name in self.drone_names:
+                    rd = self.unity_runtime_data.get(drone_name)
+                    if rd and rd.position is not None:
+                        snapshot["runtime_positions"][drone_name] = {
+                            "x": float(rd.position.x),
+                            "y": float(rd.position.y),
+                            "z": float(rd.position.z),
+                        }
+                    if rd and rd.leader_position is not None and snapshot["leader_position"] is None:
+                        snapshot["leader_position"] = {
+                            "x": float(rd.leader_position.x),
+                            "y": float(rd.leader_position.y),
+                            "z": float(rd.leader_position.z),
+                        }
+        except Exception:
+            pass
+
+        for drone_name in self.drone_names:
+            if self.drones_config.is_crazyflie_mirror(drone_name):
+                continue
+            try:
+                state = self.drone_controller.get_vehicle_state(drone_name)
+                pos = state.get("position", (0.0, 0.0, 0.0))
+                snapshot["airsim_positions"][drone_name] = {
+                    "x": float(pos[0]),
+                    "y": float(pos[1]),
+                    "z": float(pos[2]),
+                    "flying": bool(state.get("flying", False)),
+                }
+            except Exception as exc:
+                snapshot["airsim_positions"][drone_name] = {"error": str(exc)}
+
+        return snapshot
+
+    def _write_reset_trace(self, event: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        """Append a dedicated reset diagnostic event to a separate JSONL file."""
+        if self.reset_trace_path is None:
+            return
+        record = {
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "event": event,
+            "payload": payload or {},
+        }
+        try:
+            with self._reset_trace_lock:
+                with self.reset_trace_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            logger.warning(f"[ResetTrace] ????: {exc}")
 
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         """获取所有无人机的电量数据"""
@@ -551,6 +682,14 @@ class MultiDroneAlgorithmServer:
             if not self._init_drones():
                 self._disconnect_airsim()
                 self.unity_socket.stop()
+
+                # ????????? home????????????????????
+                self._restore_home_positions_after_reset(
+                    tolerance_xy=0.5,
+                    tolerance_z=0.2,
+                    exact_only=True,
+                    target_z_override=-0.05,
+                )
                 return False
 
             # 4. 启动可视化（如果已初始化）
@@ -572,25 +711,38 @@ class MultiDroneAlgorithmServer:
             return False
 
     def _start_unity_socket(self) -> bool:
-        """启动Unity Socket服务并等待连接"""
-        logger.info("启动Unity Socket服务...")
+        """??Unity Socket???????"""
+        logger.info("??Unity Socket??...")
         if not self.unity_socket.start():
-            logger.error("Unity Socket服务启动失败")
+            logger.error("Unity Socket??????")
             return False
 
-        # 等待Unity连接（超时120秒）
-        timeout = 120
+        # ?????? Unity ?????????? UNITY_CONNECT_TIMEOUT_SEC?
+        timeout = self.unity_connect_timeout_sec
         start_time = _time.time()
-        while _time.time() - start_time < timeout:
+        last_wait_log = start_time - 15.0
+        while True:
             if self.unity_socket.is_connected():
-                logger.info("Unity客户端已连接")
+                logger.info("Unity??????")
                 self.unity_socket.send_config(self.config_data)
                 self.unity_socket.send_drone_config(self.drones_config)
-                # logger.info("已发送初始配置数据到Unity")
+                # logger.info("??????????Unity")
                 return True
+
+            now = _time.time()
+            elapsed = now - start_time
+            if timeout is not None and elapsed >= timeout:
+                logger.error(f"??Unity?????{timeout}??")
+                return False
+
+            if now - last_wait_log >= 15.0:
+                last_wait_log = now
+                if timeout is None:
+                    logger.info(f"????Unity?????? {elapsed:.1f} ?")
+                else:
+                    logger.info(f"????Unity?????? {elapsed:.1f}/{timeout:.1f} ?")
             _time.sleep(0.5)
 
-        logger.error(f"等待Unity连接超时（{timeout}秒）")
         return False
 
     def _connect_airsim(self) -> bool:
@@ -628,7 +780,7 @@ class MultiDroneAlgorithmServer:
         return all_success
 
     def _wait_for_takeoff(self, timeout: float = 5.0) -> bool:
-        """等待所有虚拟无人机 flying=True（短暂等待即可）"""
+        """????????????? Flying ???"""
         start = _time.time()
         while _time.time() - start < timeout:
             all_ready = True
@@ -636,15 +788,30 @@ class MultiDroneAlgorithmServer:
                 if self.drones_config.is_crazyflie_mirror(name):
                     continue
                 state = self.drone_controller.get_vehicle_state(name)
-                if not state.get("flying", False):
-                    all_ready = False
-                    break
+                pos = state.get("position", (0.0, 0.0, 0.0))
+                altitude = -float(pos[2]) if pos is not None else 0.0
+                if state.get("flying", False) or altitude > 1.2:
+                    if altitude > 1.2 and not state.get("flying", False):
+                        self.drone_controller._update_state_field(name, "flying", True)
+                    continue
+                all_ready = False
+                break
             if all_ready:
-                logger.info("所有虚拟无人机已稳定在空中")
+                logger.info("?????????????")
                 return True
             _time.sleep(0.1)
-        logger.info("[起飞检测] 完成（所有无人机已起飞）")
-        return True  # 即使超时也返回成功，因为takeoff已经设置了flying标志
+
+        pending = []
+        for name in self.drone_names:
+            if self.drones_config.is_crazyflie_mirror(name):
+                continue
+            state = self.drone_controller.get_vehicle_state(name)
+            pos = state.get("position", (0.0, 0.0, 0.0))
+            altitude = -float(pos[2]) if pos is not None else 0.0
+            if not state.get("flying", False) and altitude <= 1.2:
+                pending.append(f"{name}(alt={altitude:.2f})")
+        logger.warning(f"[????] ?????????: {pending}")
+        return False
 
     def start_mission(self) -> bool:
         """开始任务：控制所有无人机起飞并启动算法线程"""
@@ -659,7 +826,9 @@ class MultiDroneAlgorithmServer:
 
             # 等待所有虚拟无人机确认 flying=True 再开始仿真
             logger.info("无人机起飞完成，等待所有无人机稳定...")
-            self._wait_for_takeoff()
+            if not self._wait_for_takeoff(timeout=12.0):
+                logger.error("[Mission] ?????????????")
+                return False
 
             # 记录每台无人机起飞后的初始位置（AirSim NED: x,y 为水平）
             for name in self.drone_names:
@@ -668,9 +837,13 @@ class MultiDroneAlgorithmServer:
                 try:
                     state = self.drone_controller.get_vehicle_state(name)
                     pos = state.get("position", (0.0, 0.0, 0.0))
-                    self.home_positions[name] = (float(pos[0]), float(pos[1]))
+                    self.home_positions[name] = (
+                        float(pos[0]),
+                        float(pos[1]),
+                        float(pos[2]),
+                    )
                     logger.info(
-                        f"[Home] {name} home_xy=({self.home_positions[name][0]:.2f},{self.home_positions[name][1]:.2f})"
+                        f"[Home] {name} home_xyz=({self.home_positions[name][0]:.2f},{self.home_positions[name][1]:.2f},{self.home_positions[name][2]:.2f})"
                     )
                 except Exception as e:
                     logger.warning(f"[Home] 记录{name} home位置失败: {e}")
@@ -717,6 +890,324 @@ class MultiDroneAlgorithmServer:
         logger.warning("任务已在运行中")
         return False
 
+    def _restore_home_positions_after_reset(
+        self,
+        tolerance_xy: float = 1.5,
+        tolerance_z: float = 0.45,
+        move_speed: float = 2.0,
+        teleport_threshold_xy: float = 3.0,
+        exact_only: bool = False,
+        target_z_override: Optional[float] = None,
+    ) -> bool:
+        """Move virtual drones back near their recorded home positions after reset."""
+        if not self.home_positions:
+            logger.warning("[Reset] No recorded home positions; skip home restoration")
+            return False
+
+        all_restored = True
+        for drone_name in self.drone_names:
+            if self.drones_config.is_crazyflie_mirror(drone_name):
+                continue
+            if drone_name not in self.home_positions:
+                logger.warning(f"[Reset] Missing home position for {drone_name}; skip restoration")
+                all_restored = False
+                continue
+            try:
+                state = self.drone_controller.get_vehicle_state(drone_name)
+                pos = state.get('position', (0.0, 0.0, 0.0))
+                home_x, home_y, home_z = self.home_positions[drone_name]
+                target_z = (
+                    float(target_z_override)
+                    if target_z_override is not None
+                    else float(home_z)
+                )
+                if target_z_override is None and target_z > -0.8:
+                    target_z = -3.0
+                horizontal_error = math.hypot(float(pos[0]) - home_x, float(pos[1]) - home_y)
+                vertical_error = abs(float(pos[2]) - float(target_z))
+                if horizontal_error <= tolerance_xy and vertical_error <= tolerance_z:
+                    logger.info(
+                        f"[Reset] {drone_name} already near home: "
+                        f"err_xy={horizontal_error:.2f}m, err_z={vertical_error:.2f}m"
+                    )
+                    continue
+
+                logger.warning(
+                    f"[Reset] {drone_name} drifted from home; "
+                    f"err_xy={horizontal_error:.2f}m, err_z={vertical_error:.2f}m; "
+                    f"restoring to ({home_x:.2f}, {home_y:.2f}, {target_z:.2f})"
+                )
+                self._write_reset_trace(
+                    "home_restore_attempt",
+                    {
+                        "drone_name": drone_name,
+                        "home": [home_x, home_y, target_z],
+                        "current": [float(pos[0]), float(pos[1]), float(pos[2])],
+                        "horizontal_error": float(horizontal_error),
+                        "vertical_error": float(vertical_error),
+                        "exact_only": bool(exact_only),
+                    },
+                )
+
+                if exact_only:
+                    restored = self.drone_controller.reset_vehicle_to_pose(
+                        vehicle_name=drone_name,
+                        position=(home_x, home_y, target_z),
+                        ignore_collision=True,
+                    )
+                    if not restored:
+                        logger.warning(
+                            f"[Reset] Exact pose restore failed for {drone_name}"
+                        )
+                else:
+                    restored = self.drone_controller.move_to_position(
+                        home_x,
+                        home_y,
+                        target_z,
+                        speed=move_speed,
+                        vehicle_name=drone_name,
+                    )
+                    if not restored and horizontal_error >= teleport_threshold_xy:
+                        logger.warning(
+                            f"[Reset] Airborne move restore failed for {drone_name} while far from home"
+                        )
+
+                _time.sleep(0.3)
+                verify_state = self.drone_controller.get_vehicle_state(drone_name)
+                verify_pos = verify_state.get('position', (0.0, 0.0, 0.0))
+                verify_error = math.hypot(
+                    float(verify_pos[0]) - home_x,
+                    float(verify_pos[1]) - home_y,
+                )
+                verify_vertical_error = abs(float(verify_pos[2]) - float(target_z))
+
+                if (
+                    not exact_only
+                    and (verify_error > tolerance_xy or verify_vertical_error > tolerance_z)
+                    and restored
+                    and horizontal_error < teleport_threshold_xy
+                ):
+                    logger.warning(
+                        f"[Reset] {drone_name} move correction required: "
+                        f"err_xy={verify_error:.2f}m, err_z={verify_vertical_error:.2f}m"
+                    )
+                    moved = self.drone_controller.move_to_position(
+                        home_x,
+                        home_y,
+                        target_z,
+                        speed=move_speed,
+                        vehicle_name=drone_name,
+                    )
+                    if not moved:
+                        logger.warning(f"[Reset] Move correction failed for {drone_name}")
+                        all_restored = False
+                        continue
+                    _time.sleep(0.3)
+                    verify_state = self.drone_controller.get_vehicle_state(drone_name)
+                    verify_pos = verify_state.get('position', (0.0, 0.0, 0.0))
+                    verify_error = math.hypot(
+                        float(verify_pos[0]) - home_x,
+                        float(verify_pos[1]) - home_y,
+                    )
+                    verify_vertical_error = abs(float(verify_pos[2]) - float(target_z))
+
+                if verify_error > tolerance_xy or verify_vertical_error > tolerance_z:
+                    logger.warning(
+                        f"[Reset] {drone_name} still away from home after restore: "
+                        f"err_xy={verify_error:.2f}m, err_z={verify_vertical_error:.2f}m"
+                    )
+                    all_restored = False
+                    self._write_reset_trace(
+                        "home_restore_result",
+                        {
+                            "drone_name": drone_name,
+                            "status": "failed",
+                            "home": [home_x, home_y, target_z],
+                            "verified": [float(verify_pos[0]), float(verify_pos[1]), float(verify_pos[2])],
+                            "horizontal_error": float(verify_error),
+                            "vertical_error": float(verify_vertical_error),
+                        },
+                    )
+                else:
+                    logger.info(
+                        f"[Reset] {drone_name} restored near home successfully: "
+                        f"err_xy={verify_error:.2f}m, err_z={verify_vertical_error:.2f}m"
+                    )
+                    self._write_reset_trace(
+                        "home_restore_result",
+                        {
+                            "drone_name": drone_name,
+                            "status": "success",
+                            "home": [home_x, home_y, target_z],
+                            "verified": [float(verify_pos[0]), float(verify_pos[1]), float(verify_pos[2])],
+                            "horizontal_error": float(verify_error),
+                            "vertical_error": float(verify_vertical_error),
+                        },
+                    )
+            except Exception as e:
+                logger.warning(f"[Reset] Failed to restore home position for {drone_name}: {e}")
+                all_restored = False
+
+        return all_restored
+
+    def _verify_home_positions(
+        self,
+        tolerance_xy: float = 0.5,
+        tolerance_z: float = 0.45,
+    ) -> bool:
+        """Check whether all virtual drones are near their recorded home positions."""
+        if not self.home_positions:
+            return False
+
+        all_ok = True
+        for drone_name in self.drone_names:
+            if self.drones_config.is_crazyflie_mirror(drone_name):
+                continue
+            if drone_name not in self.home_positions:
+                all_ok = False
+                continue
+            try:
+                state = self.drone_controller.get_vehicle_state(drone_name)
+                pos = state.get("position", (0.0, 0.0, 0.0))
+                home_x, home_y, home_z = self.home_positions[drone_name]
+                err_xy = math.hypot(float(pos[0]) - home_x, float(pos[1]) - home_y)
+                err_z = abs(float(pos[2]) - float(home_z))
+                if err_xy > tolerance_xy or err_z > tolerance_z:
+                    logger.warning(
+                        f"[Reset] {drone_name} verification mismatch: "
+                        f"err_xy={err_xy:.2f}m, err_z={err_z:.2f}m"
+                    )
+                    all_ok = False
+            except Exception as exc:
+                logger.warning(f"[Reset] Failed to verify {drone_name} home position: {exc}")
+                all_ok = False
+
+        return all_ok
+
+    def _capture_home_positions_from_runtime(self) -> None:
+        """Capture logical home positions from the first valid Unity runtime frame."""
+        if self._home_positions_captured_from_runtime:
+            return
+
+        captured: Dict[str, Tuple[float, float, float]] = {}
+        for drone_name in self.drone_names:
+            runtime_data = self.unity_runtime_data.get(drone_name)
+            if not runtime_data or runtime_data.position is None:
+                return
+
+            try:
+                airsim_pos = runtime_data.position.unity_to_air_sim()
+                captured[drone_name] = (
+                    float(airsim_pos.x),
+                    float(airsim_pos.y),
+                    float(airsim_pos.z),
+                )
+            except Exception:
+                return
+
+        self.home_positions.update(captured)
+        self._home_positions_captured_from_runtime = True
+        for drone_name, (home_x, home_y, home_z) in captured.items():
+            logger.info(
+                f"[HomeRuntime] {drone_name} home_xyz=({home_x:.2f},{home_y:.2f},{home_z:.2f}) captured from Unity runtime"
+            )
+
+    def _capture_leader_home_from_runtime(self) -> None:
+        """Capture the logical leader home position from Unity runtime once."""
+        if self._leader_home_captured_from_runtime:
+            return
+
+        for drone_name in self.drone_names:
+            runtime_data = self.unity_runtime_data.get(drone_name)
+            if not runtime_data or runtime_data.leader_position is None:
+                continue
+
+            leader_pos = runtime_data.leader_position
+            self.leader_home_position = (
+                float(leader_pos.x),
+                float(leader_pos.y),
+                float(leader_pos.z),
+            )
+            self._leader_home_captured_from_runtime = True
+            logger.info(
+                "[HomeRuntime] Leader home_xyz=(%.2f,%.2f,%.2f) captured from Unity runtime"
+                % self.leader_home_position
+            )
+            return
+
+    def _get_runtime_leader_position(self) -> Optional[Tuple[float, float, float]]:
+        """Return the first available leader position from Unity runtime data."""
+        with self.data_lock:
+            for drone_name in self.drone_names:
+                runtime_data = self.unity_runtime_data.get(drone_name)
+                if not runtime_data or runtime_data.leader_position is None:
+                    continue
+                leader_pos = runtime_data.leader_position
+                return (
+                    float(leader_pos.x),
+                    float(leader_pos.y),
+                    float(leader_pos.z),
+                )
+        return None
+
+    def _is_leader_home_ready(self, tolerance_xy: float = 0.75) -> bool:
+        """Check whether Unity leader has returned near its captured home position."""
+        if self.leader_home_position is None:
+            return True
+
+        leader_pos = self._get_runtime_leader_position()
+        if leader_pos is None:
+            return False
+
+        return (
+            math.hypot(
+                float(leader_pos[0]) - float(self.leader_home_position[0]),
+                float(leader_pos[2]) - float(self.leader_home_position[2]),
+            )
+            <= tolerance_xy
+        )
+
+    def _wait_for_leader_home(self, timeout_sec: float, tolerance_xy: float = 0.75) -> bool:
+        """Wait briefly for the Unity leader to return near its captured home position."""
+        deadline = _time.time() + timeout_sec
+        last_log_time = 0.0
+        while _time.time() < deadline:
+            if self._is_leader_home_ready(tolerance_xy=tolerance_xy):
+                leader_pos = self._get_runtime_leader_position()
+                self._write_reset_trace(
+                    "leader_home_check",
+                    {
+                        "status": "ready",
+                        "leader_home_position": list(self.leader_home_position)
+                        if self.leader_home_position is not None
+                        else None,
+                        "leader_position": list(leader_pos) if leader_pos is not None else None,
+                    },
+                )
+                return True
+
+            now = _time.time()
+            if now - last_log_time >= 1.0:
+                last_log_time = now
+                leader_pos = self._get_runtime_leader_position()
+                logger.info(
+                    f"[Reset] waiting for leader home... current={leader_pos}, home={self.leader_home_position}"
+                )
+            _time.sleep(0.2)
+
+        leader_pos = self._get_runtime_leader_position()
+        self._write_reset_trace(
+            "leader_home_check",
+            {
+                "status": "timeout",
+                "leader_home_position": list(self.leader_home_position)
+                if self.leader_home_position is not None
+                else None,
+                "leader_position": list(leader_pos) if leader_pos is not None else None,
+            },
+        )
+        return self._is_leader_home_ready(tolerance_xy=tolerance_xy)
+
     def _takeoff_all(self) -> bool:
         """控制所有无人机起飞"""
         logger.info("开始所有无人机起飞流程")
@@ -747,6 +1238,51 @@ class MultiDroneAlgorithmServer:
             self.reset_ack_event.set()
 
     # 修改MultiDroneAlgorithmServer类中的_handle_unity_data方法
+    def _has_runtime_and_grid_ready(self) -> bool:
+        """Check whether all drones have valid runtime data and grid data is populated."""
+        try:
+            with self.data_lock:
+                runtime_ready = all(
+                    drone_name in self.unity_runtime_data
+                    and self.unity_runtime_data[drone_name].position is not None
+                    for drone_name in self.drone_names
+                )
+            with self.grid_lock:
+                grid_ready = bool(self.grid_data and self.grid_data.cells)
+            return runtime_ready and grid_ready
+        except Exception:
+            return False
+
+    def _wait_for_post_reset_data(
+        self, timeout_sec: float, retry_on_timeout: bool = False
+    ) -> bool:
+        """Wait for runtime/grid data to become ready after a reset."""
+        deadline = _time.time() + timeout_sec
+        while _time.time() < deadline:
+            if self._has_runtime_and_grid_ready():
+                return True
+            _time.sleep(0.2)
+
+        if (
+            retry_on_timeout
+            and self.unity_socket
+            and self.unity_socket.is_connected()
+        ):
+            logger.warning("[重置] 重置后数据未就绪，补发一次 start_simulation 指令")
+            try:
+                self.unity_socket.send_start_simulation_command()
+            except Exception as exc:
+                logger.warning(f"[重置] 补发 start_simulation 失败: {exc}")
+                return False
+
+            deadline = _time.time() + 5.0
+            while _time.time() < deadline:
+                if self._has_runtime_and_grid_ready():
+                    return True
+                _time.sleep(0.2)
+
+        return self._has_runtime_and_grid_ready()
+
     def _handle_unity_data(self, received_data: Dict[str, Any]) -> None:
         """处理从Unity接收的新格式数据
         注意：unity_socket_server.py会将原始DataPacks格式转换为包含特定数据类型的字典
@@ -829,6 +1365,8 @@ class MultiDroneAlgorithmServer:
                             if received_names == set(self.drone_names) and all_valid:
                                 # 关键逻辑：重置期间禁止自动解锁 ready_event
                                 if not self.resetting:
+                                    self._capture_home_positions_from_runtime()
+                                    self._capture_leader_home_from_runtime()
                                     logger.info(
                                         f"首帧 runtime_data 收齐（{len(received_names)}台），解除同步锁"
                                     )
@@ -1311,7 +1849,7 @@ class MultiDroneAlgorithmServer:
             if not self.ready_event.is_set():
                 logger.info(f"[{drone_name}] 等待重置后同步... (ready_event=False)")
                 # 添加超时等待
-                reset_wait_timeout = 20.0  # 20秒超时
+                reset_wait_timeout = 45.0  # full reset plus home restoration can legitimately take longer
                 reset_wait_start = _time.time()
                 while (
                     not self.ready_event.is_set()
@@ -1320,8 +1858,14 @@ class MultiDroneAlgorithmServer:
                     _time.sleep(0.1)
 
                 if not self.ready_event.is_set():
+                    if self.resetting:
+                        logger.warning(
+                            f"[{drone_name}] ?? ?????????????? {reset_wait_timeout}s?????"
+                        )
+                        _time.sleep(0.5)
+                        continue
                     logger.warning(
-                        f"[{drone_name}] ⚠️ 重置后同步超时({reset_wait_timeout}s)，强制继续..."
+                        f"[{drone_name}] ?? ??????? {reset_wait_timeout}s?? reset ????????"
                     )
                     self.ready_event.set()
                 else:
@@ -1469,9 +2013,23 @@ class MultiDroneAlgorithmServer:
                 elif self.control_mode == "dqn":
                     # DQN模式：使用外部DQN提供的移动指令
                     with self.dqn_command_lock:
-                        move_direction = self.dqn_commands.get(
-                            drone_name, Vector3(0, 0, 0)
+                        ticks_remaining = int(
+                            self.dqn_command_ticks_remaining.get(drone_name, 0)
                         )
+                        if ticks_remaining > 0:
+                            move_direction = self.dqn_commands.get(
+                                drone_name, Vector3(0, 0, 0)
+                            )
+                            self.dqn_command_ticks_remaining[drone_name] = max(
+                                0, ticks_remaining - 1
+                            )
+                            self.dqn_idle_ticks[drone_name] = 0
+                            self.dqn_stop_sent[drone_name] = False
+                        else:
+                            move_direction = Vector3(0, 0, 0)
+                            self.dqn_idle_ticks[drone_name] = (
+                                self.dqn_idle_ticks.get(drone_name, 0) + 1
+                            )
 
                     # 如果有有效的DQN指令，执行移动
                     if move_direction.magnitude() > 0.001:
@@ -1489,6 +2047,25 @@ class MultiDroneAlgorithmServer:
                     # DQN模式下不需要运行APF算法，因为DQN已经直接控制无人机
                     # 只需要保持runtime_data的基本更新即可（由Unity发送）
                     logger.debug(f"[DQN模式] DQN直接控制，跳过APF算法计算")
+                    # DQN ??????? AirSim ????????? Unity?
+                    # ?? Unity ??????????????????????
+                    # leader ???????/??????????
+                    if move_direction.magnitude() <= 0.001:
+                        with self.dqn_command_lock:
+                            idle_ticks = int(
+                                self.dqn_idle_ticks.get(drone_name, 0)
+                            )
+                            should_stop = (
+                                idle_ticks >= 2
+                                and not self.dqn_stop_sent.get(drone_name, True)
+                            )
+                            if should_stop:
+                                self.dqn_stop_sent[drone_name] = True
+                        if should_stop:
+                            self._stop_drone_motion(drone_name)
+
+                    self._sync_runtime_from_airsim(drone_name, move_direction)
+
 
                 # 按配置间隔休眠，保持训练速度与之前一致
                 _time.sleep(self.config_data.updateInterval)
@@ -1498,7 +2075,12 @@ class MultiDroneAlgorithmServer:
                 logger.debug(traceback.format_exc())
                 _time.sleep(self.config_data.updateInterval)  # 出错后延迟重试
 
-    def _control_drone_movement(self, drone_name: str, direction: Vector3) -> None:
+    def _control_drone_movement(
+        self,
+        drone_name: str,
+        direction: Vector3,
+        duration_sec: Optional[float] = None,
+    ) -> None:
         """控制无人机按指定方向移动，水平和垂直分离计算"""
         with self.data_lock:
             current_pos = self.unity_runtime_data[drone_name].position
@@ -1592,16 +2174,85 @@ class MultiDroneAlgorithmServer:
                 except Exception as e:
                     logger.debug(f"[{drone_name}] 移动指令诊断日志记录失败: {e}")
 
+        command_duration = (
+            float(duration_sec)
+            if duration_sec is not None
+            else float(getattr(self.config_data, "updateInterval", 0.5))
+        )
         success = self.drone_controller.move_by_velocity(
             velocity_airsim.x,
             velocity_airsim.y,
             velocity_airsim.z,
-            self.config_data.updateInterval,  # 使用配置的更新间隔
+            command_duration,
             drone_name,
         )
 
         if not success:
             logger.error(f"[{drone_name}] ❌ 移动指令发送失败！")
+
+    def _stop_drone_motion(self, drone_name: str) -> None:
+        """Send an explicit stop command when a DQN pulse expires."""
+        try:
+            if self.drones_config.is_crazyflie_mirror(drone_name):
+                self.crazyswarm.hover(drone_name)
+                return
+
+            stop_duration = max(
+                0.1, float(getattr(self.config_data, "updateInterval", 0.5)) * 0.5
+            )
+            self.drone_controller.move_by_velocity(
+                0.0,
+                0.0,
+                0.0,
+                stop_duration,
+                drone_name,
+            )
+        except Exception as exc:
+            logger.debug(f"[{drone_name}] stop command failed: {exc}")
+
+    def _sync_runtime_from_airsim(
+        self, drone_name: str, move_direction: Optional[Vector3] = None
+    ) -> None:
+        """Sync AirSim runtime state back to Unity-facing runtime data."""
+        if self.drones_config.is_crazyflie_mirror(drone_name):
+            return
+
+        try:
+            state = self.drone_controller.get_vehicle_state(drone_name)
+        except Exception as exc:
+            logger.debug(f"[{drone_name}] AirSim runtime sync failed: {exc}")
+            return
+
+        position = state.get("position")
+        orientation = state.get("orientation")
+        if position is None:
+            return
+
+        unity_position = Vector3(
+            float(position[0]), float(position[1]), float(position[2])
+        ).airsim_to_unity()
+
+        with self.data_lock:
+            runtime_data = self.unity_runtime_data.get(drone_name)
+            if runtime_data is None:
+                return
+
+            runtime_data.position = unity_position
+            if orientation and len(orientation) == 3:
+                runtime_data.orientation = Vector3(
+                    float(orientation[0]),
+                    float(orientation[1]),
+                    float(orientation[2]),
+                )
+            if move_direction is not None:
+                runtime_data.finalMoveDir = Vector3(
+                    move_direction.x, move_direction.y, move_direction.z
+                )
+
+            runtime_snapshot = runtime_data.copy()
+            runtime_snapshot.uavname = drone_name
+
+        self._send_processed_data(drone_name, runtime_snapshot)
 
     def _check_drone_stuck(self, drone_name: str, current_pos: Vector3) -> None:
         """检查无人机是否卡住（位置长时间不变）"""
@@ -1701,7 +2352,9 @@ class MultiDroneAlgorithmServer:
                 # 捕获发送异常，避免影响主流程
                 logger.warning(f"发送运行时数据到Unity失败: {str(e)}")
 
-    def set_dqn_movement(self, drone_name: str, direction: Vector3) -> None:
+    def set_dqn_movement(
+        self, drone_name: str, direction: Vector3, duration_sec: float = 0.5
+    ) -> None:
         """
         为DQN控制模式设置移动指令
         :param drone_name: 无人机名称
@@ -1711,8 +2364,24 @@ class MultiDroneAlgorithmServer:
             logger.warning(f"当前控制模式为{self.control_mode}，无法设置DQN移动指令")
             return
 
+        safe_direction = Vector3(
+            float(direction.x),
+            float(direction.y),
+            float(direction.z),
+        )
+
         with self.dqn_command_lock:
-            self.dqn_commands[drone_name] = direction
+            update_interval = max(
+                1e-3, float(getattr(self.config_data, "updateInterval", 0.5))
+            )
+            requested_duration = max(float(duration_sec), update_interval)
+            ticks_remaining = max(
+                1, int(math.ceil(requested_duration / update_interval))
+            )
+            self.dqn_commands[drone_name] = safe_direction
+            self.dqn_command_ticks_remaining[drone_name] = ticks_remaining
+            self.dqn_idle_ticks[drone_name] = 0
+            self.dqn_stop_sent[drone_name] = False
         logger.debug(f"DQN设置移动指令: {drone_name} -> {direction}")
 
     def get_visualization_snapshot(self) -> Dict[str, Any]:
@@ -1856,6 +2525,7 @@ class MultiDroneAlgorithmServer:
             current_time = _time.time()
             if not hasattr(self, "_last_obstacle_log_time"):
                 self._last_obstacle_log_time = 0
+
             if current_time - self._last_obstacle_log_time > 1.0:  # 每秒最多输出一次
                 self._last_obstacle_log_time = current_time
                 obs_count = len(snapshot["obstacles"]) if snapshot["obstacles"] else 0
@@ -1911,6 +2581,14 @@ class MultiDroneAlgorithmServer:
                        设为False时保持已扫描区域的低熵值（累积扫描进度）
         """
         logger.info(f"[重置] 🔄 开始严格重置流程... (原因: {reason}, 重置网格熵值: {reset_grid})")
+        self._write_reset_trace(
+            "reset_begin",
+            {
+                "reason": reason,
+                "reset_grid": bool(reset_grid),
+                "state": self._collect_reset_trace_state(),
+            },
+        )
         self.resetting = True
         self.reset_ack_event.clear()
         self.ready_event.clear()  # 确保算法线程在重置期间阻塞
@@ -1973,13 +2651,52 @@ class MultiDroneAlgorithmServer:
                 if not self._init_drones():
                     logger.error("[重置] 无人机重新初始化失败")
 
+                # ????????? home????????????????????
+                self._restore_home_positions_after_reset(
+                    tolerance_xy=0.5,
+                    exact_only=True,
+                    target_z_override=-0.05,
+                )
+
                 # 重新执行起飞流程
                 logger.info("[重置] 无人机重新起飞...")
                 if not self._takeoff_all():
                     logger.error("[重置] 无人机重新起飞失败")
 
                 # 等待起飞稳定
-                self._wait_for_takeoff()
+                if not self._wait_for_takeoff(timeout=12.0):
+                    logger.error("[??] ???????????????")
+                    self._write_reset_trace(
+                        "reset_abort",
+                        {
+                            "reason": "takeoff_not_confirmed",
+                            "state": self._collect_reset_trace_state(),
+                        },
+                    )
+                    self._reset_command_sent_time = 0.0
+                    self._reset_runtime_fresh = False
+                    self._reset_grid_fresh = False
+                    self.resetting = False
+                    self.ready_event.set()
+                    return
+
+                # ???????? home ?????????????
+                restored_after_takeoff = self._restore_home_positions_after_reset()
+                if not restored_after_takeoff or not self._verify_home_positions():
+                    logger.warning("[Reset] Home verification failed after takeoff; retry airborne move restore once")
+                    retry_ok = self._restore_home_positions_after_reset(
+                        tolerance_xy=0.5,
+                        exact_only=False,
+                    )
+                    if not retry_ok or not self._verify_home_positions():
+                        logger.warning("[Reset] Home verification still failing after retry")
+                        self._write_reset_trace(
+                            "reset_abort",
+                            {
+                                "reason": "home_restore_not_confirmed",
+                                "state": self._collect_reset_trace_state(),
+                            },
+                        )
 
                 # 防穿地保护：额外等待物理引擎稳定
                 logger.info("[重置] 等待物理引擎稳定...")
@@ -2019,6 +2736,9 @@ class MultiDroneAlgorithmServer:
         with self.dqn_command_lock:
             for k in self.dqn_commands:
                 self.dqn_commands[k] = Vector3(0, 0, 0)
+                self.dqn_command_ticks_remaining[k] = 0
+                self.dqn_idle_ticks[k] = 0
+                self.dqn_stop_sent[k] = True
 
         # 强制立即刷新可视化快照，清除旧网格缓存
         self._vis_snapshot_cache = None
@@ -2064,12 +2784,23 @@ class MultiDroneAlgorithmServer:
             self.unity_socket.send_drone_config(self.drones_config)
             self.unity_socket.send_config(self.config_data)
             _time.sleep(0.5)
+            leader_ready = self._wait_for_leader_home(timeout_sec=2.5)
+            if leader_ready:
+                logger.info("[Reset] Leader returned near home before restart")
+            else:
+                logger.warning("[Reset] Leader not yet near home; retrying Unity reset once before restart")
+                self.unity_socket.send_reset_command()
+                _time.sleep(0.5)
+                self.unity_socket.send_drone_config(self.drones_config)
+                self.unity_socket.send_config(self.config_data)
+                _time.sleep(0.5)
+                leader_ready = self._wait_for_leader_home(timeout_sec=3.0)
+                if not leader_ready:
+                    logger.warning("[Reset] Leader still not near home; continue with restart to avoid deadlock")
 
             logger.info("[重置] 5/5 发送 start_simulation 指令，Leader 开始移动")
             self.unity_socket.send_start_simulation_command()
             _time.sleep(1.0)
-            # 二次触发，提升多次重置后的可靠性（幂等）
-            self.unity_socket.send_start_simulation_command()
 
             # 等待Unity启动熵值收集功能并稳定
             logger.info("[重置] 熵值收集启动中...")
@@ -2077,6 +2808,15 @@ class MultiDroneAlgorithmServer:
 
             # 确保Unity准备好接收runtime数据
             logger.info("[重置] Unity应该已启动熵值收集，算法线程即将发送数据")
+            data_ready = self._wait_for_post_reset_data(
+                timeout_sec=6.0, retry_on_timeout=True
+            )
+            if data_ready:
+                logger.info("[??] ???? runtime/grid ???????? DQN ????")
+            else:
+                logger.warning(
+                    "[??] ???? runtime/grid ???????????????????"
+                )
         else:
             logger.warning("[重置] Unity 未连接，仅清空本地数据")
             with self.grid_lock:
@@ -2089,7 +2829,14 @@ class MultiDroneAlgorithmServer:
         self.resetting = False
         self.ready_event.set()
         logger.info(
-            "[重置] ✨ 严格重置流程执行完毕，系统已回到初始状态，算法线程已放行"
+            "[??] ? ????????????????????????????"
+        )
+        self._write_reset_trace(
+            "reset_complete",
+            {
+                "reason": reason,
+                "state": self._collect_reset_trace_state(),
+            },
         )
 
     def stop(self) -> None:
@@ -2136,10 +2883,13 @@ class MultiDroneAlgorithmServer:
             _time.sleep(1)
 
     def _crazyflie_all_land(self):
-        """控制所有实体无人机降落"""
-        logger.info("开始所有实体无人机降落流程")
+        """Land all physical Crazyflie mirror drones during shutdown."""
+        logger.info("Starting shutdown landing flow for physical drones")
         for drone_name in self.drone_names:
-            if self.config_data.get_uav_crazyflie_mirror(drone_name):
+            if not hasattr(self, 'drones_config') or self.drones_config is None:
+                logger.warning("drones_config is unavailable during shutdown; skip physical landing check")
+                break
+            if self.drones_config.is_crazyflie_mirror(drone_name):
                 self.crazyswarm.land(drone_name, 2)
                 _time.sleep(2)
 

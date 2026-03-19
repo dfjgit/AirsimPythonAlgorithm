@@ -109,15 +109,15 @@ class WeightHistoryPanel(BasePanel):
         
         # 权重名称和颜色
         weight_colors = {
-            'repulsionCoefficient': (255, 107, 107),      # 红色
-            'entropyCoefficient': (78, 205, 196),          # 青色
-            'distanceCoefficient': (69, 183, 209),         # 蓝色
-            'leaderRangeCoefficient': (255, 160, 122),     # 橙色
-            'directionRetentionCoefficient': (152, 216, 200),  # 绿色
-            'obstacleRepulsionDistance': (255, 165, 0),    # 橙色
-            'obstacleRepulsionCoefficient': (255, 215, 0), # 金色
-            'restrictedZoneDistance': (238, 130, 238),     # 紫罗兰
-            'restrictedZoneCoefficient': (186, 85, 211)    # 中紫色
+            'repulsionCoefficient': (193, 121, 117),
+            'entropyCoefficient': (102, 160, 154),
+            'distanceCoefficient': (116, 149, 188),
+            'leaderRangeCoefficient': (204, 151, 100),
+            'directionRetentionCoefficient': (128, 170, 141),
+            'obstacleRepulsionDistance': (179, 125, 87),
+            'obstacleRepulsionCoefficient': (184, 154, 92),
+            'restrictedZoneDistance': (150, 131, 188),
+            'restrictedZoneCoefficient': (131, 112, 178)
         }
         
         # 找到最大步数

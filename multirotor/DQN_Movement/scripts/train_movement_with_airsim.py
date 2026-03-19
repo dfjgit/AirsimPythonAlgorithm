@@ -1,4 +1,4 @@
-"""
+﻿"""
 DQN训练脚本 - 与AirSim集成
 使用真实的AirSim环境训练无人机移动策略
 """
@@ -113,6 +113,8 @@ if not server.start():
     sys.exit(1)
 
 print(f"  ✓ 服务器启动成功")
+if getattr(server, 'reset_trace_path', None):
+    print(f"  Reset诊断日志: {server.reset_trace_path}")
 
 # 关键：启动任务（让无人机起飞并启动算法线程）
 print(f"  启动无人机任务...")
@@ -230,7 +232,10 @@ log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
 os.makedirs(log_dir, exist_ok=True)
 
 pretrained_model = os.path.join(model_dir, 'movement_dqn_final.zip')
-use_pretrained = os.path.exists(pretrained_model)
+use_pretrained = (
+    os.environ.get('USE_PRETRAINED', '0') == '1'
+    and os.path.exists(pretrained_model)
+)
 
 if use_pretrained:
     print(f"  ✓ 找到预训练模型: {pretrained_model}")
@@ -240,6 +245,9 @@ if use_pretrained:
     print(f"  ✓ 预训练模型加载成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")
 else:
+    if os.path.exists(pretrained_model):
+        print(f"  ! 检测到旧模型但本次默认不续训: {pretrained_model}")
+        print(f"    - 如需显式续训，请设置环境变量 USE_PRETRAINED=1")
     print(f"  创建新模型...")
     model = DQN(
         dqn_config['model']['policy'],
@@ -309,13 +317,26 @@ class DQNVisualizationCallback(BaseCallback):
     def __init__(self, server, verbose=0):
         super().__init__(verbose)
         self.server = server
+        self.drone_names = list(getattr(server, "drone_names", [])) if server is not None else []
         self.episode_reward = 0.0
         self.action_counts = {i: 0 for i in range(6)}
         self.last_action = None
         self.episode_count = 0
         self.total_steps = 0
+        self.current_episode_steps = 0
         self.reward_history = []  # 记录每个episode的总奖励
         self.start_time = time.time()  # 用于计算速率
+        self.per_drone_actions = {
+            drone_name: {
+                'last_action': None,
+                'leader_distance': None,
+                'is_out_of_range': False,
+                'out_of_range_steps': 0,
+                'out_of_range_count': 0,
+                'current_drone_reward': 0.0,
+            }
+            for drone_name in self.drone_names
+        }
 
     def _on_step(self) -> bool:
         if self.server is None:
@@ -327,6 +348,7 @@ class DQNVisualizationCallback(BaseCallback):
             reward = float(self.locals.get('rewards', [0.0])[0])
             self.episode_reward += reward
             self.total_steps += 1
+            self.current_episode_steps += 1
             
             # 计算速率
             elapsed = time.time() - self.start_time
@@ -334,10 +356,33 @@ class DQNVisualizationCallback(BaseCallback):
             
             dones = self.locals.get('dones', [False])
             is_done = bool(dones[0]) if len(dones) > 0 else False
+            infos = self.locals.get('infos', [{}])
+            info = infos[0] if infos and isinstance(infos[0], dict) else {}
+            drone_name = info.get('drone_name')
 
             if action is not None and action in self.action_counts:
                 self.action_counts[action] += 1
                 self.last_action = action
+            if drone_name:
+                if drone_name not in self.per_drone_actions:
+                    self.per_drone_actions[drone_name] = {
+                        'last_action': None,
+                        'leader_distance': None,
+                        'is_out_of_range': False,
+                        'out_of_range_steps': 0,
+                        'out_of_range_count': 0,
+                        'current_drone_reward': 0.0,
+                    }
+                self.per_drone_actions[drone_name].update(
+                    {
+                        'last_action': action,
+                        'leader_distance': info.get('leader_distance'),
+                        'is_out_of_range': bool(info.get('is_out_of_range', False)),
+                        'out_of_range_steps': int(info.get('out_of_range_steps', 0) or 0),
+                        'out_of_range_count': int(info.get('out_of_range_count', 0) or 0),
+                        'current_drone_reward': float(info.get('current_drone_reward', 0.0) or 0.0),
+                    }
+                )
 
             if is_done:
                 self.episode_count += 1
@@ -350,6 +395,7 @@ class DQNVisualizationCallback(BaseCallback):
             self.server.current_training_stats = {
                 'timestep': int(getattr(self, 'num_timesteps', 0)),
                 'total_steps': self.total_steps,
+                'current_episode_steps': self.current_episode_steps,
                 'steps_per_sec': float(steps_per_sec),
                 'episode_count': self.episode_count,
                 'current_episode_reward': float(self.episode_reward),
@@ -357,6 +403,17 @@ class DQNVisualizationCallback(BaseCallback):
                 'is_done': bool(is_done),
                 'last_action': self.last_action,
                 'action_counts': dict(self.action_counts),
+                'drone_name': drone_name,
+                'current_step_reward': reward,
+                'leader_distance': info.get('leader_distance'),
+                'is_out_of_range': bool(info.get('is_out_of_range', False)),
+                'out_of_range_steps': int(info.get('out_of_range_steps', 0) or 0),
+                'out_of_range_count': int(info.get('out_of_range_count', 0) or 0),
+                'current_drone_reward': float(info.get('current_drone_reward', 0.0) or 0.0),
+                'last_done_reason': info.get('last_done_reason'),
+                'per_drone_actions': {
+                    name: dict(values) for name, values in self.per_drone_actions.items()
+                },
             }
             # 强制快照缓存失效
             try:
@@ -367,6 +424,7 @@ class DQNVisualizationCallback(BaseCallback):
 
             if is_done:
                 self.episode_reward = 0.0
+                self.current_episode_steps = 0
         except Exception:
             pass
         return True

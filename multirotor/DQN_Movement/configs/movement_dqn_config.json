@@ -1,37 +1,39 @@
 {
   "description": "无人机移动DQN训练配置文件",
   "version": "1.0.0",
-  
-
   "movement": {
-    "step_size": 1.0,
+    "step_size": 0.8,
+    "action_repeat": 3,
     "max_steps": 2400,
     "description": "移动参数：每步位移距离和最大步数"
   },
-  
   "termination_config": {
     "target_scan_ratio": 0.95,
-    "max_collision_count": 1,
+    "max_collision_count": 4,
     "max_elapsed_time_sec": 300.0,
     "stagnation_timeout_sec": 30.0
   },
-  
   "rewards": {
-    "exploration": 10.0,
-    "entropy_reduction": 5.0,
-    "high_entropy_exploration": 5.0,
-    "entropy_gradient_bonus": 2.0,
-    "collision": -50.0,
-    "out_of_range": -30.0,
-    "stability_penalty_weight": 15.0,
-    "return_to_range_bonus": 20.0,
+    "exploration": 14.0,
+    "entropy_reduction": 8.0,
+    "high_entropy_exploration": 8.0,
+    "entropy_gradient_bonus": 3.0,
+    "collision": -18.0,
+    "out_of_range": -8.0,
+    "out_of_range_step_penalty": -2.0,
+    "stability_penalty_weight": 6.0,
+    "return_to_range_bonus": 12.0,
+    "return_progress_weight": 15.0,
+    "return_alignment_weight": 4.0,
     "smooth_movement": 1.0,
-    "step_penalty": -0.1,
+    "step_penalty": -0.05,
+    "idle_step_penalty": -1.0,
+    "terminal_out_of_range_penalty": -25.0,
     "success": 100.0,
-    "battery_low_penalty": 10.0,
+    "battery_low_penalty": 6.0,
     "battery_optimal_reward": 2.0,
-    "height_penalty": -5.0,
-    "optimal_height_bonus": 1.0,
+    "height_penalty": -1.5,
+    "optimal_height_bonus": 1.5,
     "description": {
       "exploration": "发现新区域的奖励（每个新扫描单元格）",
       "entropy_reduction": "降低环境熵值的奖励",
@@ -50,21 +52,22 @@
       "optimal_height_bonus": "在最佳扫描高度的奖励"
     }
   },
-  
   "thresholds": {
-    "collision_distance": 2.0,
+    "collision_distance": 1.6,
     "scanned_entropy": 10.0,
     "nearby_entropy_distance": 10.0,
     "success_scan_ratio": 0.95,
     "stability_safe_ratio": 0.7,
     "stability_penalty_ratio": 0.8,
-    "high_entropy_threshold": 40.0,
+    "high_entropy_threshold": 35.0,
     "min_scan_height": 2.0,
     "max_scan_height": 15.0,
     "optimal_scan_height": 8.0,
     "battery_low_threshold": 3.5,
     "battery_optimal_min": 3.7,
     "battery_optimal_max": 4.1,
+    "idle_distance_threshold": 0.05,
+    "low_altitude_recovery_height": 1.2,
     "description": {
       "collision_distance": "判定碰撞的距离阈值（米）",
       "scanned_entropy": "单元格被认为已扫描的熵值阈值",
@@ -83,9 +86,17 @@
         "max_elapsed_time_sec": "最大仿真物理时间(秒)",
         "stagnation_timeout_sec": "停滞超时时间(秒)"
       }
-    }
+    },
+    "terminate_on_out_of_range": true,
+    "max_out_of_range_steps": 12,
+    "severe_out_of_range_ratio": 1.35,
+    "post_reset_grace_sec": 8.0,
+    "landed_grace_sec": 12.0,
+    "landed_confirm_steps": 5,
+    "min_steps_before_oob_checks": 45,
+    "severe_out_of_range_enabled": false,
+    "severe_out_of_range_confirm_steps": 6
   },
-  
   "training": {
     "total_timesteps": 50000,
     "learning_rate": 0.0001,
@@ -112,10 +123,12 @@
       "exploration_final_eps": "最终探索率"
     }
   },
-  
   "model": {
     "policy": "MlpPolicy",
-    "net_arch": [256, 256],
+    "net_arch": [
+      256,
+      256
+    ],
     "activation_fn": "relu",
     "description": {
       "policy": "策略网络类型",
@@ -123,7 +136,6 @@
       "activation_fn": "激活函数"
     }
   },
-  
   "evaluation": {
     "eval_freq": 5000,
     "n_eval_episodes": 5,
@@ -133,4 +145,3 @@
     }
   }
 }
-

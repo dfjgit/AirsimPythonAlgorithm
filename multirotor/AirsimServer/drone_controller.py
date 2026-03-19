@@ -160,30 +160,48 @@ class DroneController:
     def takeoff(
         self, vehicle_name: Optional[str] = None, timeout_sec: int = 30
     ) -> bool:
-        """无人机起飞（适配API）"""
+        """????????API?"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
             state = self._get_or_create_state(vehicle_name)
-            # 仅检查API是否启用
             if not state["api_enabled"]:
-                logger.error(f"无人机{vehicle_name}API控制未启用，无法起飞")
+                logger.error(f"???{vehicle_name}API??????????")
                 return False
 
             if state["flying"]:
-                logger.warning(f"无人机{vehicle_name}已处于飞行状态")
+                logger.warning(f"???{vehicle_name}???????")
                 return True
 
-            # 执行起飞（AirSim内置takeoff会处理高度上升）
             with self.api_lock:
                 self.client.takeoffAsync(vehicle_name=vehicle_name).join()
-                # 状态更新也放在锁内，确保一致性
-                self._update_vehicle_state_internal(vehicle_name)
 
-            self._update_state_field(vehicle_name, "flying", True)
-            logger.info(f"无人机{vehicle_name}起飞完成")
-            return True
+            deadline = time.time() + max(1, timeout_sec)
+            while time.time() < deadline:
+                self._update_vehicle_state(vehicle_name)
+                state = self._get_or_create_state(vehicle_name)
+                pos = state.get("position", (0.0, 0.0, 0.0))
+                altitude = -float(pos[2]) if pos is not None else 0.0
+                if state.get("flying", False) and float(pos[2]) < -0.8:
+                    logger.info(f"???{vehicle_name}????")
+                    return True
+                if altitude > 1.2:
+                    logger.warning(
+                        f"???{vehicle_name}???????? flying={state.get('flying', False)}, pos={pos}"
+                    )
+                    self._update_state_field(vehicle_name, "flying", True)
+                    return True
+                time.sleep(0.1)
+
+            self._update_vehicle_state(vehicle_name)
+            final_state = self._get_or_create_state(vehicle_name)
+            final_pos = final_state.get("position", (0.0, 0.0, 0.0))
+            logger.warning(
+                f"???{vehicle_name}??????timeout={timeout_sec}s, "
+                f"flying={final_state.get('flying', False)}, pos={final_pos}"
+            )
+            return False
         except Exception as e:
-            logger.error(f"无人机{vehicle_name}起飞操作失败: {str(e)}")
+            logger.error(f"???{vehicle_name}??????: {str(e)}")
             return False
 
     def land(self, vehicle_name: Optional[str] = None, timeout_sec: int = 30) -> bool:
@@ -255,6 +273,10 @@ class DroneController:
         """通过速度移动无人机（异步非阻塞版本）"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
+            x = float(x)
+            y = float(y)
+            z = float(z)
+            duration = float(duration)
             state = self._get_or_create_state(vehicle_name)
             if not state["flying"]:
                 # 尝试同步一次状态
@@ -342,15 +364,19 @@ class DroneController:
 
         # 1. 更新飞行状态
         # LandedState: 0=Landed, 1=Flying, 2=TakingOff, 3=Landing
-        # 严格同步：只有处于 Flying (1) 状态才认为起飞稳定完成
-        flying_status = state.landed_state == airsim.LandedState.Flying
-        self._update_state_field(vehicle_name, "flying", flying_status)
+        # AirSim 有时会在已经离地后短暂仍返回 Landed，这里用高度做一次兜底。
 
         # 2. 更新位置
         pos = state.kinematics_estimated.position
         self._update_state_field(
             vehicle_name, "position", (pos.x_val, pos.y_val, pos.z_val)
         )
+
+        altitude = -float(pos.z_val)
+        flying_status = (
+            state.landed_state == airsim.LandedState.Flying or altitude > 1.2
+        )
+        self._update_state_field(vehicle_name, "flying", flying_status)
 
         # 3. 更新姿态
         orientation_q = state.kinematics_estimated.orientation
@@ -536,6 +562,11 @@ class DroneController:
 
             with self.api_lock:
                 self.client.simSetVehiclePose(pose, ignore_collision, vehicle_name)
+                try:
+                    self.client.hoverAsync(vehicle_name=vehicle_name).join()
+                except Exception:
+                    pass
+                self._update_vehicle_state_internal(vehicle_name)
 
             time.sleep(0.2)
             logger.info(f"无人机{vehicle_name}已重置到位置{position}")
