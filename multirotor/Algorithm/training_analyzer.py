@@ -6,12 +6,18 @@
 
 import os
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Optional
 import logging
+
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -45,7 +51,10 @@ class UnifiedTrainingAnalyzer:
         self._setup_plotting_style()
 
     def _setup_plotting_style(self):
-        sns.set_theme(style="whitegrid")
+        if sns is not None:
+            sns.set_theme(style="whitegrid")
+        else:
+            plt.style.use("seaborn-v0_8-whitegrid")
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial']
         plt.rcParams['axes.unicode_minus'] = False
 
@@ -125,15 +134,41 @@ class UnifiedTrainingAnalyzer:
             display_name = self.ALGO_NAME_MAP.get(algo_id, algo_id)
             
             if x_axis in all_data.columns and metric in all_data.columns:
-                # 绘制均值线和标准差填充区域
-                sns.lineplot(
-                    data=all_data, 
-                    x=x_axis, 
-                    y=metric, 
-                    label=display_name, 
-                    errorbar='sd',
-                    linewidth=2.5
+                x_series = pd.to_numeric(
+                    all_data[x_axis].astype(str).str.replace("%", "", regex=False),
+                    errors="coerce",
                 )
+                y_series = pd.to_numeric(
+                    all_data[metric].astype(str).str.replace("%", "", regex=False),
+                    errors="coerce",
+                )
+                numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
+                if numeric_data.empty:
+                    continue
+                if sns is not None:
+                    sns.lineplot(
+                        data=numeric_data,
+                        x=x_axis,
+                        y=metric,
+                        label=display_name,
+                        errorbar='sd',
+                        linewidth=2.5
+                    )
+                else:
+                    grouped = (
+                        numeric_data[[x_axis, metric]]
+                        .groupby(x_axis)[metric]
+                        .agg(["mean", "std"])
+                        .reset_index()
+                    )
+                    plt.plot(grouped[x_axis], grouped["mean"], label=display_name, linewidth=2.5)
+                    std = grouped["std"].fillna(0.0)
+                    plt.fill_between(
+                        grouped[x_axis],
+                        grouped["mean"] - std,
+                        grouped["mean"] + std,
+                        alpha=0.15,
+                    )
 
         plt.title(f"多算法对比分析: {metric_zh} 随 {x_axis_zh} 变化趋势", fontsize=16, pad=20)
         plt.xlabel(x_axis_zh, fontsize=12)
@@ -181,11 +216,11 @@ class UnifiedTrainingAnalyzer:
         if not summary_df.empty:
             # 按算法聚合看均值
             algo_comparison = summary_df.groupby('算法名称').mean(numeric_only=True)
-            print("\n" + "="*70)
-            print("🚀 多算法平均性能量化对比报告 (Averaged Performance Report)")
-            print("="*70)
-            print(algo_comparison)
-            print("="*70)
+            logger.info("%s", "=" * 70)
+            logger.info("多算法平均性能量化对比报告 (Averaged Performance Report)")
+            logger.info("%s", "=" * 70)
+            logger.info("\n%s", algo_comparison.to_string())
+            logger.info("%s", "=" * 70)
             
             report_file = self.output_dir / "algorithm_comparison_report.csv"
             # 导出带中文表头的 CSV，并使用 UTF-8 SIG 确保 Excel 打开不乱码

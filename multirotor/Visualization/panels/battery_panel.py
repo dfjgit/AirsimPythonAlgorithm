@@ -53,7 +53,8 @@ class BatteryPanel(BasePanel):
                 break
 
             voltage = float(battery_info.get('voltage', 4.2) or 4.2)
-            percentage = float(battery_info.get('remaining_percentage', 100.0) or 100.0)
+            raw_percentage = battery_info.get('remaining_percentage', 100.0)
+            percentage = 100.0 if raw_percentage is None else float(raw_percentage)
             status = str(battery_info.get('status', 'normal') or 'normal')
             is_crazyflie = bool(battery_info.get('crazyflieMirror', False))
             status_color = status_colors.get(status, self.TEXT_PRIMARY)
@@ -81,7 +82,10 @@ class BatteryPanel(BasePanel):
             y = self.y + self.height - 35
             self.draw_divider(screen, y)
             y += 8
-            avg_percentage = sum(float(b.get('remaining_percentage', 0) or 0) for b in battery_data.values()) / len(battery_data)
+            avg_percentage = sum(
+                float(0.0 if b.get('remaining_percentage', 0) is None else b.get('remaining_percentage', 0))
+                for b in battery_data.values()
+            ) / len(battery_data)
             avg_color = self.SUCCESS if avg_percentage > 50 else self.WARNING if avg_percentage > 30 else self.DANGER
             summary_text = self._font.render(f'平均电量: {avg_percentage:.1f}%  |  {len(battery_data)}架无人机', True, avg_color)
             screen.blit(summary_text, (text_x, y))

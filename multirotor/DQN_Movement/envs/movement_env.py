@@ -9,6 +9,7 @@ import os
 import json
 import logging
 import time
+from Algorithm.battery_data import BatteryStatus
 
 # 配置日志
 logger = logging.getLogger("MovementEnv")
@@ -732,6 +733,12 @@ class MovementEnv(gym.Env):
 
         terminate_on_out_of_range = bool(cfg_thresh.get('terminate_on_out_of_range', True))
         max_oob_steps = max(1, int(cfg_thresh.get('max_out_of_range_steps', 1)))
+        max_oob_duration_sec = float(
+            cfg_thresh.get(
+                'max_out_of_range_duration_sec',
+                max_oob_steps * self.step_duration * self.action_repeat
+            )
+        )
         severe_ratio = float(cfg_thresh.get('severe_out_of_range_ratio', 1.05))
 
         if self.server:
@@ -780,10 +787,13 @@ class MovementEnv(gym.Env):
 
                     if hasattr(self.server, "battery_manager"):
                         battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                        if battery_info and battery_info.status == 'empty':
-                            self.last_done_reason = f"Drone {drone_name} Battery Empty"
-                            print(f"[??] {self.last_done_reason}")
-                            return True
+                        if battery_info:
+                            current_voltage = float(getattr(battery_info, "voltage", 4.2))
+                            battery_status = getattr(battery_info, "status", None)
+                            if current_voltage <= 3.0 + 1e-6 or battery_status == BatteryStatus.EMPTY:
+                                self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
+                                print(f"[??] {self.last_done_reason}")
+                                return True
                 except Exception as exc:
                     logger.debug(f"Done check skipped for {drone_name}: {exc}")
                     continue
@@ -957,7 +967,7 @@ class MultiDroneMovementEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(24,),
+            shape=(30,),
             dtype=np.float32
         )
         
@@ -984,9 +994,13 @@ class MultiDroneMovementEnv(gym.Env):
                 'collision_count': 0,
                 'out_of_range_count': 0,
                 'out_of_range_steps': 0,
+                'out_of_range_duration_sec': 0.0,
+                'oob_started_at': None,
                 'severe_out_of_range_hits': 0,
                 'landed_hits': 0,
                 'idle_hits': 0,
+                'no_scan_hits': 0,
+                'oob_no_return_hits': 0,
                 'episode_reward': 0
             }
         
@@ -1141,8 +1155,13 @@ class MultiDroneMovementEnv(gym.Env):
                 'collision_count': 0,
                 'out_of_range_count': 0,
                 'out_of_range_steps': 0,
+                'out_of_range_duration_sec': 0.0,
+                'oob_started_at': None,
                 'severe_out_of_range_hits': 0,
                 'landed_hits': 0,
+                'idle_hits': 0,
+                'no_scan_hits': 0,
+                'oob_no_return_hits': 0,
                 'episode_reward': 0
             }
 
@@ -1179,6 +1198,10 @@ class MultiDroneMovementEnv(gym.Env):
         next_state = current_state
         terminated = False
         step_out_of_range = False
+        current_drone_state = self.drone_states[current_drone]
+        current_drone_state['_step_collision_detected'] = False
+        current_drone_state['_step_collision_clear'] = False
+        current_drone_state['_collision_penalty_applied_this_step'] = False
 
         for repeat_idx in range(self.action_repeat):
             if self.server:
@@ -1206,8 +1229,9 @@ class MultiDroneMovementEnv(gym.Env):
             if terminated:
                 break
 
-        current_drone_state = self.drone_states[current_drone]
-        if step_out_of_range:
+        next_step_index = self.step_count + 1
+        oob_checks_active = self._oob_checks_active(next_step_index)
+        if step_out_of_range and oob_checks_active:
             current_drone_state['out_of_range_count'] = int(
                 current_drone_state.get('out_of_range_count', 0)
             ) + 1
@@ -1217,7 +1241,24 @@ class MultiDroneMovementEnv(gym.Env):
         else:
             current_drone_state['out_of_range_steps'] = 0
 
-        self.step_count += 1
+        if current_drone_state.get('_step_collision_detected', False):
+            current_drone_state['collision_count'] = int(
+                current_drone_state.get('collision_count', 0)
+            ) + 1
+        elif (
+            current_drone_state.get('_step_collision_clear', False)
+            and current_drone_state.get('collision_count', 0) > 0
+        ):
+            current_drone_state['collision_count'] = max(
+                0,
+                int(current_drone_state.get('collision_count', 0)) - 1
+            )
+
+        current_drone_state.pop('_step_collision_detected', None)
+        current_drone_state.pop('_step_collision_clear', None)
+        current_drone_state.pop('_collision_penalty_applied_this_step', None)
+
+        self.step_count = next_step_index
         if not terminated:
             terminated = self._check_done()
 
@@ -1270,6 +1311,7 @@ class MultiDroneMovementEnv(gym.Env):
             'is_out_of_range': is_out_of_range,
             'out_of_range_steps': int(current_drone_state.get('out_of_range_steps', 0)),
             'out_of_range_count': int(current_drone_state.get('out_of_range_count', 0)),
+            'out_of_range_duration_sec': float(current_drone_state.get('out_of_range_duration_sec', 0.0)),
             'current_drone_reward': float(current_drone_state.get('episode_reward', 0.0)),
             'last_done_reason': self.last_done_reason,
         }
@@ -1281,11 +1323,25 @@ class MultiDroneMovementEnv(gym.Env):
 
         return next_observation, reward, terminated, truncated, info
 
+    def _oob_checks_active(self, step_index=None):
+        """Return whether OOR counting/termination should be active for this decision."""
+        cfg_thresh = self.config.get('thresholds', {})
+        post_reset_grace_sec = float(cfg_thresh.get('post_reset_grace_sec', 6.0))
+        min_steps_before_oob_checks = max(
+            0, int(cfg_thresh.get('min_steps_before_oob_checks', 24))
+        )
+        elapsed_time = time.time() - self.episode_start_time
+        effective_step_index = self.step_count if step_index is None else int(step_index)
+        return (
+            elapsed_time >= post_reset_grace_sec
+            and effective_step_index >= min_steps_before_oob_checks
+        )
+
 
     def _get_state(self, drone_name):
-        """Return a 24D observation for the selected drone."""
+        """Return a 30D observation for the selected drone."""
         if not self.server:
-            return np.random.randn(24).astype(np.float32)
+            return np.random.randn(30).astype(np.float32)
 
         deadline = time.time() + self._state_timeout_sec
         while True:
@@ -1293,7 +1349,7 @@ class MultiDroneMovementEnv(gym.Env):
                 if not self._warned_state_timeout:
                     logger.warning(f"[DQN Multi] State fetch timed out ({self._state_timeout_sec}s); returning zero observation")
                     self._warned_state_timeout = True
-                return np.zeros(24, dtype=np.float32)
+                return np.zeros(30, dtype=np.float32)
 
             acquired = self.server.data_lock.acquire(timeout=self._lock_timeout_sec)
             if not acquired:
@@ -1305,7 +1361,7 @@ class MultiDroneMovementEnv(gym.Env):
             try:
                 runtime_data = self.server.unity_runtime_data.get(drone_name)
                 if not runtime_data:
-                    return np.zeros(24, dtype=np.float32)
+                    return np.zeros(26, dtype=np.float32)
 
                 pos = runtime_data.position
                 position = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
@@ -1326,8 +1382,41 @@ class MultiDroneMovementEnv(gym.Env):
                     leader_rel = np.zeros(3, dtype=np.float32)
 
                 leader_distance = float(np.linalg.norm(leader_rel))
-                is_out_of_range = 1.0 if leader_distance > runtime_data.leader_scan_radius else 0.0
+                leader_scan_radius = max(float(runtime_data.leader_scan_radius), 1e-6)
+                horizontal_leader_distance = float(np.linalg.norm([leader_rel[0], leader_rel[2]]))
+                is_out_of_range = 1.0 if leader_distance > leader_scan_radius else 0.0
                 leader_info = np.array([leader_distance, is_out_of_range], dtype=np.float32)
+                leader_recovery_info = np.array([
+                    min(3.0, leader_distance / leader_scan_radius),
+                    min(3.0, horizontal_leader_distance / leader_scan_radius),
+                ], dtype=np.float32)
+                if horizontal_leader_distance > 1e-6:
+                    leader_horizontal_unit = np.array([
+                        leader_rel[0] / horizontal_leader_distance,
+                        leader_rel[2] / horizontal_leader_distance,
+                    ], dtype=np.float32)
+                else:
+                    leader_horizontal_unit = np.zeros(2, dtype=np.float32)
+
+                drone_state = self.drone_states.get(drone_name, {})
+                max_oob_duration_sec = max(
+                    float(self.config.get('thresholds', {}).get('max_out_of_range_duration_sec', 1.0)),
+                    1e-6,
+                )
+                max_oob_steps = max(
+                    1,
+                    int(self.config.get('thresholds', {}).get('max_out_of_range_steps', 1))
+                )
+                oob_state_info = np.array([
+                    min(
+                        3.0,
+                        float(drone_state.get('out_of_range_duration_sec', 0.0)) / max_oob_duration_sec,
+                    ),
+                    min(
+                        3.0,
+                        float(drone_state.get('out_of_range_steps', 0)) / float(max_oob_steps),
+                    ),
+                ], dtype=np.float32)
             finally:
                 self.server.data_lock.release()
 
@@ -1362,7 +1451,9 @@ class MultiDroneMovementEnv(gym.Env):
                     total_cells = len(grid_data.cells)
                     unscanned_count = total_cells - scanned_count
                     scan_ratio = scanned_count / total_cells if total_cells > 0 else 0.0
-                    scan_info = np.array([scan_ratio, float(scanned_count), float(unscanned_count)], dtype=np.float32)
+                    scanned_ratio = float(scanned_count) / total_cells if total_cells > 0 else 0.0
+                    unscanned_ratio = float(unscanned_count) / total_cells if total_cells > 0 else 0.0
+                    scan_info = np.array([scan_ratio, scanned_ratio, unscanned_ratio], dtype=np.float32)
 
                     min_dist_info = np.array([100.0], dtype=np.float32)
             finally:
@@ -1387,6 +1478,9 @@ class MultiDroneMovementEnv(gym.Env):
                 entropy_info,
                 leader_rel,
                 leader_info,
+                leader_recovery_info,
+                leader_horizontal_unit,
+                oob_state_info,
                 scan_info,
                 min_dist_info,
                 battery_info,
@@ -1396,9 +1490,9 @@ class MultiDroneMovementEnv(gym.Env):
             return state.astype(np.float32)
 
         try:
-            return np.zeros(24, dtype=np.float32)
+            return np.zeros(30, dtype=np.float32)
         except Exception:
-            return np.zeros(24, dtype=np.float32)
+            return np.zeros(30, dtype=np.float32)
     
     def _get_min_distance_to_others(self, drone_name):
         """获取到其他无人机的最小距离"""
@@ -1420,18 +1514,18 @@ class MultiDroneMovementEnv(gym.Env):
     def _get_battery_info_for_drone(self, drone_name):
         """获取指定无人机的电量信息：[电压, 剩余百分比]"""
         if not self.server or not hasattr(self.server, 'get_battery_voltage'):
-            return np.array([4.2, 100.0], dtype=np.float32)  # 默认值：满电
+            return np.array([4.2, 1.0], dtype=np.float32)  # 默认值：满电
         
         try:
             voltage = self.server.get_battery_voltage(drone_name)
             battery_info = self.server.battery_manager.get_battery_info(drone_name)
             if battery_info:
                 percentage = battery_info.get_remaining_percentage()
-                return np.array([voltage, percentage], dtype=np.float32)
+                return np.array([voltage, percentage / 100.0], dtype=np.float32)
             else:
-                return np.array([voltage, 100.0], dtype=np.float32)
+                return np.array([voltage, 1.0], dtype=np.float32)
         except:
-            return np.array([4.2, 100.0], dtype=np.float32)
+            return np.array([4.2, 1.0], dtype=np.float32)
     
     def _apply_movement(self, drone_name, displacement):
         """应用移动到无人机（通过AlgorithmServer的DQN控制模式）"""
@@ -1487,6 +1581,7 @@ class MultiDroneMovementEnv(gym.Env):
         """计算奖励"""
         reward = 0.0
         drone_state = self.drone_states[drone_name]
+        applied_oob_penalty = False
         
         # 0. 计算稳定性系数 (基于到 Leader 的距离)
         stability_factor = 1.0
@@ -1499,6 +1594,11 @@ class MultiDroneMovementEnv(gym.Env):
         # 计算上一步到领导者的距离(用于判断是否在返回)
         prev_dist_to_leader = current_state[15] if current_state is not None else dist_to_leader
         is_returning = (dist_to_leader < prev_dist_to_leader) and is_out_of_range
+        prev_leader_rel = current_state[12:15] if current_state is not None else next_state[12:15]
+        next_leader_rel = next_state[12:15]
+        prev_horizontal_dist = float(np.linalg.norm([prev_leader_rel[0], prev_leader_rel[2]]))
+        horizontal_dist = float(np.linalg.norm([next_leader_rel[0], next_leader_rel[2]]))
+        is_returning_horizontally = horizontal_dist < prev_horizontal_dist - 1e-4
         
         try:
             with self.server.data_lock:
@@ -1514,36 +1614,115 @@ class MultiDroneMovementEnv(gym.Env):
                     # 圈外阶段只允许学习“尽快回圈”，避免边界来回刷分
                     if dist_ratio > 1.0:
                         stability_factor = 0.0
+                        applied_oob_penalty = True
+                        urgency_gain = float(cfg_reward.get('oob_urgency_gain', 2.5))
+                        urgency_scale = 1.0 + max(0.0, dist_ratio - 1.0) * urgency_gain
 
                         oob_step_penalty = cfg_reward.get('out_of_range_step_penalty', -8.0)
                         return_bonus = cfg_reward.get('return_to_range_bonus', 5.0)
                         progress_weight = cfg_reward.get('return_progress_weight', 40.0)
                         alignment_weight = cfg_reward.get('return_alignment_weight', 8.0)
+                        horizontal_alignment_weight = cfg_reward.get(
+                            'return_horizontal_alignment_weight',
+                            alignment_weight * 1.5,
+                        )
+                        outward_progress_penalty = cfg_reward.get('outward_progress_penalty', 10.0)
+                        outward_alignment_penalty = cfg_reward.get('outward_alignment_penalty', 5.0)
+                        vertical_action_penalty = float(cfg_reward.get('oob_vertical_action_penalty', 4.0))
 
-                        reward += oob_step_penalty
+                        reward += oob_step_penalty * urgency_scale
 
-                        if is_returning:
+                        rd = self.server.unity_runtime_data[drone_name]
+                        dir_to_leader = np.array([
+                            rd.leader_position.x - rd.position.x,
+                            rd.leader_position.y - rd.position.y,
+                            rd.leader_position.z - rd.position.z
+                        ])
+                        norm = np.linalg.norm(dir_to_leader)
+                        alignment = 0.0
+                        if norm > 1e-6:
+                            ideal_dir = dir_to_leader / norm
+                            actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
+                            alignment = float(np.dot(ideal_dir, actual_dir))
+
+                        horizontal_dir = np.array([dir_to_leader[0], dir_to_leader[2]], dtype=np.float32)
+                        horizontal_norm = np.linalg.norm(horizontal_dir)
+                        horizontal_alignment = 0.0
+                        action_horizontal = np.array([self.action_map[action][0], self.action_map[action][2]], dtype=np.float32)
+                        action_horizontal_norm = np.linalg.norm(action_horizontal)
+                        if horizontal_norm > 1e-6 and action_horizontal_norm > 1e-6:
+                            horizontal_alignment = float(
+                                np.dot(horizontal_dir / horizontal_norm, action_horizontal / action_horizontal_norm)
+                            )
+
+                        if is_returning or is_returning_horizontally:
+                            drone_state['oob_no_return_hits'] = 0
                             progress_reward = max(0.0, prev_dist_to_leader - dist_to_leader) * progress_weight
-                            reward += (return_bonus + progress_reward)
-
-                            rd = self.server.unity_runtime_data[drone_name]
-                            dir_to_leader = np.array([
-                                rd.leader_position.x - rd.position.x,
-                                rd.leader_position.y - rd.position.y,
-                                rd.leader_position.z - rd.position.z
-                            ])
-                            norm = np.linalg.norm(dir_to_leader)
-                            if norm > 1e-6:
-                                ideal_dir = dir_to_leader / norm
-                                actual_dir = self.action_map[action] / np.linalg.norm(self.action_map[action])
-                                alignment = np.dot(ideal_dir, actual_dir)
-                                if alignment > 0:
-                                    reward += alignment * alignment_weight
+                            horizontal_progress_reward = max(0.0, prev_horizontal_dist - horizontal_dist) * progress_weight
+                            reward += (return_bonus * urgency_scale + progress_reward + horizontal_progress_reward)
+                            if alignment > 0:
+                                reward += alignment * alignment_weight * urgency_scale
+                            if horizontal_alignment > 0:
+                                reward += horizontal_alignment * horizontal_alignment_weight * urgency_scale
                         else:
-                            reward += cfg_reward.get('out_of_range', -30.0)
+                            drone_state['oob_no_return_hits'] = int(
+                                drone_state.get('oob_no_return_hits', 0)
+                            ) + 1
+                            reward += cfg_reward.get('out_of_range', -30.0) * urgency_scale
+                            outward_progress = max(0.0, dist_to_leader - prev_dist_to_leader)
+                            outward_horizontal_progress = max(0.0, horizontal_dist - prev_horizontal_dist)
+                            no_return_penalty = float(
+                                cfg_reward.get('no_return_progress_penalty', 3.0)
+                            )
+                            no_return_hits_cap = max(
+                                1,
+                                int(cfg_reward.get('no_return_progress_hits_cap', 4))
+                            )
+                            reward -= min(
+                                drone_state['oob_no_return_hits'],
+                                no_return_hits_cap
+                            ) * no_return_penalty * urgency_scale
+                            if outward_progress > 0.0:
+                                reward -= outward_progress * outward_progress_penalty * urgency_scale
+                            if outward_horizontal_progress > 0.0:
+                                reward -= outward_horizontal_progress * outward_progress_penalty * urgency_scale
+                            if alignment < 0.0:
+                                reward += alignment * outward_alignment_penalty * urgency_scale
+                            if horizontal_alignment < 0.0:
+                                reward += horizontal_alignment * (outward_alignment_penalty * 1.5) * urgency_scale
+
+                        current_height = float(rd.position.y)
+                        if abs(float(self.action_map[action][1])) > 1e-6 and current_height >= float(
+                            cfg_thresh.get('low_altitude_recovery_height', 1.2)
+                        ):
+                            reward -= vertical_action_penalty * urgency_scale
+                    elif dist_ratio > float(cfg_thresh.get('preemptive_return_ratio', 0.82)):
+                        preemptive_progress_weight = float(
+                            cfg_reward.get('preemptive_return_progress_weight', 6.0)
+                        )
+                        preemptive_alignment_weight = float(
+                            cfg_reward.get('preemptive_return_alignment_weight', 2.0)
+                        )
+                        inward_progress = max(0.0, prev_horizontal_dist - horizontal_dist)
+                        if inward_progress > 0.0:
+                            reward += inward_progress * preemptive_progress_weight
+                        action_horizontal = np.array([self.action_map[action][0], self.action_map[action][2]], dtype=np.float32)
+                        action_horizontal_norm = np.linalg.norm(action_horizontal)
+                        leader_horizontal = np.array([next_leader_rel[0], next_leader_rel[2]], dtype=np.float32)
+                        leader_horizontal_norm = np.linalg.norm(leader_horizontal)
+                        if action_horizontal_norm > 1e-6 and leader_horizontal_norm > 1e-6:
+                            inward_alignment = float(
+                                np.dot(leader_horizontal / leader_horizontal_norm, action_horizontal / action_horizontal_norm)
+                            )
+                            if inward_alignment > 0.0:
+                                reward += inward_alignment * preemptive_alignment_weight
+                        drone_state['oob_no_return_hits'] = 0
                     elif dist_ratio > safe_ratio:
                         # safe_ratio - 1.0 之间线性衰减
                         stability_factor = 1.0 - (dist_ratio - safe_ratio) / (1.0 - safe_ratio) * 0.5  # 从1.0衰减到0.5
+                        drone_state['oob_no_return_hits'] = 0
+                    else:
+                        drone_state['oob_no_return_hits'] = 0
                     
                     # 【修改】稳定性惩罚降低强度,避免过度打压
                     if dist_ratio > penalty_ratio:
@@ -1567,20 +1746,31 @@ class MultiDroneMovementEnv(gym.Env):
         if entropy_reduction > 0:
             reward += entropy_reduction * cfg_reward['entropy_reduction'] * 0.01 * stability_factor
         drone_state['prev_entropy_sum'] = current_entropy
+
+        made_scan_progress = (new_cells > 0) or (entropy_reduction > 0.0)
+
+        prev_is_out_of_range = bool(current_state[16] > 0.5) if current_state is not None else False
+        if prev_is_out_of_range and not is_out_of_range:
+            reward += float(
+                cfg_reward.get(
+                    'return_to_range_success_bonus',
+                    cfg_reward.get('return_to_range_bonus', 5.0) * 1.5
+                )
+            )
             
         # 3. 【优化】局部高熵探索奖励
         # 修正索引：9-平均熵, 10-最大熵
         local_avg_entropy = next_state[9]
         local_max_entropy = next_state[10]
             
-        if local_max_entropy > cfg_thresh.get('high_entropy_threshold', 40.0):
+        if made_scan_progress and local_max_entropy > cfg_thresh.get('high_entropy_threshold', 40.0):
             entropy_exploration_bonus = cfg_reward.get('high_entropy_exploration', 5.0)
             reward += entropy_exploration_bonus * stability_factor
             
         if drone_state['prev_position']:
             prev_local_avg_entropy = current_state[9]
             entropy_increase = local_avg_entropy - prev_local_avg_entropy
-            if entropy_increase > 0:
+            if made_scan_progress and entropy_increase > 0:
                 entropy_gradient_reward = entropy_increase * cfg_reward.get('entropy_gradient_bonus', 2.0)
                 reward += entropy_gradient_reward * stability_factor
             
@@ -1600,7 +1790,7 @@ class MultiDroneMovementEnv(gym.Env):
                     reward += height_penalty_base * (min_scan_height - current_height)
                 elif current_height > max_scan_height:
                     reward += height_penalty_base * (current_height - max_scan_height)
-                elif abs(current_height - optimal_height) < 1.5:
+                elif made_scan_progress and abs(current_height - optimal_height) < 1.5:
                     reward += cfg_reward.get('optimal_height_bonus', 1.0)
                     
                 drone_state['prev_position'] = pos
@@ -1622,22 +1812,33 @@ class MultiDroneMovementEnv(gym.Env):
             else:
                 drone_state['idle_hits'] = 0
 
+        # 4.2. 连续没有扫描进展时增加惩罚，压制“靠形状奖励混时间”的策略。
+        no_scan_penalty = float(cfg_reward.get('no_scan_progress_penalty', -2.0))
+        no_scan_grace_sec = float(cfg_thresh.get('scan_progress_grace_sec', post_reset_grace_sec))
+        if self.episode_start_time is not None and (time.time() - self.episode_start_time) >= no_scan_grace_sec:
+            if made_scan_progress:
+                drone_state['no_scan_hits'] = 0
+            else:
+                drone_state['no_scan_hits'] = int(drone_state.get('no_scan_hits', 0)) + 1
+                reward += no_scan_penalty * min(drone_state['no_scan_hits'], 5)
+
         # 5. 碰撞惩罚与容忍机制
         min_distance = self._get_min_distance_to_others(drone_name)
         collision_threshold = cfg_thresh['collision_distance']
 
         if min_distance < collision_threshold * 0.8:
-            reward += cfg_reward['collision']
-            drone_state['collision_count'] += 1
+            drone_state['_step_collision_detected'] = True
+            if not drone_state.get('_collision_penalty_applied_this_step', False):
+                reward += cfg_reward['collision']
+                drone_state['_collision_penalty_applied_this_step'] = True
         else:
-            # 距离恢复安全时重置计数器
-            if drone_state['collision_count'] > 0 and min_distance > collision_threshold * 1.5:
-                drone_state['collision_count'] = max(0, drone_state['collision_count'] - 1)
+            if min_distance > collision_threshold * 1.5:
+                drone_state['_step_collision_clear'] = True
 
         # 6. 超出Leader范围惩罚
         # 仅施加单步惩罚；连续越界计数在 step() 里按“一个决策一步”统一维护，
         # 避免 action_repeat 的每个子步都被当成一次完整越界。
-        if is_out_of_range:
+        if is_out_of_range and not applied_oob_penalty:
             reward += cfg_reward['out_of_range']
 
         # 7. 步骤惩罚
@@ -1657,7 +1858,7 @@ class MultiDroneMovementEnv(gym.Env):
                     if 'battery_optimal_min' in cfg_thresh and 'battery_optimal_max' in cfg_thresh:
                         opt_min = cfg_thresh['battery_optimal_min']
                         opt_max = cfg_thresh['battery_optimal_max']
-                        if opt_min <= current_voltage <= opt_max:
+                        if made_scan_progress and opt_min <= current_voltage <= opt_max:
                             bonus = cfg_reward.get('battery_optimal_reward', 2.0)
                             reward += bonus
 
@@ -1703,6 +1904,9 @@ class MultiDroneMovementEnv(gym.Env):
 
         terminate_on_out_of_range = bool(cfg_thresh.get('terminate_on_out_of_range', True))
         max_oob_steps = max(1, int(cfg_thresh.get('max_out_of_range_steps', 1)))
+        max_oob_duration_sec = float(
+            cfg_thresh.get('max_out_of_range_duration_sec', float('inf'))
+        )
         severe_ratio = float(cfg_thresh.get('severe_out_of_range_ratio', 1.05))
 
         if self.server:
@@ -1720,14 +1924,7 @@ class MultiDroneMovementEnv(gym.Env):
                         drone_state['landed_hits'] = 0
 
                     current_oob_steps = int(drone_state.get('out_of_range_steps', 0))
-                    in_post_reset_grace = elapsed_time < post_reset_grace_sec
-                    oob_checks_active = (
-                        not in_post_reset_grace and self.step_count >= min_steps_before_oob_checks
-                    )
-                    if terminate_on_out_of_range and current_oob_steps >= max_oob_steps and oob_checks_active:
-                        self.last_done_reason = f"Drone {drone_name} Out of Range Too Long ({current_oob_steps} >= {max_oob_steps})"
-                        print(f"[Done] {self.last_done_reason}")
-                        return True
+                    oob_checks_active = self._oob_checks_active()
 
                     with self.server.data_lock:
                         rd = self.server.unity_runtime_data.get(drone_name)
@@ -1738,6 +1935,38 @@ class MultiDroneMovementEnv(gym.Env):
                                 (rd.position.z - rd.leader_position.z) ** 2
                             )
                             threshold = rd.leader_scan_radius * severe_ratio
+                            is_currently_oob = dist > rd.leader_scan_radius
+                            if oob_checks_active and is_currently_oob:
+                                started_at = drone_state.get('oob_started_at')
+                                if started_at is None:
+                                    drone_state['oob_started_at'] = elapsed_time
+                                    drone_state['out_of_range_duration_sec'] = 0.0
+                                else:
+                                    drone_state['out_of_range_duration_sec'] = max(
+                                        0.0, elapsed_time - float(started_at)
+                                    )
+                            else:
+                                drone_state['oob_started_at'] = None
+                                drone_state['out_of_range_duration_sec'] = 0.0
+
+                            current_oob_duration = float(
+                                drone_state.get('out_of_range_duration_sec', 0.0)
+                            )
+                            if (
+                                terminate_on_out_of_range
+                                and oob_checks_active
+                                and (
+                                    current_oob_steps >= max_oob_steps
+                                    or current_oob_duration >= max_oob_duration_sec
+                                )
+                            ):
+                                self.last_done_reason = (
+                                    f"Drone {drone_name} Out of Range Too Long "
+                                    f"({current_oob_duration:.1f}s / {current_oob_steps} steps)"
+                                )
+                                print(f"[Done] {self.last_done_reason}")
+                                return True
+
                             if dist > threshold:
                                 drone_state['severe_out_of_range_hits'] = int(
                                     drone_state.get('severe_out_of_range_hits', 0)
@@ -1755,10 +1984,13 @@ class MultiDroneMovementEnv(gym.Env):
 
                     if hasattr(self.server, "battery_manager"):
                         battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                        if battery_info and battery_info.status == 'empty':
-                            self.last_done_reason = f"Drone {drone_name} Battery Empty"
-                            print(f"[Done] {self.last_done_reason}")
-                            return True
+                        if battery_info:
+                            current_voltage = float(getattr(battery_info, "voltage", 4.2))
+                            battery_status = getattr(battery_info, "status", None)
+                            if current_voltage <= 3.0 + 1e-6 or battery_status == BatteryStatus.EMPTY:
+                                self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
+                                print(f"[Done] {self.last_done_reason}")
+                                return True
                 except Exception as exc:
                     logger.debug(f"Done check skipped for {drone_name}: {exc}")
                     continue

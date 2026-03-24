@@ -35,6 +35,7 @@ try:
     from stable_baselines3 import DQN
     from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
     from stable_baselines3.common.monitor import Monitor
+    from stable_baselines3.common.utils import get_linear_fn
     import gymnasium
     print(f"  ✓ Stable-Baselines3已安装")
 except ImportError:
@@ -232,22 +233,46 @@ log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
 os.makedirs(log_dir, exist_ok=True)
 
 pretrained_model = os.path.join(model_dir, 'movement_dqn_final.zip')
-use_pretrained = (
-    os.environ.get('USE_PRETRAINED', '0') == '1'
-    and os.path.exists(pretrained_model)
-)
+resume_default = bool(dqn_config.get('training', {}).get('resume_from_pretrained', False))
+resume_env = os.environ.get('USE_PRETRAINED')
+resume_requested = resume_default if resume_env is None else (resume_env == '1')
+use_pretrained = resume_requested and os.path.exists(pretrained_model)
+
+def apply_resume_training_settings(model, train_cfg):
+    """Apply fine-tune exploration settings when resuming from an existing model."""
+    resume_initial_eps = float(train_cfg.get('resume_exploration_initial_eps', train_cfg['exploration_initial_eps']))
+    resume_final_eps = float(train_cfg.get('resume_exploration_final_eps', train_cfg['exploration_final_eps']))
+    resume_fraction = float(train_cfg.get('resume_exploration_fraction', train_cfg['exploration_fraction']))
+    model.exploration_initial_eps = resume_initial_eps
+    model.exploration_final_eps = resume_final_eps
+    model.exploration_fraction = resume_fraction
+    model.exploration_schedule = get_linear_fn(
+        resume_initial_eps,
+        resume_final_eps,
+        resume_fraction,
+    )
+    model.learning_rate = float(train_cfg['learning_rate'])
+    model.lr_schedule = lambda _: float(train_cfg['learning_rate'])
+    model.batch_size = int(train_cfg['batch_size'])
+    model.gamma = float(train_cfg['gamma'])
+    model.target_update_interval = int(train_cfg['target_update_interval'])
+    print(f"  ✓ 续训探索率: {resume_initial_eps:.3f} -> {resume_final_eps:.3f} (fraction={resume_fraction:.3f})")
+    print(f"  ✓ 续训总步数: {int(train_cfg.get('resume_total_timesteps', train_cfg['total_timesteps']))}")
 
 if use_pretrained:
     print(f"  ✓ 找到预训练模型: {pretrained_model}")
     print(f"  加载预训练模型继续训练...")
     model = DQN.load(pretrained_model, env=env)
     model.tensorboard_log = log_dir
+    apply_resume_training_settings(model, dqn_config['training'])
     print(f"  ✓ 预训练模型加载成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")
 else:
     if os.path.exists(pretrained_model):
-        print(f"  ! 检测到旧模型但本次默认不续训: {pretrained_model}")
-        print(f"    - 如需显式续训，请设置环境变量 USE_PRETRAINED=1")
+        resume_hint = "1" if not resume_default else "0"
+        action_hint = "继续叠加训练" if not resume_default else "从头训练"
+        print(f"  ! 检测到旧模型但本次未加载: {pretrained_model}")
+        print(f"    - 如需显式{action_hint}，请设置环境变量 USE_PRETRAINED={resume_hint}")
     print(f"  创建新模型...")
     model = DQN(
         dqn_config['model']['policy'],
@@ -332,6 +357,7 @@ class DQNVisualizationCallback(BaseCallback):
                 'leader_distance': None,
                 'is_out_of_range': False,
                 'out_of_range_steps': 0,
+                'out_of_range_duration_sec': 0.0,
                 'out_of_range_count': 0,
                 'current_drone_reward': 0.0,
             }
@@ -370,6 +396,7 @@ class DQNVisualizationCallback(BaseCallback):
                         'leader_distance': None,
                         'is_out_of_range': False,
                         'out_of_range_steps': 0,
+                        'out_of_range_duration_sec': 0.0,
                         'out_of_range_count': 0,
                         'current_drone_reward': 0.0,
                     }
@@ -379,6 +406,7 @@ class DQNVisualizationCallback(BaseCallback):
                         'leader_distance': info.get('leader_distance'),
                         'is_out_of_range': bool(info.get('is_out_of_range', False)),
                         'out_of_range_steps': int(info.get('out_of_range_steps', 0) or 0),
+                        'out_of_range_duration_sec': float(info.get('out_of_range_duration_sec', 0.0) or 0.0),
                         'out_of_range_count': int(info.get('out_of_range_count', 0) or 0),
                         'current_drone_reward': float(info.get('current_drone_reward', 0.0) or 0.0),
                     }
@@ -408,6 +436,7 @@ class DQNVisualizationCallback(BaseCallback):
                 'leader_distance': info.get('leader_distance'),
                 'is_out_of_range': bool(info.get('is_out_of_range', False)),
                 'out_of_range_steps': int(info.get('out_of_range_steps', 0) or 0),
+                'out_of_range_duration_sec': float(info.get('out_of_range_duration_sec', 0.0) or 0.0),
                 'out_of_range_count': int(info.get('out_of_range_count', 0) or 0),
                 'current_drone_reward': float(info.get('current_drone_reward', 0.0) or 0.0),
                 'last_done_reason': info.get('last_done_reason'),
@@ -461,7 +490,15 @@ print("\n" + "=" * 80)
 print("[步骤7] 开始训练")
 print("=" * 80)
 
-total_timesteps = dqn_config['training']['total_timesteps']
+total_timesteps = int(
+    dqn_config['training'].get(
+        'resume_total_timesteps' if use_pretrained else 'total_timesteps',
+        dqn_config['training']['total_timesteps']
+    )
+)
+reset_num_timesteps = True
+if use_pretrained:
+    reset_num_timesteps = bool(dqn_config['training'].get('reset_num_timesteps_on_resume', False))
 print(f"训练步数: {total_timesteps}")
 print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"\n⚠ 请确保Unity客户端已连接到服务器")
@@ -480,7 +517,8 @@ try:
     model.learn(
         total_timesteps=total_timesteps,
         callback=callbacks,
-        log_interval=10
+        log_interval=10,
+        reset_num_timesteps=reset_num_timesteps
     )
 
     print("\n" + "=" * 80)

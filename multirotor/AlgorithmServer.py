@@ -625,6 +625,15 @@ class MultiDroneAlgorithmServer:
                 "episode_reward": episode_reward,
                 "total_reward": episode_reward,
                 "episode_elapsed_time": float(stats.get("episode_elapsed_time", 0.0)),
+                "drone_name": stats.get("drone_name", ""),
+                "last_action": stats.get("last_action", ""),
+                "leader_distance": stats.get("leader_distance", ""),
+                "is_out_of_range": stats.get("is_out_of_range", ""),
+                "out_of_range_steps": stats.get("out_of_range_steps", 0),
+                "out_of_range_duration_sec": float(stats.get("out_of_range_duration_sec", 0.0)),
+                "out_of_range_count": stats.get("out_of_range_count", 0),
+                "current_drone_reward": float(stats.get("current_drone_reward", 0.0)),
+                "per_drone_actions": stats.get("per_drone_actions", {}),
             }
         return {
             "episode": -1,
@@ -634,6 +643,15 @@ class MultiDroneAlgorithmServer:
             "episode_reward": 0.0,
             "total_reward": 0.0,
             "episode_elapsed_time": 0.0,
+            "drone_name": "",
+            "last_action": "",
+            "leader_distance": "",
+            "is_out_of_range": "",
+            "out_of_range_steps": 0,
+            "out_of_range_duration_sec": 0.0,
+            "out_of_range_count": 0,
+            "current_drone_reward": 0.0,
+            "per_drone_actions": {},
         }
 
     def set_battery_consumption_rate(self, drone_name: str, rate: float) -> None:
@@ -790,8 +808,8 @@ class MultiDroneAlgorithmServer:
                 state = self.drone_controller.get_vehicle_state(name)
                 pos = state.get("position", (0.0, 0.0, 0.0))
                 altitude = -float(pos[2]) if pos is not None else 0.0
-                if state.get("flying", False) or altitude > 1.2:
-                    if altitude > 1.2 and not state.get("flying", False):
+                if altitude > 0.8:
+                    if not state.get("flying", False):
                         self.drone_controller._update_state_field(name, "flying", True)
                     continue
                 all_ready = False
@@ -1219,8 +1237,18 @@ class MultiDroneAlgorithmServer:
             else:
                 logger.info(f"无人机{drone_name}准备起飞...")
                 if not self.drone_controller.takeoff(drone_name):
-                    logger.error(f"无人机{drone_name}起飞失败")
-                    all_success = False
+                    logger.warning(f"无人机{drone_name}首次起飞失败，尝试重试一次...")
+                    try:
+                        self.drone_controller.arm_disarm(False, drone_name)
+                        _time.sleep(0.2)
+                        self.drone_controller.arm_disarm(True, drone_name)
+                    except Exception:
+                        pass
+                    if not self.drone_controller.takeoff(drone_name):
+                        logger.error(f"无人机{drone_name}起飞失败")
+                        all_success = False
+                    else:
+                        logger.info(f"无人机{drone_name}起飞重试成功")
                 else:
                     logger.info(f"无人机{drone_name}起飞成功")
             _time.sleep(0.5)  # 减少延迟时间，加快起飞流程
@@ -2697,6 +2725,12 @@ class MultiDroneAlgorithmServer:
                                 "state": self._collect_reset_trace_state(),
                             },
                         )
+                        self._reset_command_sent_time = 0.0
+                        self._reset_runtime_fresh = False
+                        self._reset_grid_fresh = False
+                        self.resetting = False
+                        self.ready_event.set()
+                        return
 
                 # 防穿地保护：额外等待物理引擎稳定
                 logger.info("[重置] 等待物理引擎稳定...")

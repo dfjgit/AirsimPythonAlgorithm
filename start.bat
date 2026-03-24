@@ -167,7 +167,7 @@ call myvenv\Scripts\activate.bat
 echo.
 echo [执行] 正在进行 DDPG 和 DQN 的完整对比分析...
 echo.
-python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --compare-algorithms-full --out analysis_results
+python "multirotor\Algorithm\visualize_training_data.py" --compare-algorithms --out analysis_results
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo ============================================================
@@ -176,11 +176,7 @@ if %ERRORLEVEL% EQU 0 (
     echo.
     echo 输出目录结构：
     echo   analysis_results\
-    echo   ├── DDPG_scan_data_XXXXXX\          [DDPG单独分析 - 11张图]
-    echo   ├── DQN_scan_data_XXXXXX\           [DQN单独分析 - 11张图]
-    echo   ├── dqn_movement_XXXXXX\            [DQN训练分析 - 4张图]
-    echo   ├── algorithm_comparison_ddpg_vs_dqn\     [基础对比 - 4图+报告]
-    echo   └── algorithm_comparison_ddpg_vs_dqn_full\ [全方位对比 - 6图+报告]
+    echo   └── algorithm_comparison\           [统一对比 - 4图+报告]
     echo.
 ) else (
     echo.

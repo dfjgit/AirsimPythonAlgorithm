@@ -56,6 +56,7 @@ class DataCollector:
         self.last_episode = -1  # 用于检测 episode 切换
         self.last_step = -1     # 用于检测 step 切换
         self.last_scanned_count = 0  # 记录最近一次扫描数
+        self.last_global_scanned_count = 0  # 记录最近一次全局扫描数
         self.last_scan_episode = -1  # 用于检测 scan_data 的 episode 切换
         self.terminal_scan_episode = None  # 记录已写入 terminal 帧的 episode
         self.terminal_scan_step = None  # 记录 terminal 帧对应 step
@@ -98,7 +99,7 @@ class DataCollector:
             self.training_csv_filename = training_csv_filename
                     
             # 写入训练数据表头 (新增元数据字段以支持跨算法比较)
-            header = ['episode', 'reward', 'length', 'scanned_cells', 'timestep', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
+            header = ['episode', 'reward', 'length', 'scanned_cells', 'global_scanned_cells', 'timestep', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
                       'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
                       'reset_reason', 'collision_count', 'out_of_range_count', 'max_global_scan_ratio', 'min_global_avg_entropy',
                       'collision_object_name', 'collision_penetration_depth', 'collision_position', 'recent_trajectory',
@@ -179,6 +180,7 @@ class DataCollector:
         self.last_episode = -1
         self.last_step = -1
         self.last_scanned_count = 0
+        self.last_global_scanned_count = 0
         
         # 兼容旧版本调用（如果没有传锁）
         if data_lock is None:
@@ -241,7 +243,7 @@ class DataCollector:
                 elapsed_time = time.time() - self.global_start_time
                 episode_elapsed_time = float(self.current_episode_elapsed_time)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                scan_efficiency = self.last_scanned_count / max(episode_elapsed_time, 1.0)
+                scan_efficiency = self.last_global_scanned_count / max(episode_elapsed_time, 1.0)
 
                 avg_weights = [0.0] * 5
                 if self.current_episode_weights:
@@ -257,6 +259,7 @@ class DataCollector:
                     f"{self.current_episode_reward:.2f}",
                     self.current_episode_length,
                     self.last_scanned_count,
+                    self.last_global_scanned_count,
                     int(elapsed_time),
                     f"{elapsed_time:.2f}",
                     f"{episode_elapsed_time:.2f}",
@@ -443,6 +446,7 @@ class DataCollector:
                 
                 # 记录最近的扫描数，用于训练数据输出
                 self.last_scanned_count = scanned_count
+                self.last_global_scanned_count = global_scanned_count
 
                 # 如果表头未写入，先写入表头
                 if self.csv_writer and not self.header_written:
@@ -486,8 +490,24 @@ class DataCollector:
                         'hl_goal_z',
                         'algorithm_type',
                         'env_type',
-                        'control_mode'
+                        'control_mode',
+                        'current_drone',
+                        'current_action',
+                        'current_leader_distance',
+                        'current_is_out_of_range',
+                        'current_out_of_range_steps',
+                        'current_out_of_range_duration_sec',
+                        'current_out_of_range_count',
+                        'current_drone_reward'
                     ]
+                    for drone_name in self.drone_names_list:
+                        header.append(f'{drone_name}_action')
+                        header.append(f'{drone_name}_leader_distance')
+                        header.append(f'{drone_name}_is_out_of_range')
+                        header.append(f'{drone_name}_out_of_range_steps')
+                        header.append(f'{drone_name}_out_of_range_duration_sec')
+                        header.append(f'{drone_name}_out_of_range_count')
+                        header.append(f'{drone_name}_reward')
                     # ?????????????????
                     for drone_name in self.drone_names_list:
                         header.append(f'{drone_name}_x')
@@ -523,6 +543,15 @@ class DataCollector:
                         algo_type = self.external_data.get('algorithm_type', '')
                         env_type = self.external_data.get('env_type', '')
                         ctrl_mode = self.external_data.get('control_mode', '')
+                        current_drone = training_data.get('drone_name', self.external_data.get('drone_name', ''))
+                        current_action = training_data.get('last_action', self.external_data.get('last_action', ''))
+                        current_leader_distance = training_data.get('leader_distance', self.external_data.get('leader_distance', ''))
+                        current_is_out_of_range = training_data.get('is_out_of_range', self.external_data.get('is_out_of_range', ''))
+                        current_out_of_range_steps = training_data.get('out_of_range_steps', self.external_data.get('out_of_range_steps', 0))
+                        current_out_of_range_duration_sec = training_data.get('out_of_range_duration_sec', self.external_data.get('out_of_range_duration_sec', 0.0))
+                        current_out_of_range_count = training_data.get('out_of_range_count', self.external_data.get('out_of_range_count', 0))
+                        current_drone_reward = training_data.get('current_drone_reward', self.external_data.get('current_drone_reward', 0.0))
+                        per_drone_actions = training_data.get('per_drone_actions', self.external_data.get('per_drone_actions', {})) or {}
                         reset_reason = self.external_data.get('reset_reason', '')
                         collision_count = int(self.external_data.get('collision_count', 0))
                         out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
@@ -622,8 +651,28 @@ class DataCollector:
                             hl_goal_z_val,
                             algo_type,
                             env_type,
-                            ctrl_mode
+                            ctrl_mode,
+                            current_drone,
+                            current_action,
+                            f"{float(current_leader_distance):.3f}" if current_leader_distance not in (None, "") else "",
+                            int(bool(current_is_out_of_range)) if current_is_out_of_range not in ("", None) else "",
+                            int(current_out_of_range_steps or 0),
+                            f"{float(current_out_of_range_duration_sec or 0.0):.3f}",
+                            int(current_out_of_range_count or 0),
+                            f"{float(current_drone_reward):.4f}",
                         ]
+
+                        for drone_name in self.drone_names_list:
+                            row_action = per_drone_actions.get(drone_name, {}) if isinstance(per_drone_actions, dict) else {}
+                            row.append(row_action.get('last_action', ''))
+                            leader_distance = row_action.get('leader_distance', '')
+                            row.append(f"{float(leader_distance):.3f}" if leader_distance not in (None, "") else "")
+                            is_oor = row_action.get('is_out_of_range', '')
+                            row.append(int(bool(is_oor)) if is_oor not in ("", None) else "")
+                            row.append(int(row_action.get('out_of_range_steps', 0) or 0))
+                            row.append(f"{float(row_action.get('out_of_range_duration_sec', 0.0) or 0.0):.3f}")
+                            row.append(int(row_action.get('out_of_range_count', 0) or 0))
+                            row.append(f"{float(row_action.get('current_drone_reward', 0.0) or 0.0):.4f}")
                         
                         # 添加所有无人机的坐标和姿态
                         for drone_name in self.drone_names_list:
@@ -697,13 +746,14 @@ class DataCollector:
                                 recent_trajectory = self.external_data.get('recent_trajectory', '')
                             elapsed_time = time.time() - self.global_start_time
                             previous_episode_elapsed = float(self.current_episode_elapsed_time)
-                            scan_efficiency = self.last_scanned_count / max(previous_episode_elapsed, 1.0)
+                            scan_efficiency = self.last_global_scanned_count / max(previous_episode_elapsed, 1.0)
 
                             training_row = [
                                 self.last_episode,
                                 f"{self.current_episode_reward:.2f}",
                                 self.current_episode_length,
                                 self.last_scanned_count,
+                                self.last_global_scanned_count,
                                 int(elapsed_time),
                                 f"{elapsed_time:.2f}",
                                 f"{previous_episode_elapsed:.2f}",

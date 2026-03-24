@@ -6,6 +6,7 @@ echo    Training Data Visualization Analysis Tool
 echo ============================================================
 echo.
 echo This tool analyzes training logs and generates visualization charts.
+echo Top-down trajectory charts now use X-Z ground plane, and Y is treated as height.
 echo Charts will be saved to logs^/analyze_log^/ folder.
 echo.
 echo ============================================================
@@ -144,7 +145,7 @@ REM Find latest log file
 echo [Info] Scanning for latest training log...
 set "LATEST_LOG="
 
-REM Check for scan_data CSV files (优先选择 - 包含完整轨迹数据)
+REM Check for scan_data CSV files (优先选择 - 包含完整轨迹数据，顶视图使用 X-Z)
 for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\scan_data_*.csv" 2^>nul') do (
     set "LATEST_LOG=%TARGET_LOG_DIR%\%%F"
     goto :found_csv
@@ -162,7 +163,7 @@ for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\*.csv" 2^>nul') do (
     goto :found_csv
 )
 
-REM Check for JSON files
+REM Check for JSON files (legacy compatibility only)
 for /f "delims=" %%F in ('dir /b /o-d "%TARGET_LOG_DIR%\*.json" 2^>nul') do (
     set "LATEST_LOG=%TARGET_LOG_DIR%\%%F"
     goto :found_json

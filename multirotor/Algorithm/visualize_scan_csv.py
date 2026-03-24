@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from typing import Iterable
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -177,7 +179,7 @@ def moving_average(series: pd.Series, window: int = 20) -> pd.Series:
     return series.rolling(window=window, min_periods=1).mean()
 
 
-def parse_position(value: str) -> tuple[float, float] | None:
+def parse_topdown_position(value: str) -> tuple[float, float] | None:
     text = str(value).strip()
     if not text:
         return None
@@ -185,7 +187,9 @@ def parse_position(value: str) -> tuple[float, float] | None:
     if len(parts) < 2:
         return None
     try:
-        return float(parts[0]), float(parts[1])
+        x = float(parts[0])
+        z = float(parts[2]) if len(parts) >= 3 else float(parts[1])
+        return x, z
     except ValueError:
         return None
 
@@ -242,17 +246,20 @@ def plot_collision_hotspots(run: RunData) -> None:
     df = run.episode_df
     if df.empty or "collision_position" not in df.columns:
         return
-    points = [parse_position(v) for v in df.loc[df["collision_position"].astype(str).str.len() > 0, "collision_position"]]
+    points = [
+        parse_topdown_position(v)
+        for v in df.loc[df["collision_position"].astype(str).str.len() > 0, "collision_position"]
+    ]
     points = [p for p in points if p is not None]
     if not points:
         return
     xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
+    zs = [p[1] for p in points]
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.scatter(xs, ys, s=60, alpha=0.75, c=np.arange(len(xs)), cmap="Reds")
-    ax.set_title("Collision Hotspots (XY)")
+    ax.scatter(xs, zs, s=60, alpha=0.75, c=np.arange(len(xs)), cmap="Reds")
+    ax.set_title("Collision Hotspots (Top-Down XZ)")
     ax.set_xlabel("X")
-    ax.set_ylabel("Y")
+    ax.set_ylabel("Z")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(run.output_dir / "collision_hotspots_xy.png", dpi=160)
@@ -299,20 +306,20 @@ def plot_algorithm_weights_stability(run: RunData) -> None:
     plt.close(fig)
 
 
-def _episode_xy(run: RunData, episode: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+def _episode_topdown_xz(run: RunData, episode: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     if run.scan_df.empty or "episode" not in run.scan_df.columns:
         return {}
     subset = run.scan_df[run.scan_df["episode"] == episode]
     result = {}
     for drone in run.drones:
         x_col = f"{drone}_x"
-        y_col = f"{drone}_y"
-        if x_col in subset.columns and y_col in subset.columns:
+        z_col = f"{drone}_z"
+        if x_col in subset.columns and z_col in subset.columns:
             x = pd.to_numeric(subset[x_col], errors="coerce").to_numpy()
-            y = pd.to_numeric(subset[y_col], errors="coerce").to_numpy()
-            mask = ~(np.isnan(x) | np.isnan(y))
+            z = pd.to_numeric(subset[z_col], errors="coerce").to_numpy()
+            mask = ~(np.isnan(x) | np.isnan(z))
             if mask.any():
-                result[drone] = (x[mask], y[mask])
+                result[drone] = (x[mask], z[mask])
     return result
 
 
@@ -326,15 +333,15 @@ def plot_best_vs_recent_trajectory_comparison(run: RunData) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharex=True, sharey=True)
     has_data = False
     for ax, (label, episode) in zip(axes, selections):
-        xy = _episode_xy(run, episode)
-        if not xy:
+        xz = _episode_topdown_xz(run, episode)
+        if not xz:
             continue
         has_data = True
-        for drone, (x, y) in xy.items():
-            ax.plot(x, y, linewidth=1.8, label=drone)
+        for drone, (x, z) in xz.items():
+            ax.plot(x, z, linewidth=1.8, label=drone)
         ax.set_title(f"{label.title()} Episode #{episode}")
         ax.set_xlabel("X")
-        ax.set_ylabel("Y")
+        ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)
     if has_data:
         handles, labels = axes[0].get_legend_handles_labels()
@@ -385,18 +392,18 @@ def plot_trajectories_xy(run: RunData) -> None:
     plotted = False
     for drone in run.drones:
         x_col = f"{drone}_x"
-        y_col = f"{drone}_y"
-        if x_col in df.columns and y_col in df.columns:
+        z_col = f"{drone}_z"
+        if x_col in df.columns and z_col in df.columns:
             x = pd.to_numeric(df[x_col], errors="coerce")
-            y = pd.to_numeric(df[y_col], errors="coerce")
-            ax.plot(x, y, linewidth=0.9, alpha=0.7, label=drone)
+            z = pd.to_numeric(df[z_col], errors="coerce")
+            ax.plot(x, z, linewidth=0.9, alpha=0.7, label=drone)
             plotted = True
     if not plotted:
         plt.close(fig)
         return
-    ax.set_title("All Trajectories (XY)")
+    ax.set_title("All Trajectories (Top-Down XZ)")
     ax.set_xlabel("X")
-    ax.set_ylabel("Y")
+    ax.set_ylabel("Z")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_xy.png", dpi=160)
@@ -416,17 +423,17 @@ def plot_trajectories_3d(run: RunData) -> None:
         z_col = f"{drone}_z"
         if all(c in df.columns for c in [x_col, y_col, z_col]):
             x = pd.to_numeric(df[x_col], errors="coerce")
-            y = pd.to_numeric(df[y_col], errors="coerce")
+            y = pd.to_numeric(df[y_col], errors="coerce")  # Unity vertical axis
             z = pd.to_numeric(df[z_col], errors="coerce")
-            ax.plot(x, y, z, linewidth=0.9, alpha=0.7, label=drone)
+            ax.plot(x, z, y, linewidth=0.9, alpha=0.7, label=drone)
             plotted = True
     if not plotted:
         plt.close(fig)
         return
-    ax.set_title("All Trajectories (3D)")
+    ax.set_title("All Trajectories (3D, Height=Y)")
     ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
+    ax.set_ylabel("Z")
+    ax.set_zlabel("Y (Height)")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_3d.png", dpi=160)
@@ -508,15 +515,15 @@ def plot_selected_episode_trajectories(run: RunData) -> None:
         return
 
     for episode in sorted(episodes):
-        xy = _episode_xy(run, episode)
-        if not xy:
+        xz = _episode_topdown_xz(run, episode)
+        if not xz:
             continue
         fig, ax = plt.subplots(figsize=(7, 7))
-        for drone, (x, y) in xy.items():
-            ax.plot(x, y, linewidth=1.4, label=drone)
-        ax.set_title(f"Episode {episode} Trajectory XY")
+        for drone, (x, z) in xz.items():
+            ax.plot(x, z, linewidth=1.4, label=drone)
+        ax.set_title(f"Episode {episode} Trajectory Top-Down XZ")
         ax.set_xlabel("X")
-        ax.set_ylabel("Y")
+        ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)
         ax.legend(loc="best")
         fig.tight_layout()
@@ -579,8 +586,15 @@ def collect_scan_files(args: argparse.Namespace) -> list[Path]:
 
 def paired_training_csv(scan_csv: Path) -> Path | None:
     stem = scan_csv.stem.replace("scan_data_", "")
-    candidate = scan_csv.parent / f"ddpg_training_{stem}.csv"
-    return candidate if candidate.exists() else None
+    candidates = [
+        scan_csv.parent / f"dqn_training_{stem}.csv",
+        scan_csv.parent / f"ddpg_training_{stem}.csv",
+        scan_csv.parent / f"training_data_{stem}.csv",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def main() -> None:

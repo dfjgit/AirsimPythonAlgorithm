@@ -100,29 +100,37 @@ MA_{20}(t)=\frac{1}{20}\sum_{i=t-19}^{t} x_i
 
 A sustained improvement or a stable plateau in `MA20` usually indicates a more stable training phase.
 
-### 3.3 Important Caveat About “XY” Figures / 关于“XY”图的重要说明
+### 3.3 Coordinate Convention for Trajectory Figures / 轨迹图坐标约定
 
 **中文**
 
-当前脚本中的若干“XY”图，纵轴实际使用的是 `Y` 坐标，而不是地面平面常见的 `Z` 坐标。因此：
+当前离线分析脚本已经统一修正为符合 Unity 坐标语义：
 
-- `collision_hotspots_xy.png` 画的是 `X-Y`，更接近“水平位置 + 高度”投影
-- `trajectories_xy.png` 画的是 `X-Y`
-- `best_vs_recent_trajectory_comparison.png` 画的是 `X-Y`
-- `episode_trajectories/*.png` 画的是 `X-Y`
+- 顶视轨迹图使用 `X-Z` 地面平面
+- `Y` 仅作为高度轴
+- `trajectories_3d.png` 中的三维顺序应理解为 `X-Z-Y(高度)`
 
-因此，这些图更适合分析“飞行高度变化与横向位置耦合关系”，而不是标准俯视平面轨迹。若需要严格的地面平面路线图，应额外绘制 `X-Z` 图。
+因此：
+
+- `collision_hotspots_xy.png` 实际应理解为顶视碰撞热点图（`X-Z`）
+- `trajectories_xy.png` 是顶视轨迹图（`X-Z`）
+- `best_vs_recent_trajectory_comparison.png` 是顶视轨迹对比图（`X-Z`）
+- `episode_trajectories/*.png` 是代表性回合的顶视轨迹图（`X-Z`）
 
 **English**
 
-In the current implementation, several figures named “XY” truly use `X` versus `Y`, not the more common ground-plane `X` versus `Z`. Therefore:
+The offline analysis scripts are now aligned with Unity coordinate semantics:
 
-- `collision_hotspots_xy.png` is `X-Y`, closer to horizontal position plus altitude,
-- `trajectories_xy.png` is `X-Y`,
-- `best_vs_recent_trajectory_comparison.png` is `X-Y`,
-- `episode_trajectories/*.png` are `X-Y`.
+- top-down trajectory figures use the ground plane `X-Z`,
+- `Y` is reserved for height,
+- and `trajectories_3d.png` should be read as `X-Z-Y(height)`.
 
-These figures are therefore better suited to analyzing the coupling between lateral motion and altitude, not strict top-down path geometry. A dedicated `X-Z` plot is needed for ground-plane route analysis.
+Therefore:
+
+- `collision_hotspots_xy.png` should be interpreted as top-down collision hotspots (`X-Z`),
+- `trajectories_xy.png` is a top-down trajectory plot (`X-Z`),
+- `best_vs_recent_trajectory_comparison.png` is a top-down trajectory comparison (`X-Z`),
+- and `episode_trajectories/*.png` are selected episode top-down trajectories (`X-Z`).
 
 ## 4. Chart Index / 图表总览
 
@@ -130,17 +138,17 @@ These figures are therefore better suited to analyzing the coupling between late
 |---|---|---|---|---|
 | `episode_performance_summary.png` | 回合综合表现总览图 | Episode Performance Summary | Episode | 收敛主判图 |
 | `reset_reason_rolling_ratio.png` | 重置原因滚动占比图 | Reset Reason Rolling Ratio | Episode | 训练健康度判图 |
-| `collision_hotspots_xy.png` | 碰撞热点分布图（X-Y） | Collision Hotspots (XY) | Episode | 碰撞空间定位 |
+| `collision_hotspots_xy.png` | 碰撞热点分布图（X-Z 顶视） | Collision Hotspots (Top-Down XZ) | Episode | 碰撞空间定位 |
 | `collision_object_breakdown.png` | 碰撞对象统计图 | Collision Object Breakdown | Episode | 高频失败源统计 |
 | `algorithm_weights_stability.png` | 权重稳定性分析图 | Algorithm Weights Stability | Step/Time | 动态权重稳定性诊断 |
 | `best_vs_recent_trajectory_comparison.png` | 最优与最近轨迹对比图 | Best vs Recent Trajectory Comparison | Episode/Step | 最佳策略与近期策略对照 |
 | `scan_progress.png` | 扫描进展趋势图 | Episode Scan Progress | Episode | 覆盖效率趋势 |
 | `entropy_trend.png` | 最小熵值趋势图 | Episode Min Entropy Trend | Episode | 信息不确定性消减趋势 |
-| `trajectories_xy.png` | 全局轨迹投影图（X-Y） | All Trajectories (XY) | Step | 全程轨迹模式 |
-| `trajectories_3d.png` | 全局三维轨迹图 | All Trajectories (3D) | Step | 三维飞行行为诊断 |
+| `trajectories_xy.png` | 全局轨迹投影图（X-Z 顶视） | All Trajectories (Top-Down XZ) | Step | 全程轨迹模式 |
+| `trajectories_3d.png` | 全局三维轨迹图（高度=Y） | All Trajectories (3D, Height=Y) | Step | 三维飞行行为诊断 |
 | `uncertainty_elimination_efficiency.png` | 不确定性消减效率图 | Uncertainty Elimination Efficiency | Episode | 单位步长扫描收益 |
 | `entropy_hist_snapshots.png` | 熵分布快照图 | Entropy Histogram Snapshots | Step/Time | 网格熵分布演化 |
-| `episode_trajectories/*.png` | 代表性回合轨迹图（X-Y） | Selected Episode Trajectories (XY) | Episode/Step | 典型回合个案分析 |
+| `episode_trajectories/*.png` | 代表性回合轨迹图（X-Z 顶视） | Selected Episode Trajectories (Top-Down XZ) | Episode/Step | 典型回合个案分析 |
 
 ## 5. Core Charts / 核心图表详解
 

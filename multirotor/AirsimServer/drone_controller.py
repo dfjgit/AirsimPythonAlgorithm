@@ -163,19 +163,30 @@ class DroneController:
         """????????API?"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
+            self._update_vehicle_state(vehicle_name)
             state = self._get_or_create_state(vehicle_name)
             if not state["api_enabled"]:
                 logger.error(f"???{vehicle_name}API??????????")
                 return False
 
-            if state["flying"]:
+            pos = state.get("position", (0.0, 0.0, 0.0))
+            altitude = -float(pos[2]) if pos is not None else 0.0
+            if state["flying"] and altitude > 0.8:
                 logger.warning(f"???{vehicle_name}???????")
                 return True
+            if state["flying"] and altitude <= 0.8:
+                logger.warning(
+                    f"???{vehicle_name}???? flying=True ????? alt={altitude:.2f}m, ?????????"
+                )
+                self._update_state_field(vehicle_name, "flying", False)
 
+            target_altitude_z = -1.5
             with self.api_lock:
-                self.client.takeoffAsync(vehicle_name=vehicle_name).join()
+                # 不使用 join()，避免 AirSim 在 reset 后偶发性卡死在起飞 future 上。
+                self.client.takeoffAsync(vehicle_name=vehicle_name)
 
             deadline = time.time() + max(1, timeout_sec)
+            issued_fallback_climb = False
             while time.time() < deadline:
                 self._update_vehicle_state(vehicle_name)
                 state = self._get_or_create_state(vehicle_name)
@@ -190,11 +201,40 @@ class DroneController:
                     )
                     self._update_state_field(vehicle_name, "flying", True)
                     return True
+
+                # reset 后若 takeoffAsync 没真正把机体拉离地面，则补一次非阻塞上拉。
+                if (
+                    not issued_fallback_climb
+                    and time.time() + 1.0 < deadline
+                    and float(pos[2]) > -0.3
+                ):
+                    try:
+                        with self.api_lock:
+                            self.client.moveToZAsync(
+                                target_altitude_z,
+                                1.0,
+                                vehicle_name=vehicle_name,
+                            )
+                        issued_fallback_climb = True
+                        logger.warning(
+                            f"???{vehicle_name}???????????? moveToZAsync({target_altitude_z})"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"???{vehicle_name}??????? moveToZAsync ???? {exc}"
+                        )
                 time.sleep(0.1)
 
             self._update_vehicle_state(vehicle_name)
             final_state = self._get_or_create_state(vehicle_name)
             final_pos = final_state.get("position", (0.0, 0.0, 0.0))
+            final_altitude = -float(final_pos[2]) if final_pos is not None else 0.0
+            if final_altitude > 0.8:
+                self._update_state_field(vehicle_name, "flying", True)
+                logger.warning(
+                    f"???{vehicle_name}?????? alt={final_altitude:.2f}m, ???????"
+                )
+                return True
             logger.warning(
                 f"???{vehicle_name}??????timeout={timeout_sec}s, "
                 f"flying={final_state.get('flying', False)}, pos={final_pos}"
@@ -567,6 +607,10 @@ class DroneController:
                 except Exception:
                     pass
                 self._update_vehicle_state_internal(vehicle_name)
+
+            target_z = float(position[2]) if len(position) >= 3 else -3.0
+            if target_z > -0.3:
+                self._update_state_field(vehicle_name, "flying", False)
 
             time.sleep(0.2)
             logger.info(f"无人机{vehicle_name}已重置到位置{position}")

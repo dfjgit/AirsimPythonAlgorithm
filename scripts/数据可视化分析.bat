@@ -10,7 +10,8 @@ echo   - 自动发现并分析所有训练数据
 echo   - 支持 Crazyflie 实体无人机训练日志
 echo   - 支持 DataCollector 扫描数据
 echo   - 生成完整的分析报告和图表
-echo   - 预览模式：显示图表后由用户确认是否保存
+echo   - 顶视轨迹图使用 X-Z 地面平面，Y 作为高度
+echo   - 预览模式参数保留，但当前为离线出图模式
 echo.
 echo ============================================================
 echo.
@@ -139,7 +140,7 @@ echo 分析指定文件
 echo ============================================================
 echo.
 echo 请拖拽文件到此窗口，或输入文件路径：
-echo 支持的格式: .json, .csv
+echo 支持的格式: .csv (推荐), .json(兼容旧入口)
 echo.
 set /p file_path=文件路径: 
 
@@ -205,7 +206,7 @@ echo.
 cd /d "%~dp0.."
 call myvenv\Scripts\activate.bat
 
-python multirotor\Algorithm\training_analyzer.py --dirs multirotor\DDPG_Weight\airsim_training_logs multirotor\DQN_Movement\logs\dqn_scan_data --out analysis_results\algorithm_comparison
+python multirotor\Algorithm\visualize_training_data.py --compare-algorithms --out analysis_results
 
 echo.
 echo ============================================================
