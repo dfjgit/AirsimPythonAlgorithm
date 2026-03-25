@@ -25,6 +25,17 @@ sys.path.insert(0, multirotor_dir)
 dqn_movement_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, dqn_movement_dir)
 
+# 统一 DQN 训练输出目录
+dqn_logs_root = os.path.join(dqn_movement_dir, 'logs')
+dqn_runtime_log_dir = os.path.join(dqn_logs_root, 'movement_dqn_airsim')
+dqn_scan_log_dir = os.path.join(dqn_logs_root, 'dqn_scan_data')
+dqn_model_dir = os.path.join(dqn_movement_dir, 'models')
+dqn_legacy_model_dir = os.path.join(os.path.dirname(__file__), 'models')
+os.makedirs(dqn_logs_root, exist_ok=True)
+os.makedirs(dqn_runtime_log_dir, exist_ok=True)
+os.makedirs(dqn_scan_log_dir, exist_ok=True)
+os.makedirs(dqn_model_dir, exist_ok=True)
+
 print("=" * 80)
 print("DQN训练 - 无人机移动控制 (AirSim集成)")
 print("=" * 80)
@@ -47,6 +58,11 @@ except ImportError:
 from envs.movement_env import MovementEnv, MultiDroneMovementEnv
 from AlgorithmServer import MultiDroneAlgorithmServer
 from Algorithm.drones_config import DronesConfig
+from Algorithm.experiment_stage_utils import (
+    build_stage_file_token,
+    build_stage_meta,
+    write_stage_meta_for_model,
+)
 
 # 独立进程可视化 (pygame 不与训练进程共享)
 try:
@@ -87,6 +103,42 @@ with open(dqn_config_path, 'r', encoding='utf-8') as f:
     dqn_config = json.load(f)
 print(f"  ✓ 加载 movement_dqn_config.json")
 
+
+def _env_int(name, default=None):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+pretrained_candidates = [
+    os.path.join(dqn_model_dir, 'movement_dqn_airsim_final.zip'),
+    os.path.join(dqn_model_dir, 'movement_dqn_final.zip'),
+    os.path.join(dqn_legacy_model_dir, 'movement_dqn_airsim_final.zip'),
+    os.path.join(dqn_legacy_model_dir, 'movement_dqn_final.zip'),
+]
+pretrained_model = next((path for path in pretrained_candidates if os.path.exists(path)), None)
+resume_default = bool(dqn_config.get('training', {}).get('resume_from_pretrained', False))
+resume_env = os.environ.get('USE_PRETRAINED')
+resume_requested = resume_default if resume_env is None else (resume_env == '1')
+use_pretrained = resume_requested and pretrained_model is not None
+stage_meta = build_stage_meta(
+    algorithm_tag="pure_dqn",
+    is_resume=use_pretrained,
+    source_model_path=pretrained_model if use_pretrained else None,
+    experiment_id=os.environ.get("EXPERIMENT_ID"),
+    stage_name=os.environ.get("TRAIN_STAGE_NAME"),
+    stage_index=_env_int("TRAIN_STAGE_INDEX"),
+)
+stage_file_token = build_stage_file_token(stage_meta)
+print(
+    f"  ✓ 训练阶段: experiment={stage_meta['experiment_id']}, "
+    f"stage={stage_meta['stage_name']}, resume={stage_meta['is_resume']}"
+)
+
 # apf_algorithm_config.json 路径（AlgorithmServer需要）
 config_file = os.path.join(os.path.dirname(__file__), "..", "..", "apf_algorithm_config.json")
 if not os.path.exists(config_file):
@@ -104,7 +156,12 @@ server = MultiDroneAlgorithmServer(
     drone_names=drone_names,
     use_learned_weights=False,
     control_mode='dqn',
-    enable_visualization=False
+    enable_visualization=False,
+    experiment_id=stage_meta['experiment_id'],
+    stage_name=stage_meta['stage_name'],
+    stage_index=stage_meta['stage_index'],
+    is_resume=stage_meta['is_resume'],
+    source_model=stage_meta['source_model'],
 )
 
 # 启动服务器（连接Unity和AirSim）
@@ -130,9 +187,8 @@ ipc_server = None
 vis_process = None
 vis_log_f = None
 vis_log_path = None
-# 先用临时目录存日志，避免 log_dir 尚未创建导致失败
-_tmp_vis_log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
-os.makedirs(_tmp_vis_log_dir, exist_ok=True)
+# 统一使用 DQN_Movement/logs 作为运行日志根目录
+_tmp_vis_log_dir = dqn_runtime_log_dir
 
 if HAS_EXT_VIS and os.environ.get('NO_VIS', '0') != '1':
     try:
@@ -226,17 +282,10 @@ print("\n" + "=" * 80)
 print("[步骤5] 创建或加载DQN模型")
 print("=" * 80)
 
-model_dir = os.path.join(os.path.dirname(__file__), 'models')
-os.makedirs(model_dir, exist_ok=True)
+model_dir = dqn_model_dir
 
-log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn_airsim')
+log_dir = dqn_runtime_log_dir
 os.makedirs(log_dir, exist_ok=True)
-
-pretrained_model = os.path.join(model_dir, 'movement_dqn_final.zip')
-resume_default = bool(dqn_config.get('training', {}).get('resume_from_pretrained', False))
-resume_env = os.environ.get('USE_PRETRAINED')
-resume_requested = resume_default if resume_env is None else (resume_env == '1')
-use_pretrained = resume_requested and os.path.exists(pretrained_model)
 
 def apply_resume_training_settings(model, train_cfg):
     """Apply fine-tune exploration settings when resuming from an existing model."""
@@ -268,7 +317,7 @@ if use_pretrained:
     print(f"  ✓ 预训练模型加载成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")
 else:
-    if os.path.exists(pretrained_model):
+    if pretrained_model is not None:
         resume_hint = "1" if not resume_default else "0"
         action_hint = "继续叠加训练" if not resume_default else "从头训练"
         print(f"  ! 检测到旧模型但本次未加载: {pretrained_model}")
@@ -313,9 +362,15 @@ class AirSimProgressCallback(BaseCallback):
         self.log_dir = log_dir
         if self.log_dir:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            self.csv_path = os.path.join(self.log_dir, f'dqn_training_{timestamp}.csv')
+            self.csv_path = os.path.join(
+                self.log_dir, f'dqn_training_{stage_file_token}_{timestamp}.csv'
+            )
             with open(self.csv_path, 'w', encoding='utf-8') as f:
-                f.write('episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,collision_count,out_of_range_count,scan_efficiency\n')
+                f.write(
+                    'episode,reward,length,scanned_cells,timestep,elapsed_time,timestamp,'
+                    'collision_count,out_of_range_count,scan_efficiency,'
+                    'experiment_id,stage_name,stage_index,is_resume,source_model\n'
+                )
             print(f"  ✓ CSV 日志: {self.csv_path}")
 
     def _on_step(self) -> bool:
@@ -541,6 +596,9 @@ print("=" * 80)
 final_model_path = os.path.join(model_dir, 'movement_dqn_airsim_final')
 model.save(final_model_path)
 print(f"  ✓ 模型已保存: {final_model_path}.zip")
+stage_sidecar = write_stage_meta_for_model(final_model_path, stage_meta)
+if stage_sidecar:
+    print(f"  ✓ 阶段元数据: {stage_sidecar}")
 
 print("\n" + "=" * 80)
 print("[步骤9] 清理")

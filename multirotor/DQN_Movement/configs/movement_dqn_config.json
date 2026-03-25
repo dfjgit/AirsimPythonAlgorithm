@@ -8,9 +8,9 @@
     "description": "移动参数：每步位移距离和最大步数"
   },
   "termination_config": {
-    "target_scan_ratio": 0.95,
+    "target_scan_ratio": 0.25,
     "max_collision_count": 6,
-    "max_elapsed_time_sec": 420.0,
+    "max_elapsed_time_sec": 300.0,
     "stagnation_timeout_sec": 30.0
   },
   "rewards": {
@@ -67,7 +67,7 @@
     "collision_distance": 1.45,
     "scanned_entropy": 10.0,
     "nearby_entropy_distance": 10.0,
-    "success_scan_ratio": 0.95,
+    "success_scan_ratio": 0.25,
     "stability_safe_ratio": 0.7,
     "stability_penalty_ratio": 0.8,
     "preemptive_return_ratio": 0.82,
@@ -114,7 +114,7 @@
   "training": {
     "total_timesteps": 30000,
     "resume_total_timesteps": 60000,
-    "resume_from_pretrained": true,
+    "resume_from_pretrained": false,
     "reset_num_timesteps_on_resume": false,
     "learning_rate": 0.0003,
     "buffer_size": 20000,

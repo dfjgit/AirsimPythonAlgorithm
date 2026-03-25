@@ -67,6 +67,11 @@ class MultiDroneAlgorithmServer:
         enable_data_collection_print: bool = False,
         control_mode: str = "apf",
         max_episode_seconds: int = 300,
+        experiment_id: str = "",
+        stage_name: str = "",
+        stage_index: int = 1,
+        is_resume: bool = False,
+        source_model: str = "",
     ):
         """
         初始化服务器实例
@@ -172,6 +177,7 @@ class MultiDroneAlgorithmServer:
         self._reset_runtime_fresh = False
         self._reset_grid_fresh = False
         self._reset_ack_delay = 0.5
+        self.verbose_runtime_logs = False
 
         # 数据采集系统（根据控制模式选择不同的数据目录）
         if control_mode.lower() == "dqn":
@@ -184,12 +190,31 @@ class MultiDroneAlgorithmServer:
                 collection_interval=1.0,
                 enable_debug_print=enable_data_collection_print,
                 training_prefix="dqn",
+                experiment_id=experiment_id,
+                stage_name=stage_name,
+                stage_index=stage_index,
+                is_resume=is_resume,
+                source_model=source_model,
             )
         else:
             # APF/DDPG 模式：保存到 DDPG_Weight/airsim_training_logs（默认）
             self.data_collector = DataCollector(
-                collection_interval=1.0, enable_debug_print=enable_data_collection_print
+                collection_interval=1.0,
+                enable_debug_print=enable_data_collection_print,
+                experiment_id=experiment_id,
+                stage_name=stage_name,
+                stage_index=stage_index,
+                is_resume=is_resume,
+                source_model=source_model,
             )
+
+        self.set_run_stage_meta(
+            experiment_id=experiment_id,
+            stage_name=stage_name,
+            stage_index=stage_index,
+            is_resume=is_resume,
+            source_model=source_model,
+        )
 
         # 注册Unity数据接收回调
         timeout_env = os.environ.get("UNITY_CONNECT_TIMEOUT_SEC", "").strip()
@@ -509,6 +534,34 @@ class MultiDroneAlgorithmServer:
             self.data_collector.set_external_data("control_mode", control_mode)
             logger.info(f"实验元数据已设置: {algorithm_type}/{env_type}/{control_mode}")
 
+    def set_run_stage_meta(
+        self,
+        experiment_id: str,
+        stage_name: str,
+        stage_index: int,
+        is_resume: bool = False,
+        source_model: str = "",
+    ):
+        """Set staged-training metadata so follow-up fine-tune runs can be merged in analysis."""
+        if not self.data_collector:
+            return
+        self.data_collector.set_run_stage_meta(
+            experiment_id=experiment_id,
+            stage_name=stage_name,
+            stage_index=stage_index,
+            is_resume=is_resume,
+            source_model=source_model,
+        )
+        self.data_collector.set_external_data("experiment_id", experiment_id)
+        self.data_collector.set_external_data("stage_name", stage_name)
+        self.data_collector.set_external_data("stage_index", int(stage_index or 1))
+        self.data_collector.set_external_data("is_resume", bool(is_resume))
+        self.data_collector.set_external_data("source_model", source_model or "")
+        logger.info(
+            f"训练阶段元数据已设置: experiment={experiment_id}, stage={stage_name}, "
+            f"index={int(stage_index or 1)}, resume={bool(is_resume)}"
+        )
+
     def _init_reset_trace_logger(self) -> None:
         """Create a dedicated persistent reset diagnostic log for DQN runs."""
         try:
@@ -517,7 +570,6 @@ class MultiDroneAlgorithmServer:
             log_dir = (
                 Path(__file__).resolve().parent
                 / "DQN_Movement"
-                / "scripts"
                 / "logs"
                 / "movement_dqn_airsim"
                 / "reset_diagnostics"
@@ -1924,7 +1976,7 @@ class MultiDroneAlgorithmServer:
                 current_time = _time.time()
                 last_debug_time = self._last_pos_debug_time.get(drone_name, 0)
 
-                if current_time - last_debug_time > 5.0:
+                if self.verbose_runtime_logs and current_time - last_debug_time > 5.0:
                     self._last_pos_debug_time[drone_name] = current_time
                     last_pos = self._last_positions_debug.get(drone_name)
 
@@ -2175,7 +2227,7 @@ class MultiDroneAlgorithmServer:
         current_debug_time = _time.time()
         last_debug = self._last_move_debug_time.get(drone_name, 0)
 
-        if current_debug_time - last_debug > 5.0:
+        if self.verbose_runtime_logs and current_debug_time - last_debug > 5.0:
             self._last_move_debug_time[drone_name] = current_debug_time
             logger.info(
                 f"[{drone_name}] 📤 发送移动指令:\n"

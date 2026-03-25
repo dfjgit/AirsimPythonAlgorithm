@@ -36,6 +36,9 @@ class DroneDiagnosticLogger:
         # 配置日志记录器
         self.logger = logging.getLogger("DroneDiagnostic")
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
+        self.enable_frame_status_logs = False
+        self.enable_move_command_logs = False
 
         # 文件处理器
         file_handler = logging.FileHandler(self.log_file, mode="w", encoding="utf-8")
@@ -75,6 +78,9 @@ class DroneDiagnosticLogger:
             algorithm: ScannerAlgorithm实例
             runtime_data: ScannerRuntimeData实例
         """
+        if not self.enable_frame_status_logs:
+            return
+
         self.frame_count += 1
 
         try:
@@ -217,6 +223,9 @@ class DroneDiagnosticLogger:
             horizontal_speed: 水平速度
             current_height: 当前高度
         """
+        if not self.enable_move_command_logs:
+            return
+
         try:
             self.last_move_commands[drone_name] = {
                 "vx": airsim_velocity.x if airsim_velocity else 0,

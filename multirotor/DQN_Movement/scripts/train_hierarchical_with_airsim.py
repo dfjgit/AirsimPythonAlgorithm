@@ -25,6 +25,12 @@ sys.path.insert(0, multirotor_dir)
 dqn_movement_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, dqn_movement_dir)
 
+dqn_logs_root = os.path.join(dqn_movement_dir, 'logs')
+dqn_model_dir = os.path.join(dqn_movement_dir, 'models')
+dqn_legacy_model_dir = os.path.join(os.path.dirname(__file__), 'models')
+os.makedirs(dqn_logs_root, exist_ok=True)
+os.makedirs(dqn_model_dir, exist_ok=True)
+
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
@@ -152,6 +158,7 @@ def train_hrl_with_airsim(enable_visualization=True):
             port = ipc_server.bound_port
 
             # 外部可视化日志
+            log_dir = os.path.join(dqn_logs_root, 'hrl_dqn_airsim')
             os.makedirs(log_dir, exist_ok=True)
             vis_log_path = os.path.join(log_dir, 'external_vis.log')
             vis_log_f = open(vis_log_path, 'w', encoding='utf-8')
@@ -219,8 +226,14 @@ def train_hrl_with_airsim(enable_visualization=True):
     print(f"  - HL 动作空间: {env.action_space.n}")
 
     # 4. 加载底层 (LL) 策略
-    ll_model_path = os.path.join(os.path.dirname(__file__), "models", "movement_dqn_final.zip")
-    if os.path.exists(ll_model_path):
+    ll_model_candidates = [
+        os.path.join(dqn_model_dir, "movement_dqn_airsim_final.zip"),
+        os.path.join(dqn_model_dir, "movement_dqn_final.zip"),
+        os.path.join(dqn_legacy_model_dir, "movement_dqn_airsim_final.zip"),
+        os.path.join(dqn_legacy_model_dir, "movement_dqn_final.zip"),
+    ]
+    ll_model_path = next((path for path in ll_model_candidates if os.path.exists(path)), None)
+    if ll_model_path is not None:
         print(f"✓ 加载预训练底层模型: {ll_model_path}")
         ll_policy = DQN.load(ll_model_path)
         if len(drone_names) == 1:
@@ -231,9 +244,9 @@ def train_hrl_with_airsim(enable_visualization=True):
         print("! 未发现预训练底层模型，将使用启发式逻辑作为底层控制器")
 
     # 5. 创建或加载高层 (HL) 模型
-    model_dir = os.path.join(os.path.dirname(__file__), 'models', 'hrl_planner_airsim')
+    model_dir = os.path.join(dqn_model_dir, 'hrl_planner_airsim')
     os.makedirs(model_dir, exist_ok=True)
-    log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'hrl_dqn_airsim')
+    log_dir = os.path.join(dqn_logs_root, 'hrl_dqn_airsim')
     os.makedirs(log_dir, exist_ok=True)
 
     pretrained_hl = os.path.join(model_dir, 'hrl_hl_airsim_final.zip')

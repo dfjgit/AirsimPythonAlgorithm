@@ -17,6 +17,11 @@ sys.path.insert(0, project_root)
 dqn_movement_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, dqn_movement_dir)
 
+dqn_logs_root = os.path.join(dqn_movement_dir, 'logs')
+dqn_model_dir = os.path.join(dqn_movement_dir, 'models')
+os.makedirs(dqn_logs_root, exist_ok=True)
+os.makedirs(dqn_model_dir, exist_ok=True)
+
 print("=" * 80)
 print("DQN训练 - 无人机移动控制")
 print("=" * 80)
@@ -137,9 +142,8 @@ print("[步骤5] 设置训练回调")
 print("=" * 80)
 
 # 创建模型保存目录
-model_dir = os.path.join(os.path.dirname(__file__), 'models')
-os.makedirs(model_dir, exist_ok=True)
-log_dir = os.path.join(os.path.dirname(__file__), 'logs', 'movement_dqn')
+model_dir = dqn_model_dir
+log_dir = os.path.join(dqn_logs_root, 'movement_dqn')
 os.makedirs(log_dir, exist_ok=True)
 
 # 自定义进度回调

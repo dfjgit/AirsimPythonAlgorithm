@@ -1,259 +1,815 @@
 """
-多算法训练数据统一对比分析工具 (Unified Training Analyzer)
-设计目标：基于 DataCollector 产出的标准化 CSV 数据，实现跨算法、跨场景的自动对比。
-无需为新算法编写新代码，只需在训练脚本中通过 set_experiment_meta 设置标签即可。
+Unified cross-algorithm training analyzer.
+
+This module loads historical training/scan CSV files from multiple algorithms,
+normalizes key metrics, and produces comparison plots and summary reports.
 """
 
-import os
-import pandas as pd
+from __future__ import annotations
+
+import argparse
+import logging
+import re
+from pathlib import Path
+from typing import List
+
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
-from typing import List, Dict, Optional
-import logging
+import pandas as pd
 
 try:
     import seaborn as sns
 except ImportError:
     sns = None
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TrainingAnalyzer")
 
+
 class UnifiedTrainingAnalyzer:
-    # 算法 ID 到友好名称的映射
+    """Load DDPG/DQN CSV logs and generate unified comparison outputs."""
+
     ALGO_NAME_MAP = {
-        'hrl_dqn_apf': '双层融合训练 (HRL+APF)',
-        'pure_dqn': '纯 DQN 移动控制',
-        'ddpg_apf': 'DDPG 权重自适应 (APF)',
-        'unknown': '未标记算法 (历史数据)'
+        "hrl_dqn_apf": "双层融合训练 (HRL+APF)",
+        "pure_dqn": "纯 DQN 移动控制",
+        "ddpg_apf": "DDPG 权重自适应 (APF)",
+        "unknown": "未标记算法(历史数据)",
     }
 
-    # 指标 ID 到友好名称的映射
     METRIC_NAME_MAP = {
-        'reward': '累计奖励',
-        'scan_efficiency': '扫描效率 (Cell/Step)',
-        'scan_ratio': '扫描完成度 (%)',
-        'global_avg_entropy': '全局平均熵',
-        'episode': '训练轮次 (Episode)',
-        'elapsed_time': '运行时间 (秒)'
+        "reward": "累计奖励",
+        "scan_efficiency": "扫描效率 (Cell/Step)",
+        "scan_ratio": "扫描完成度(%)",
+        "global_avg_entropy": "全局平均熵值",
+        "episode": "训练轮次 (Episode)",
+        "elapsed_time": "运行时间 (秒)",
+        "window_episode": "窗口内训练轮次",
+        "window_elapsed_time": "窗口内运行时间(秒)",
     }
 
-    def __init__(self, output_dir: str = "analysis_results"):
+    COMPARABILITY_MAP = {
+        "平均奖励": (
+            "弱可比",
+            "奖励函数、终止条件和 shaping 不同，更适合看各自训练趋势，不宜直接横向定优劣。",
+        ),
+        "最高奖励": (
+            "弱可比",
+            "极值对单次幸运回合敏感，且受奖励设计影响较大。",
+        ),
+        "训练轮次": (
+            "弱可比",
+            "不同算法的 episode 设计与平均长度不同，只能作为训练规模参考。",
+        ),
+        "总耗时(s)": (
+            "弱可比",
+            "受实现效率、控制链路与仿真节奏影响，不是纯策略质量指标。",
+        ),
+        "最终效率": (
+            "强可比",
+            "统一换算为 Cell/Step 后，可直接比较单位决策步的扫描产出。",
+        ),
+        "最终扫描率(%)": (
+            "强可比",
+            "直接描述任务覆盖率，物理语义一致。",
+        ),
+        "最低熵值": (
+            "强可比",
+            "直接反映不确定性消减程度，任务语义一致。",
+        ),
+    }
+
+    METRIC_DIMENSION_MAP = {
+        "平均奖励": ("过程对比", "用于观察训练过程中的学习趋势和稳定性。"),
+        "最高奖励": ("过程对比", "用于观察训练过程中出现过的最佳回合表现。"),
+        "训练轮次": ("过程对比", "用于描述训练规模和训练推进程度。"),
+        "总耗时(s)": ("过程对比", "用于描述训练和仿真成本。"),
+        "最终效率": ("结果对比", "用于比较最终单位决策步的扫描产出。"),
+        "最终扫描率(%)": ("结果对比", "用于比较最终任务覆盖效果。"),
+        "最低熵值": ("结果对比", "用于比较最终不确定性消减效果。"),
+    }
+
+    def __init__(self, output_dir: str = "multirotor/DQN_Movement/logs/analysis_results"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.runs = []  # 存储所有加载的实验数据
-        
-        # 统一字体配置 (解决中文显示)
+        self.runs = []
         self._setup_plotting_style()
 
-    def _setup_plotting_style(self):
+    def _setup_plotting_style(self) -> None:
         if sns is not None:
             sns.set_theme(style="whitegrid")
         else:
             plt.style.use("seaborn-v0_8-whitegrid")
-        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial']
-        plt.rcParams['axes.unicode_minus'] = False
+        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial"]
+        plt.rcParams["axes.unicode_minus"] = False
 
-    def load_data(self, log_dirs: List[str]):
-        """
-        扫描多个目录，加载所有符合格式的 CSV 文件。
-        支持 training CSV 和 scan_data CSV。
-        """
-        for d in log_dirs:
-            p = Path(d)
-            if not p.exists():
-                logger.warning(f"目录不存在: {d}")
+    def load_data(self, log_dirs: List[str]) -> None:
+        """Load all CSV files from the given directories."""
+        for directory in log_dirs:
+            path = Path(directory)
+            if not path.exists():
+                logger.warning("目录不存在: %s", directory)
                 continue
-            
-            # 查找所有 CSV
-            for csv_file in p.glob("*.csv"):
+
+            for csv_file in path.glob("*.csv"):
                 try:
                     df = pd.read_csv(csv_file)
-                    if df.empty: continue
-                    
-                    # 尝试从数据中识别算法标签
-                    algo = df['algorithm_type'].iloc[0] if 'algorithm_type' in df.columns else None
-                    
-                    # 如果数据中没有标签，尝试从路径猜测
-                    if not algo or pd.isna(algo):
-                        path_str = str(csv_file).lower()
-                        if 'hrl' in path_str or 'hierarchical' in path_str:
-                            algo = 'hrl_dqn_apf'
-                        elif 'dqn' in path_str:
-                            algo = 'pure_dqn'
-                        elif 'ddpg' in path_str:
-                            algo = 'ddpg_apf'
-                        else:
-                            algo = 'unknown'
-                    
-                    env = df['env_type'].iloc[0] if 'env_type' in df.columns else "unknown"
-                    
-                    # 记录该次运行的元数据
-                    run_info = {
-                        'file': csv_file,
-                        'name': csv_file.stem,
-                        'algorithm': algo,
-                        'env': env,
-                        'data': df,
-                        'type': 'training' if 'training' in csv_file.name else 'scan'
-                    }
-                    self.runs.append(run_info)
-                    logger.info(f"已加载: {csv_file.name} (算法: {algo}, 类型: {run_info['type']})")
-                except Exception as e:
-                    logger.error(f"加载失败 {csv_file.name}: {e}")
+                    if df.empty:
+                        continue
 
-    def plot_comparison(self, metric: str, data_type: str = 'training', x_axis: str = 'episode'):
+                    algo = df["algorithm_type"].iloc[0] if "algorithm_type" in df.columns else None
+                    if not algo or pd.isna(algo):
+                        algo = self._infer_algorithm_from_path(csv_file)
+
+                    env = df["env_type"].iloc[0] if "env_type" in df.columns else "unknown"
+                    data_type = "training" if "training" in csv_file.name else "scan"
+                    normalized = self._normalize_metrics(df, data_type)
+
+                    self.runs.append(
+                        {
+                            "file": csv_file,
+                            "name": csv_file.stem,
+                            "algorithm": algo,
+                            "env": env,
+                            "data": normalized,
+                            "type": data_type,
+                            **self._extract_stage_meta(normalized, csv_file),
+                        }
+                    )
+                    logger.info("已加载 %s (算法: %s, 类型: %s)", csv_file.name, algo, data_type)
+                except Exception as exc:
+                    logger.error("加载失败 %s: %s", csv_file.name, exc)
+
+    def _extract_stage_meta(self, df: pd.DataFrame, csv_file: Path) -> dict:
+        def _first_value(column: str, default):
+            if column not in df.columns or df.empty:
+                return default
+            value = df[column].iloc[0]
+            if pd.isna(value):
+                return default
+            return value
+
+        experiment_id = str(_first_value("experiment_id", "") or "").strip()
+        stage_name = str(_first_value("stage_name", "") or "").strip()
+        stage_index_raw = _first_value("stage_index", 1)
+        is_resume_raw = _first_value("is_resume", 0)
+        source_model = str(_first_value("source_model", "") or "").strip()
+
+        try:
+            stage_index = max(int(stage_index_raw), 1)
+        except (TypeError, ValueError):
+            stage_index = 1
+        try:
+            is_resume = bool(int(is_resume_raw))
+        except (TypeError, ValueError):
+            is_resume = bool(is_resume_raw)
+
+        if not experiment_id:
+            match = re.match(
+                r"(?:scan_data|dqn_training|ddpg_training|training_data)_(.+?)_stage(\d+)_\d{8}_\d{6}$",
+                csv_file.stem,
+            )
+            if match:
+                experiment_id = match.group(1)
+                try:
+                    stage_index = max(int(match.group(2)), 1)
+                except ValueError:
+                    stage_index = 1
+
+        if not stage_name:
+            stage_name = f"stage{stage_index:02d}"
+
+        return {
+            "experiment_id": experiment_id,
+            "stage_name": stage_name,
+            "stage_index": stage_index,
+            "is_resume": is_resume,
+            "source_model": source_model,
+        }
+
+    def _combine_stage_runs(self, runs: List[dict], data_type: str) -> dict:
+        sorted_runs = sorted(
+            runs,
+            key=lambda run: (int(run.get("stage_index", 1)), run["file"].name),
+        )
+        combined_frames = []
+        episode_offset = 0.0
+        elapsed_offset = 0.0
+        timestep_offset = 0.0
+
+        for run in sorted_runs:
+            df = run["data"].copy()
+            df["analysis_stage_index"] = int(run.get("stage_index", 1))
+            df["analysis_stage_name"] = run.get("stage_name", "")
+
+            if "episode" in df.columns:
+                episode_series = pd.to_numeric(df["episode"], errors="coerce")
+                valid_episode = episode_series.dropna()
+                if not valid_episode.empty:
+                    df["episode"] = episode_series + episode_offset
+                    episode_offset += float(valid_episode.max())
+
+            if "elapsed_time" in df.columns:
+                elapsed_series = pd.to_numeric(
+                    df["elapsed_time"].astype(str).str.replace("%", "", regex=False),
+                    errors="coerce",
+                )
+                valid_elapsed = elapsed_series.dropna()
+                if not valid_elapsed.empty:
+                    df["elapsed_time"] = elapsed_series + elapsed_offset
+                    elapsed_offset += float(valid_elapsed.max())
+
+            if data_type == "training" and "timestep" in df.columns:
+                timestep_series = pd.to_numeric(df["timestep"], errors="coerce")
+                valid_timestep = timestep_series.dropna()
+                if not valid_timestep.empty:
+                    df["timestep"] = timestep_series + timestep_offset
+                    timestep_offset += float(valid_timestep.max())
+
+            combined_frames.append(df)
+
+        combined_df = pd.concat(combined_frames, ignore_index=True, sort=False)
+        latest_run = sorted_runs[-1]
+        experiment_id = latest_run.get("experiment_id", "") or latest_run["name"]
+        return {
+            "file": latest_run["file"],
+            "name": f"{experiment_id}_combined",
+            "algorithm": latest_run["algorithm"],
+            "env": latest_run["env"],
+            "data": combined_df,
+            "type": data_type,
+            "experiment_id": latest_run.get("experiment_id", ""),
+            "stage_name": latest_run.get("stage_name", ""),
+            "stage_index": latest_run.get("stage_index", 1),
+            "is_resume": latest_run.get("is_resume", False),
+            "source_model": latest_run.get("source_model", ""),
+            "stage_count": len(sorted_runs),
+            "source_runs": sorted_runs,
+            "latest_key": latest_run["file"].name,
+        }
+
+    def _get_target_runs(self, data_type: str, latest_only: bool = False):
+        raw_runs = [run for run in self.runs if run["type"] == data_type]
+        grouped = {}
+        for run in raw_runs:
+            experiment_id = run.get("experiment_id", "") or run["name"]
+            grouped.setdefault((run["algorithm"], experiment_id), []).append(run)
+
+        runs = []
+        for grouped_runs in grouped.values():
+            if len(grouped_runs) > 1 and grouped_runs[0].get("experiment_id"):
+                runs.append(self._combine_stage_runs(grouped_runs, data_type))
+            else:
+                run = dict(grouped_runs[0])
+                run["stage_count"] = 1
+                run["source_runs"] = grouped_runs
+                run["latest_key"] = run["file"].name
+                runs.append(run)
+
+        if not latest_only:
+            return runs
+
+        latest_by_algo = {}
+        for run in runs:
+            key = run["algorithm"]
+            previous = latest_by_algo.get(key)
+            if previous is None or run["latest_key"] > previous["latest_key"]:
+                latest_by_algo[key] = run
+        return [latest_by_algo[key] for key in sorted(latest_by_algo.keys())]
+
+    def _infer_algorithm_from_path(self, csv_file: Path) -> str:
+        path_str = str(csv_file).lower()
+        if "hrl" in path_str or "hierarchical" in path_str:
+            return "hrl_dqn_apf"
+        if "dqn" in path_str:
+            return "pure_dqn"
+        if "ddpg" in path_str:
+            return "ddpg_apf"
+        return "unknown"
+
+    def _normalize_metrics(self, df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         """
-        对比不同算法在特定指标上的表现。
+        Normalize historical metrics so cross-algorithm plots use a consistent meaning.
+
+        In particular, scan_efficiency is normalized to Cell/Step.
         """
-        target_runs = [r for r in self.runs if r['type'] == data_type]
+        normalized = df.copy()
+        if data_type != "training":
+            return normalized
+
+        if "length" not in normalized.columns:
+            return normalized
+
+        lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)
+        if lengths.isna().all():
+            return normalized
+
+        efficiency_source = None
+        if "global_scanned_cells" in normalized.columns:
+            global_cells = pd.to_numeric(normalized["global_scanned_cells"], errors="coerce")
+            if not global_cells.isna().all():
+                efficiency_source = global_cells
+
+        if efficiency_source is None and "scanned_cells" in normalized.columns:
+            scanned_cells = pd.to_numeric(normalized["scanned_cells"], errors="coerce")
+            if not scanned_cells.isna().all():
+                efficiency_source = scanned_cells
+
+        if efficiency_source is not None:
+            normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
+
+        return normalized
+
+    def _find_matching_scan_run(self, training_run: dict):
+        effective_scans = self._get_target_runs("scan", latest_only=False)
+        experiment_id = training_run.get("experiment_id", "")
+        if experiment_id:
+            same_experiment = [
+                run
+                for run in effective_scans
+                if run["algorithm"] == training_run["algorithm"]
+                and run.get("experiment_id", "") == experiment_id
+            ]
+            if same_experiment:
+                return sorted(same_experiment, key=lambda run: run["latest_key"])[-1]
+
+        training_dir = training_run["file"].parent
+        training_name = training_run["file"].name
+        timestamp = training_name.split("_training_")[-1].replace(".csv", "")
+        candidate = training_dir / f"scan_data_{timestamp}.csv"
+        if candidate.exists():
+            for run in effective_scans:
+                if run["file"] == candidate:
+                    return run
+
+        same_algo_scans = sorted(
+            [run for run in effective_scans if run["algorithm"] == training_run["algorithm"]],
+            key=lambda run: run["latest_key"],
+        )
+        return same_algo_scans[-1] if same_algo_scans else None
+
+    def _get_recent_window_runs(
+        self,
+        tail_episodes: int = 50,
+        min_training_episodes: int = 20,
+    ):
+        """
+        Build a fairer "recent window" comparison set.
+
+        For each algorithm:
+        - choose the latest training run with at least min_training_episodes rows,
+          otherwise fall back to the latest run;
+        - keep only the trailing tail_episodes;
+        - pair the matching scan run and slice it to the same episode window.
+        """
+        prepared_runs = []
+        training_runs = self._get_target_runs("training", latest_only=False)
+        algorithms = sorted(set(run["algorithm"] for run in training_runs))
+
+        for algo in algorithms:
+            algo_training_runs = sorted(
+                [run for run in training_runs if run["algorithm"] == algo],
+                key=lambda run: run["file"].name,
+            )
+            if not algo_training_runs:
+                continue
+
+            selected_training = None
+            for run in reversed(algo_training_runs):
+                if len(run["data"]) >= min_training_episodes:
+                    selected_training = run
+                    break
+            if selected_training is None:
+                selected_training = algo_training_runs[-1]
+
+            training_df = selected_training["data"].copy()
+            if len(training_df) > tail_episodes:
+                training_df = training_df.tail(tail_episodes).copy()
+            training_df["window_episode"] = range(1, len(training_df) + 1)
+
+            selected_scan = self._find_matching_scan_run(selected_training)
+            if selected_scan is not None:
+                scan_df = selected_scan["data"].copy()
+                if "episode" in scan_df.columns and "episode" in training_df.columns:
+                    min_episode = pd.to_numeric(training_df["episode"], errors="coerce").min()
+                    max_episode = pd.to_numeric(training_df["episode"], errors="coerce").max()
+                    if pd.notna(min_episode) and pd.notna(max_episode):
+                        episode_series = pd.to_numeric(scan_df["episode"], errors="coerce")
+                        scan_df = scan_df[(episode_series >= min_episode) & (episode_series <= max_episode)].copy()
+                if "elapsed_time" in scan_df.columns:
+                    elapsed = pd.to_numeric(scan_df["elapsed_time"], errors="coerce")
+                    if not elapsed.isna().all():
+                        scan_df["window_elapsed_time"] = elapsed - float(elapsed.min())
+            else:
+                scan_df = None
+
+            prepared_runs.append(
+                {
+                    "algorithm": algo,
+                    "training_run": selected_training,
+                    "training_data": training_df,
+                    "scan_run": selected_scan,
+                    "scan_data": scan_df,
+                }
+            )
+
+        return prepared_runs
+
+    def _build_metric_metadata_df(self, metrics: List[str]) -> pd.DataFrame:
+        rows = []
+        for metric in metrics:
+            comparability, comparability_note = self.COMPARABILITY_MAP.get(
+                metric,
+                ("弱可比", "未显式标注的指标默认视为弱可比，请结合任务语义谨慎解读。"),
+            )
+            dimension, dimension_note = self.METRIC_DIMENSION_MAP.get(
+                metric,
+                ("未分类", "该指标尚未归入过程对比或结果对比，请结合任务背景解释。"),
+            )
+            rows.append(
+                {
+                    "指标": metric,
+                    "对比维度": dimension,
+                    "维度说明": dimension_note,
+                    "可比性": comparability,
+                    "可比性说明": comparability_note,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def plot_comparison(
+        self,
+        metric: str,
+        data_type: str = "training",
+        x_axis: str = "episode",
+        latest_only: bool = False,
+        file_prefix: str = "comparison",
+    ) -> None:
+        """Plot a comparison curve for one metric across algorithms."""
+        target_runs = self._get_target_runs(data_type, latest_only=latest_only)
         if not target_runs:
-            logger.warning(f"没有找到类型为 {data_type} 的数据")
+            logger.warning("没有找到类型为 %s 的数据", data_type)
             return
 
         plt.figure(figsize=(14, 8))
-        
-        # 获取中文友好名称
-        metric_zh = self.METRIC_NAME_MAP.get(metric, metric)
-        x_axis_zh = self.METRIC_NAME_MAP.get(x_axis, x_axis)
-        
-        # 按算法分组绘图
-        unique_algos = sorted(set(r['algorithm'] for r in target_runs))
-        
-        for algo_id in unique_algos:
-            algo_dfs = [r['data'] for r in target_runs if r['algorithm'] == algo_id]
-            
-            # 合并该算法的所有运行数据
-            all_data = pd.concat(algo_dfs)
-            
-            # 获取显示名称
-            display_name = self.ALGO_NAME_MAP.get(algo_id, algo_id)
-            
-            if x_axis in all_data.columns and metric in all_data.columns:
-                x_series = pd.to_numeric(
-                    all_data[x_axis].astype(str).str.replace("%", "", regex=False),
-                    errors="coerce",
-                )
-                y_series = pd.to_numeric(
-                    all_data[metric].astype(str).str.replace("%", "", regex=False),
-                    errors="coerce",
-                )
-                numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
-                if numeric_data.empty:
-                    continue
-                if sns is not None:
-                    sns.lineplot(
-                        data=numeric_data,
-                        x=x_axis,
-                        y=metric,
-                        label=display_name,
-                        errorbar='sd',
-                        linewidth=2.5
-                    )
-                else:
-                    grouped = (
-                        numeric_data[[x_axis, metric]]
-                        .groupby(x_axis)[metric]
-                        .agg(["mean", "std"])
-                        .reset_index()
-                    )
-                    plt.plot(grouped[x_axis], grouped["mean"], label=display_name, linewidth=2.5)
-                    std = grouped["std"].fillna(0.0)
-                    plt.fill_between(
-                        grouped[x_axis],
-                        grouped["mean"] - std,
-                        grouped["mean"] + std,
-                        alpha=0.15,
-                    )
+        metric_label = self.METRIC_NAME_MAP.get(metric, metric)
+        x_axis_label = self.METRIC_NAME_MAP.get(x_axis, x_axis)
+        unique_algos = sorted(set(run["algorithm"] for run in target_runs))
 
-        plt.title(f"多算法对比分析: {metric_zh} 随 {x_axis_zh} 变化趋势", fontsize=16, pad=20)
-        plt.xlabel(x_axis_zh, fontsize=12)
-        plt.ylabel(metric_zh, fontsize=12)
-        
-        # 优化图例：放在图外右侧，避免遮挡曲线
-        plt.legend(title="算法类型", title_fontsize='13', fontsize='11', bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
-        
-        plt.grid(True, which='both', linestyle='--', alpha=0.5)
+        for algo_id in unique_algos:
+            algo_frames = [run["data"] for run in target_runs if run["algorithm"] == algo_id]
+            all_data = pd.concat(algo_frames)
+            display_name = self.ALGO_NAME_MAP.get(algo_id, algo_id)
+
+            if x_axis not in all_data.columns or metric not in all_data.columns:
+                continue
+
+            x_series = pd.to_numeric(
+                all_data[x_axis].astype(str).str.replace("%", "", regex=False),
+                errors="coerce",
+            )
+            y_series = pd.to_numeric(
+                all_data[metric].astype(str).str.replace("%", "", regex=False),
+                errors="coerce",
+            )
+            numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
+            if numeric_data.empty:
+                continue
+
+            if sns is not None:
+                sns.lineplot(
+                    data=numeric_data,
+                    x=x_axis,
+                    y=metric,
+                    label=display_name,
+                    errorbar="sd",
+                    linewidth=2.5,
+                )
+            else:
+                grouped = numeric_data.groupby(x_axis)[metric].agg(["mean", "std"]).reset_index()
+                plt.plot(grouped[x_axis], grouped["mean"], label=display_name, linewidth=2.5)
+                plt.fill_between(
+                    grouped[x_axis],
+                    grouped["mean"] - grouped["std"].fillna(0),
+                    grouped["mean"] + grouped["std"].fillna(0),
+                    alpha=0.15,
+                )
+
+        title_prefix = "多算法最新一轮对比分析" if latest_only else "多算法对比分析"
+        plt.title(f"{title_prefix}: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
+        plt.xlabel(x_axis_label, fontsize=12)
+        plt.ylabel(metric_label, fontsize=12)
+        plt.legend(
+            title="算法类型",
+            title_fontsize=13,
+            fontsize=11,
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            borderaxespad=0,
+        )
+        plt.grid(True, which="both", linestyle="--", alpha=0.5)
         plt.tight_layout()
-        
-        filename = self.output_dir / f"comparison_{data_type}_{metric}.png"
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        logger.info(f"对比图表已保存: {filename} (标签: {unique_algos})")
+
+        filename = self.output_dir / f"{file_prefix}_{data_type}_{metric}.png"
+        plt.savefig(filename, dpi=150, bbox_inches="tight")
+        logger.info("对比图表已保存: %s (标签: %s)", filename, unique_algos)
         plt.close()
 
-    def generate_summary_report(self):
-        """
-        生成综合对比报告
-        """
-        summary_data = []
-        for r in self.runs:
-            df = r['data']
-            algo_display = self.ALGO_NAME_MAP.get(r['algorithm'], r['algorithm'])
-            
-            if r['type'] == 'training':
-                summary_data.append({
-                    '算法名称': algo_display,
-                    '运行记录': r['name'],
-                    '平均奖励': df['reward'].mean() if 'reward' in df.columns else 0,
-                    '最高奖励': df['reward'].max() if 'reward' in df.columns else 0,
-                    '训练轮次': len(df),
-                    '最终效率': df['scan_efficiency'].iloc[-1] if 'scan_efficiency' in df.columns else 0
-                })
-            elif r['type'] == 'scan':
-                summary_data.append({
-                    '算法名称': algo_display,
-                    '运行记录': r['name'],
-                    '最终扫描率(%)': df['scan_ratio'].iloc[-1] if 'scan_ratio' in df.columns else 0,
-                    '最低熵值': df['global_avg_entropy'].min() if 'global_avg_entropy' in df.columns else 0,
-                    '总耗时(s)': df['elapsed_time'].iloc[-1] if 'elapsed_time' in df.columns else 0
-                })
+    def generate_summary_report(
+        self,
+        latest_only: bool = False,
+        report_prefix: str = "algorithm_comparison",
+    ) -> None:
+        """Generate CSV and Markdown comparison reports."""
+        summary_rows = []
+        target_runs = self._get_target_runs("training", latest_only=latest_only) + self._get_target_runs(
+            "scan", latest_only=latest_only
+        )
+        for run in target_runs:
+            df = run["data"]
+            algo_display = self.ALGO_NAME_MAP.get(run["algorithm"], run["algorithm"])
 
-        summary_df = pd.DataFrame(summary_data)
-        if not summary_df.empty:
-            # 按算法聚合看均值
-            algo_comparison = summary_df.groupby('算法名称').mean(numeric_only=True)
-            logger.info("%s", "=" * 70)
-            logger.info("多算法平均性能量化对比报告 (Averaged Performance Report)")
-            logger.info("%s", "=" * 70)
-            logger.info("\n%s", algo_comparison.to_string())
-            logger.info("%s", "=" * 70)
-            
-            report_file = self.output_dir / "algorithm_comparison_report.csv"
-            # 导出带中文表头的 CSV，并使用 UTF-8 SIG 确保 Excel 打开不乱码
-            algo_comparison.to_csv(report_file, encoding='utf-8-sig')
-            logger.info(f"对比报告已导出: {report_file}")
-        else:
+            if run["type"] == "training":
+                summary_rows.append(
+                    {
+                        "算法名称": algo_display,
+                        "运行记录": run["name"],
+                        "平均奖励": df["reward"].mean() if "reward" in df.columns else 0,
+                        "最高奖励": df["reward"].max() if "reward" in df.columns else 0,
+                        "训练轮次": len(df),
+                        "最终效率": df["scan_efficiency"].iloc[-1] if "scan_efficiency" in df.columns else 0,
+                    }
+                )
+            elif run["type"] == "scan":
+                summary_rows.append(
+                    {
+                        "算法名称": algo_display,
+                        "运行记录": run["name"],
+                        "最终扫描率(%)": (
+                            pd.to_numeric(
+                                df["scan_ratio"].astype(str).str.replace("%", "", regex=False),
+                                errors="coerce",
+                            ).iloc[-1]
+                            if "scan_ratio" in df.columns
+                            else 0
+                        ),
+                        "最低熵值": (
+                            pd.to_numeric(df["global_avg_entropy"], errors="coerce").min()
+                            if "global_avg_entropy" in df.columns
+                            else 0
+                        ),
+                        "总耗时(s)": (
+                            pd.to_numeric(df["elapsed_time"], errors="coerce").iloc[-1]
+                            if "elapsed_time" in df.columns
+                            else 0
+                        ),
+                    }
+                )
+
+        summary_df = pd.DataFrame(summary_rows)
+        if summary_df.empty:
             logger.warning("没有可用于生成报告的数据")
+            return
+
+        algo_comparison = summary_df.groupby("算法名称").mean(numeric_only=True)
+        logger.info("%s", "=" * 70)
+        logger.info("多算法平均性能量化对比报告 (Averaged Performance Report)")
+        logger.info("%s", "=" * 70)
+        logger.info("\n%s", algo_comparison.to_string())
+        logger.info("%s", "=" * 70)
+
+        report_file = self.output_dir / f"{report_prefix}_report.csv"
+        algo_comparison.to_csv(report_file, encoding="utf-8-sig")
+        logger.info("对比报告已导出: %s", report_file)
+
+        comparability_df = self._build_metric_metadata_df(list(algo_comparison.columns))
+        comparability_file = self.output_dir / f"{report_prefix}_metric_comparability.csv"
+        comparability_df.to_csv(comparability_file, index=False, encoding="utf-8-sig")
+        logger.info("指标分类说明已导出: %s", comparability_file)
+
+        process_report = comparability_df[comparability_df["对比维度"] == "过程对比"][
+            ["指标", "维度说明", "可比性", "可比性说明"]
+        ]
+        outcome_report = comparability_df[comparability_df["对比维度"] == "结果对比"][
+            ["指标", "维度说明", "可比性", "可比性说明"]
+        ]
+        process_file = self.output_dir / f"{report_prefix}_process_metrics.csv"
+        outcome_file = self.output_dir / f"{report_prefix}_outcome_metrics.csv"
+        process_report.to_csv(process_file, index=False, encoding="utf-8-sig")
+        outcome_report.to_csv(outcome_file, index=False, encoding="utf-8-sig")
+        logger.info("过程对比指标说明已导出: %s", process_file)
+        logger.info("结果对比指标说明已导出: %s", outcome_file)
+
+        markdown_file = self.output_dir / f"{report_prefix}_report.md"
+        markdown_lines = [
+            "# 多算法训练对比报告" if not latest_only else "# 多算法最新一轮训练对比报告",
+            "",
+            "## 1. 汇总结果",
+            "",
+            algo_comparison.to_markdown(),
+            "",
+            "## 2. 过程对比指标",
+            "",
+            process_report.to_markdown(index=False),
+            "",
+            "## 3. 结果对比指标",
+            "",
+            outcome_report.to_markdown(index=False),
+            "",
+            "## 4. 全部指标分类",
+            "",
+            comparability_df.to_markdown(index=False),
+            "",
+            "## 5. 解读建议",
+            "",
+            "- 过程对比用于判断谁学得更快、更稳，适合看 reward、训练轮次、总耗时等训练维度指标。",
+            "- 结果对比用于判断最终模型谁更强，优先看 `最终效率`、`最终扫描率(%)`、`最低熵值`。",
+            "- 如果过程指标和结果指标出现冲突，应优先参考结果对比，再结合轨迹图、重置原因和覆盖率共同判断。",
+        ]
+        markdown_file.write_text("\n".join(markdown_lines), encoding="utf-8")
+        logger.info("Markdown 对比报告已导出: %s", markdown_file)
+
+    def generate_recent_window_report(
+        self,
+        tail_episodes: int = 50,
+        min_training_episodes: int = 20,
+        report_prefix: str = "recent_window_algorithm_comparison",
+    ) -> None:
+        """Generate report for the most recent substantial window of each algorithm."""
+        prepared_runs = self._get_recent_window_runs(
+            tail_episodes=tail_episodes,
+            min_training_episodes=min_training_episodes,
+        )
+        if not prepared_runs:
+            logger.warning("没有可用于生成最近窗口报告的数据")
+            return
+
+        summary_rows = []
+        selection_rows = []
+        for item in prepared_runs:
+            algo_name = self.ALGO_NAME_MAP.get(item["algorithm"], item["algorithm"])
+            training_df = item["training_data"]
+            scan_df = item["scan_data"]
+
+            episode_start = int(pd.to_numeric(training_df["episode"], errors="coerce").min())
+            episode_end = int(pd.to_numeric(training_df["episode"], errors="coerce").max())
+            selection_rows.append(
+                {
+                    "算法名称": algo_name,
+                    "训练文件": item["training_run"]["file"].name,
+                    "扫描文件": item["scan_run"]["file"].name if item["scan_run"] else "",
+                    "窗口回合范围": f"{episode_start}-{episode_end}",
+                    "窗口回合数": len(training_df),
+                }
+            )
+
+            row = {
+                "算法名称": algo_name,
+                "平均奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").mean(),
+                "最高奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").max(),
+                "训练轮次": len(training_df),
+                "最终效率": pd.to_numeric(training_df.get("scan_efficiency"), errors="coerce").iloc[-1],
+            }
+            if scan_df is not None and not scan_df.empty:
+                row["最终扫描率(%)"] = pd.to_numeric(
+                    scan_df["scan_ratio"].astype(str).str.replace("%", "", regex=False),
+                    errors="coerce",
+                ).iloc[-1]
+                row["最低熵值"] = pd.to_numeric(scan_df["global_avg_entropy"], errors="coerce").min()
+                elapsed = pd.to_numeric(scan_df["window_elapsed_time"], errors="coerce")
+                row["总耗时(s)"] = float(elapsed.iloc[-1]) if not elapsed.empty else 0.0
+            summary_rows.append(row)
+
+        summary_df = pd.DataFrame(summary_rows).set_index("算法名称")
+        report_file = self.output_dir / f"{report_prefix}_report.csv"
+        summary_df.to_csv(report_file, encoding="utf-8-sig")
+        logger.info("最近窗口对比报告已导出: %s", report_file)
+
+        selection_df = pd.DataFrame(selection_rows)
+        selection_file = self.output_dir / f"{report_prefix}_selection.csv"
+        selection_df.to_csv(selection_file, index=False, encoding="utf-8-sig")
+        logger.info("最近窗口样本选择说明已导出: %s", selection_file)
+
+        comparability_df = self._build_metric_metadata_df(list(summary_df.columns))
+        comparability_file = self.output_dir / f"{report_prefix}_metric_comparability.csv"
+        comparability_df.to_csv(comparability_file, index=False, encoding="utf-8-sig")
+
+        process_report = comparability_df[comparability_df["对比维度"] == "过程对比"][
+            ["指标", "维度说明", "可比性", "可比性说明"]
+        ]
+        outcome_report = comparability_df[comparability_df["对比维度"] == "结果对比"][
+            ["指标", "维度说明", "可比性", "可比性说明"]
+        ]
+        process_file = self.output_dir / f"{report_prefix}_process_metrics.csv"
+        outcome_file = self.output_dir / f"{report_prefix}_outcome_metrics.csv"
+        process_report.to_csv(process_file, index=False, encoding="utf-8-sig")
+        outcome_report.to_csv(outcome_file, index=False, encoding="utf-8-sig")
+
+        markdown_file = self.output_dir / f"{report_prefix}_report.md"
+        markdown_lines = [
+            "# 多算法最近窗口对比报告",
+            "",
+            "## 1. 样本选择",
+            "",
+            selection_df.to_markdown(index=False),
+            "",
+            "## 2. 汇总结果",
+            "",
+            summary_df.to_markdown(),
+            "",
+            "## 3. 过程对比指标",
+            "",
+            process_report.to_markdown(index=False),
+            "",
+            "## 4. 结果对比指标",
+            "",
+            outcome_report.to_markdown(index=False),
+            "",
+            "## 5. 全部指标分类",
+            "",
+            comparability_df.to_markdown(index=False),
+        ]
+        markdown_file.write_text("\n".join(markdown_lines), encoding="utf-8")
+        logger.info("最近窗口 Markdown 报告已导出: %s", markdown_file)
+
+    def plot_recent_window_comparison(
+        self,
+        metric: str,
+        data_type: str = "training",
+        tail_episodes: int = 50,
+        min_training_episodes: int = 20,
+        file_prefix: str = "recent_window_comparison",
+    ) -> None:
+        """Plot the same core comparisons over the most recent substantial window."""
+        prepared_runs = self._get_recent_window_runs(
+            tail_episodes=tail_episodes,
+            min_training_episodes=min_training_episodes,
+        )
+        if not prepared_runs:
+            logger.warning("没有可用于最近窗口对比的数据")
+            return
+
+        plt.figure(figsize=(14, 8))
+        x_axis = "window_episode" if data_type == "training" else "window_elapsed_time"
+        metric_label = self.METRIC_NAME_MAP.get(metric, metric)
+        x_axis_label = self.METRIC_NAME_MAP.get(x_axis, x_axis)
+
+        labels = []
+        for item in prepared_runs:
+            df = item["training_data"] if data_type == "training" else item["scan_data"]
+            if df is None or df.empty or x_axis not in df.columns or metric not in df.columns:
+                continue
+
+            display_name = self.ALGO_NAME_MAP.get(item["algorithm"], item["algorithm"])
+            labels.append(display_name)
+            x_series = pd.to_numeric(df[x_axis], errors="coerce")
+            y_series = pd.to_numeric(df[metric].astype(str).str.replace("%", "", regex=False), errors="coerce")
+            numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
+            if numeric_data.empty:
+                continue
+            plt.plot(numeric_data[x_axis], numeric_data[metric], label=display_name, linewidth=2.5)
+
+        plt.title(f"多算法最近窗口对比: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
+        plt.xlabel(x_axis_label, fontsize=12)
+        plt.ylabel(metric_label, fontsize=12)
+        plt.legend(
+            title="算法类型",
+            title_fontsize=13,
+            fontsize=11,
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            borderaxespad=0,
+        )
+        plt.grid(True, which="both", linestyle="--", alpha=0.5)
+        plt.tight_layout()
+
+        filename = self.output_dir / f"{file_prefix}_{data_type}_{metric}.png"
+        plt.savefig(filename, dpi=150, bbox_inches="tight")
+        logger.info("最近窗口对比图表已保存: %s (标签: %s)", filename, labels)
+        plt.close()
+
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser(description="多算法对比分析工具")
-    parser.add_argument("--dirs", nargs='+', help="数据目录列表", default=[
-        "multirotor/DDPG_Weight/airsim_training_logs",
-        "multirotor/DQN_Movement/logs/dqn_scan_data"
-    ])
-    parser.add_argument("--out", default="multirotor/Algorithm/analysis_results", help="结果保存目录")
+    parser.add_argument(
+        "--dirs",
+        nargs="+",
+        help="数据目录列表",
+        default=[
+            "multirotor/DDPG_Weight/airsim_training_logs",
+            "multirotor/DQN_Movement/logs/dqn_scan_data",
+        ],
+    )
+    parser.add_argument("--out", default="multirotor/DQN_Movement/logs/analysis_results", help="结果保存目录")
     args = parser.parse_args()
 
     analyzer = UnifiedTrainingAnalyzer(output_dir=args.out)
     analyzer.load_data(args.dirs)
-    
-    # 绘制关键指标对比
-    # 1. 训练奖励对比 (DQN vs DDPG vs HRL)
-    analyzer.plot_comparison(metric='reward', data_type='training', x_axis='episode')
-    
-    # 2. 扫描效率对比
-    analyzer.plot_comparison(metric='scan_efficiency', data_type='training', x_axis='episode')
-    
-    # 3. 实时扫描比例对比 (随时间变化)
-    analyzer.plot_comparison(metric='scan_ratio', data_type='scan', x_axis='elapsed_time')
-    
-    # 4. 熵下降速度对比
-    analyzer.plot_comparison(metric='global_avg_entropy', data_type='scan', x_axis='elapsed_time')
-    
-    # 生成报告
+    analyzer.plot_comparison(metric="reward", data_type="training", x_axis="episode")
+    analyzer.plot_comparison(metric="scan_efficiency", data_type="training", x_axis="episode")
+    analyzer.plot_comparison(metric="scan_ratio", data_type="scan", x_axis="elapsed_time")
+    analyzer.plot_comparison(metric="global_avg_entropy", data_type="scan", x_axis="elapsed_time")
     analyzer.generate_summary_report()

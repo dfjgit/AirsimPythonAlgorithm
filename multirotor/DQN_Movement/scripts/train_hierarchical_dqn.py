@@ -16,6 +16,12 @@ sys.path.insert(0, project_root)
 dqn_movement_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, dqn_movement_dir)
 
+dqn_logs_root = os.path.join(dqn_movement_dir, 'logs')
+dqn_model_dir = os.path.join(dqn_movement_dir, 'models')
+dqn_legacy_model_dir = os.path.join(os.path.dirname(__file__), 'models')
+os.makedirs(dqn_logs_root, exist_ok=True)
+os.makedirs(dqn_model_dir, exist_ok=True)
+
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
@@ -115,8 +121,14 @@ def train_hrl(enable_visualization=True):
     
     # 3. 加载底层 (LL) 策略 (可选)
     # 如果已有训练好的移动 DQN，可以在这里加载
-    ll_model_path = os.path.join(os.path.dirname(__file__), "models", "movement_dqn_final.zip")
-    if os.path.exists(ll_model_path):
+    ll_model_candidates = [
+        os.path.join(dqn_model_dir, "movement_dqn_airsim_final.zip"),
+        os.path.join(dqn_model_dir, "movement_dqn_final.zip"),
+        os.path.join(dqn_legacy_model_dir, "movement_dqn_airsim_final.zip"),
+        os.path.join(dqn_legacy_model_dir, "movement_dqn_final.zip"),
+    ]
+    ll_model_path = next((path for path in ll_model_candidates if os.path.exists(path)), None)
+    if ll_model_path is not None:
         print(f"✓ 发现预训练底层模型: {ll_model_path}")
         env.unwrapped.ll_policy = DQN.load(ll_model_path)
     else:
@@ -138,11 +150,11 @@ def train_hrl(enable_visualization=True):
         exploration_final_eps=config['training']['exploration_final_eps'],
         policy_kwargs=dict(net_arch=config['model']['net_arch']),
         verbose=1,
-        tensorboard_log=os.path.join(os.path.dirname(__file__), "logs", "hrl_tensorboard")
+        tensorboard_log=os.path.join(dqn_logs_root, "hrl_tensorboard")
     )
     
     # 模型保存目录
-    model_dir = os.path.join(os.path.dirname(__file__), 'models', 'hrl_planner')
+    model_dir = os.path.join(dqn_model_dir, 'hrl_planner')
     os.makedirs(model_dir, exist_ok=True)
     
     # 5. 初始化可视化（如果启用）

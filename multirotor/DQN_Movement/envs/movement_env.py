@@ -94,6 +94,7 @@ class MovementEnv(gym.Env):
         self._apply_unified_config()
         
         print(f"[OK] 移动DQN环境已加载配置并应用统一环境规则")
+        self.verbose_step_logs = False
         
         # 动作空间: 6个离散动作
         # 0: 向上, 1: 向下, 2: 向左, 3: 向右, 4: 向前, 5: 向后
@@ -129,6 +130,10 @@ class MovementEnv(gym.Env):
             4: np.array([self.action_step, 0, 0]),      # 前 (X+)
             5: np.array([-self.action_step, 0, 0])      # 后 (X-)
         }
+
+    def _step_log(self, message: str) -> None:
+        if self.verbose_step_logs:
+            print(message)
         
         # 状态记录
         self.prev_scanned_cells = 0
@@ -174,7 +179,7 @@ class MovementEnv(gym.Env):
         if not unified_env_cfg:
             # 使用默认终止配置
             self.term_cfg = self.config.get('termination_config', {
-                "target_scan_ratio": 0.95,
+                "target_scan_ratio": 0.25,
                 "max_collision_count": 15,
                 "max_elapsed_time_sec": 300.0,
                 "stagnation_timeout_sec": 30.0
@@ -249,7 +254,7 @@ class MovementEnv(gym.Env):
                 "collision_distance": 2.0,
                 "scanned_entropy": 30.0,
                 "nearby_entropy_distance": 10.0,
-                "success_scan_ratio": 0.95,
+                "success_scan_ratio": 0.25,
                 "high_entropy_threshold": 40.0,
                 "min_scan_height": 2.0,
                 "max_scan_height": 15.0,
@@ -321,12 +326,12 @@ class MovementEnv(gym.Env):
             action = action.item()
         action = int(action)
         
-        print(f"[DQN环境] step({action}) 被调用")
+        self._step_log(f"[DQN环境] step({action}) 被调用")
         
         # 记录当前位置
-        print(f"[DQN环境] 获取当前状态...")
+        self._step_log(f"[DQN环境] 获取当前状态...")
         current_state = self._get_state()
-        print(f"[DQN环境] 当前状态获取完成")
+        self._step_log(f"[DQN环境] 当前状态获取完成")
         
         displacement = self.action_map[action]
         reward = 0.0
@@ -335,28 +340,28 @@ class MovementEnv(gym.Env):
 
         for repeat_idx in range(self.action_repeat):
             if self.server:
-                print(f"[DQN环境] 发送移动指令[{repeat_idx + 1}/{self.action_repeat}]: {displacement}")
+                self._step_log(f"[DQN环境] 发送移动指令[{repeat_idx + 1}/{self.action_repeat}]: {displacement}")
                 self._apply_movement(displacement)
-                print(f"[DQN环境] 移动指令已发送")
+                self._step_log(f"[DQN环境] 移动指令已发送")
                 time.sleep(self.step_duration)
-                print(f"[DQN环境] 物理步长等待完成 ({self.step_duration}s)")
+                self._step_log(f"[DQN环境] 物理步长等待完成 ({self.step_duration}s)")
 
-            print(f"[DQN环境] 获取新状态...")
+            self._step_log(f"[DQN环境] 获取新状态...")
             next_state = self._get_state()
-            print(f"[DQN环境] 新状态获取完成")
+            self._step_log(f"[DQN环境] 新状态获取完成")
 
-            print(f"[DQN环境] 计算奖励...")
+            self._step_log(f"[DQN环境] 计算奖励...")
             sub_reward = self._calculate_reward(action, current_state, next_state)
             reward += sub_reward
             self.episode_reward += sub_reward
-            print(f"[DQN环境] 子步奖励计算完成: {sub_reward:.2f}")
+            self._step_log(f"[DQN环境] 子步奖励计算完成: {sub_reward:.2f}")
 
             self.step_count += 1
             current_state = next_state
             if terminated:
                 break
 
-        print(f"[DQN环境] 奖励计算完成: {reward:.2f}")
+        self._step_log(f"[DQN环境] 奖励计算完成: {reward:.2f}")
 
         truncated = False  # 不使用截断
         
@@ -371,7 +376,7 @@ class MovementEnv(gym.Env):
             'oob_diag': self.last_oob_diag  # 包含越界时的决策诊断
         }
         
-        if self.step_count % 10 == 0:
+        if self.verbose_step_logs and self.step_count % 10 == 0:
             print(f"[DQN环境] 步骤 {self.step_count}, 奖励: {reward:.2f}, episode总奖励: {self.episode_reward:.2f}")
         
         return next_state, reward, terminated, truncated, info
@@ -790,7 +795,7 @@ class MovementEnv(gym.Env):
                         if battery_info:
                             current_voltage = float(getattr(battery_info, "voltage", 4.2))
                             battery_status = getattr(battery_info, "status", None)
-                            if current_voltage <= 3.0 + 1e-6 or battery_status == BatteryStatus.EMPTY:
+                            if current_voltage <= 3.2 + 1e-6 or battery_status == BatteryStatus.EMPTY:
                                 self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
                                 print(f"[??] {self.last_done_reason}")
                                 return True
@@ -959,6 +964,7 @@ class MultiDroneMovementEnv(gym.Env):
         print(f"[OK] 多无人机 DQN 环境已加载配置并应用统一环境规则")
         print(f"  无人机数量: {self.num_drones}")
         print(f"  无人机列表: {self.drone_names}")
+        self.verbose_step_logs = False
         
         # 动作空间: 6个离散动作（所有无人机共享）
         self.action_space = spaces.Discrete(6)
@@ -983,6 +989,10 @@ class MultiDroneMovementEnv(gym.Env):
             4: np.array([self.action_step, 0, 0]),      # 前 (X+)
             5: np.array([-self.action_step, 0, 0])      # 后 (X-)
         }
+
+    def _step_log(self, message: str) -> None:
+        if self.verbose_step_logs:
+            print(message)
         
         # 为每个无人机维护独立的状态记录
         self.drone_states = {}
@@ -1183,16 +1193,16 @@ class MultiDroneMovementEnv(gym.Env):
             action = action.item()
         action = int(action)
 
-        print(f"[DQN Multi] step({action}) called")
+        self._step_log(f"[DQN Multi] step({action}) called")
 
         current_drone = self.drone_names[self.current_drone_idx]
-        print(f"[DQN Multi] Current controlled drone: {current_drone}")
+        self._step_log(f"[DQN Multi] Current controlled drone: {current_drone}")
 
-        print("[DQN Multi] Fetching current state...")
+        self._step_log("[DQN Multi] Fetching current state...")
         current_state = self._get_state(current_drone)
-        print("[DQN Multi] Current state fetched")
+        self._step_log("[DQN Multi] Current state fetched")
 
-        print(f"[DQN Multi] Executing action {action}...")
+        self._step_log(f"[DQN Multi] Executing action {action}...")
         displacement = self.action_map[action]
         reward = 0.0
         next_state = current_state
@@ -1207,23 +1217,23 @@ class MultiDroneMovementEnv(gym.Env):
             if self.server:
                 self._apply_movement(current_drone, displacement)
                 time.sleep(self.step_duration)
-                print(
+                self._step_log(
                     f"[DQN Multi] Physics step wait complete "
                     f"({self.step_duration}s, repeat {repeat_idx + 1}/{self.action_repeat})"
                 )
-            print("[DQN Multi] Action execution complete")
+            self._step_log("[DQN Multi] Action execution complete")
 
-            print("[DQN Multi] Fetching next state...")
+            self._step_log("[DQN Multi] Fetching next state...")
             next_state = self._get_state(current_drone)
-            print("[DQN Multi] Next state fetched")
+            self._step_log("[DQN Multi] Next state fetched")
 
-            print("[DQN Multi] Calculating reward...")
+            self._step_log("[DQN Multi] Calculating reward...")
             sub_reward = self._calculate_reward(current_drone, action, current_state, next_state)
             reward += sub_reward
             self.drone_states[current_drone]['episode_reward'] += sub_reward
             self.total_episode_reward += sub_reward
             step_out_of_range = step_out_of_range or bool(next_state[16] > 0.5)
-            print(f"[DQN Multi] Reward calculation complete: {sub_reward:.2f}")
+            self._step_log(f"[DQN Multi] Reward calculation complete: {sub_reward:.2f}")
 
             current_state = next_state
             if terminated:
@@ -1272,14 +1282,14 @@ class MultiDroneMovementEnv(gym.Env):
 
         self.current_drone_idx = (self.current_drone_idx + 1) % self.num_drones
 
-        print("[DQN Multi] Checking termination conditions...")
+        self._step_log("[DQN Multi] Checking termination conditions...")
         if terminated and self.last_done_reason and 'Out of Range' in self.last_done_reason:
             terminal_penalty = float(self.config.get('rewards', {}).get('terminal_out_of_range_penalty', -120.0))
             reward += terminal_penalty
             self.drone_states[current_drone]['episode_reward'] += terminal_penalty
             self.total_episode_reward += terminal_penalty
-            print(f"[DQN Multi] Applied terminal out-of-range penalty: {terminal_penalty:.2f}")
-        print(f"[DQN Multi] Termination check result: {terminated}")
+            self._step_log(f"[DQN Multi] Applied terminal out-of-range penalty: {terminal_penalty:.2f}")
+        self._step_log(f"[DQN Multi] Termination check result: {terminated}")
         truncated = False
 
         leader_distance = None
@@ -1317,9 +1327,9 @@ class MultiDroneMovementEnv(gym.Env):
         }
 
         next_drone = self.drone_names[self.current_drone_idx]
-        print(f"[DQN Multi] Fetching next drone state: {next_drone}")
+        self._step_log(f"[DQN Multi] Fetching next drone state: {next_drone}")
         next_observation = self._get_state(next_drone)
-        print("[DQN Multi] step() complete")
+        self._step_log("[DQN Multi] step() complete")
 
         return next_observation, reward, terminated, truncated, info
 
@@ -1987,7 +1997,7 @@ class MultiDroneMovementEnv(gym.Env):
                         if battery_info:
                             current_voltage = float(getattr(battery_info, "voltage", 4.2))
                             battery_status = getattr(battery_info, "status", None)
-                            if current_voltage <= 3.0 + 1e-6 or battery_status == BatteryStatus.EMPTY:
+                            if current_voltage <= 3.2 + 1e-6 or battery_status == BatteryStatus.EMPTY:
                                 self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
                                 print(f"[Done] {self.last_done_reason}")
                                 return True

@@ -132,6 +132,46 @@ Therefore:
 - `best_vs_recent_trajectory_comparison.png` is a top-down trajectory comparison (`X-Z`),
 - and `episode_trajectories/*.png` are selected episode top-down trajectories (`X-Z`).
 
+### 3.4 Metric Comparability / 指标可比性
+
+**中文**
+
+跨算法对比时，不是所有指标都具有同样强的解释力。当前项目建议分成两类：
+
+- 强可比指标
+  - `scan_efficiency`（已统一为 Cell/Step）
+  - `scan_ratio`
+  - `global_avg_entropy`
+- 弱可比指标
+  - `reward`
+  - `max reward`
+  - `episode count`
+  - `elapsed_time`
+
+原因是：
+
+- 强可比指标直接对应任务结果或统一后的物理量，适合做 DDPG 与 DQN 的横向判断。
+- 弱可比指标容易受到奖励函数、终止条件、动作空间、控制链路等差异影响，更适合看各自训练趋势，而不是直接比较绝对高低。
+
+**English**
+
+Not every metric carries the same cross-algorithm meaning. In this project, metrics should be interpreted in two groups:
+
+- Strongly comparable metrics
+  - `scan_efficiency` (normalized to Cell/Step)
+  - `scan_ratio`
+  - `global_avg_entropy`
+- Weakly comparable metrics
+  - `reward`
+  - `max reward`
+  - `episode count`
+  - `elapsed_time`
+
+Why:
+
+- Strongly comparable metrics directly reflect unified task outcomes or normalized physical quantities.
+- Weakly comparable metrics are influenced by reward shaping, termination design, action space, and controller implementation, so they are better for within-algorithm trend reading than direct algorithm ranking.
+
 ## 4. Chart Index / 图表总览
 
 | File | 中文图名 | English Title | Level | Primary Use |

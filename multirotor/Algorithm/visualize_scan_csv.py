@@ -601,7 +601,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Offline scan/training CSV visualizer")
     parser.add_argument("--csv", help="Path to one scan_data CSV file")
     parser.add_argument("--csv-dir", help="Directory containing scan_data_*.csv files")
-    parser.add_argument("--out", default="analysis_results", help="Output directory")
+    parser.add_argument(
+        "--out",
+        default="multirotor/DQN_Movement/logs/analysis_results",
+        help="Output directory",
+    )
     parser.add_argument("--snapshots", type=int, default=4, help="Number of entropy snapshots")
     args = parser.parse_args()
 

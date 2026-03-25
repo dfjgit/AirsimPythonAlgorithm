@@ -94,6 +94,7 @@ except ImportError as e:
 # ==================== 导入项目模块 ====================
 # 导入训练环境：用于AirSim仿真的权重训练环境
 from envs.simple_weight_env import SimpleWeightEnv
+from Algorithm.experiment_stage_utils import build_stage_meta, write_stage_meta_for_model
 
 # 独立进程可视化 (pygame 不与训练进程共享)
 try:
@@ -329,6 +330,16 @@ def _weights_to_action(weights: dict) -> np.ndarray:
         ],
         dtype=np.float32,
     )
+
+
+def _get_env_stage_index(default=None):
+    value = os.environ.get("TRAIN_STAGE_INDEX", "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 class ImprovedTrainingCallback(BaseCallback):
@@ -680,6 +691,12 @@ def main():
         default=None,
         help="指定模型名称（不含.zip），配合--overwrite-model使用。默认为weight_predictor_airsim",
     )
+    parser.add_argument(
+        "--continue-model",
+        type=str,
+        default=None,
+        help="继续训练模型路径（不含.zip）；未指定时默认从头创建新模型",
+    )
     args = parser.parse_args()
 
     # ========== 加载配置并解析参数 ==========
@@ -746,6 +763,20 @@ def main():
         "model_name",
         "weight_predictor_airsim",  # 默认模型名
     )
+    continue_model = _get_config_value(
+        args.continue_model,
+        config,
+        "continue_model",
+        None,
+    )
+    stage_meta = build_stage_meta(
+        algorithm_tag="ddpg_apf",
+        is_resume=bool(continue_model),
+        source_model_path=continue_model,
+        experiment_id=os.environ.get("EXPERIMENT_ID"),
+        stage_name=os.environ.get("TRAIN_STAGE_NAME"),
+        stage_index=_get_env_stage_index(),
+    )
 
     # 初始权重使用逻辑：命令行优先
     if args.use_initial_weights is None and args.no_initial_weights is None:
@@ -784,6 +815,10 @@ def main():
     print(
         f"[S] 模型策略: {'覆盖模式 (' + model_name + ')' if overwrite_model else '生成新模型（带时间戳）'}"
     )
+    print(
+        f"[Stage] 训练阶段: experiment={stage_meta['experiment_id']}, "
+        f"stage={stage_meta['stage_name']}, resume={stage_meta['is_resume']}"
+    )
     print(f"[^] 预计episode数: ~{total_timesteps // 50}")
     print("=" * 60)
     print(f"\n[Light] 说明: 使用{len(drone_names)}台无人机协同训练")
@@ -815,6 +850,11 @@ def main():
             model_path=None,  # 训练模式：不加载模型
             enable_visualization=False,  # 使用训练专用可视化，禁用服务器自带可视化
             enable_data_collection_print=True,  # 训练模式：启用数据采集DEBUG打印
+            experiment_id=stage_meta["experiment_id"],
+            stage_name=stage_meta["stage_name"],
+            stage_index=stage_meta["stage_index"],
+            is_resume=stage_meta["is_resume"],
+            source_model=stage_meta["source_model"],
         )
 
         print(f"[OK] 服务器创建成功")
@@ -1025,14 +1065,14 @@ def main():
         os.makedirs(model_dir, exist_ok=True)
         fixed_model_path = os.path.join(model_dir, f"{model_name}.zip")
 
-        # 检查是否存在旧模型
+        # 仅在显式指定 continue_model 时才继续训练
         reset_num_timesteps = True
-        if os.path.exists(fixed_model_path):
-            print(f"[R] 发现现有模型: {fixed_model_path}")
-            print(f"   正在从旧模型加载神经网络参数进行增量训练...")
+        if continue_model:
+            continue_model_path = continue_model[:-4] if continue_model.endswith(".zip") else continue_model
+            zip_path = continue_model_path + ".zip"
+            print(f"[R] 显式指定继续训练模型: {zip_path}")
             try:
-                # 加载旧模型，去掉 .zip 后缀
-                model = DDPG.load(fixed_model_path[:-4], env=env)
+                model = DDPG.load(continue_model_path, env=env)
                 reset_num_timesteps = False
                 print("[OK] 旧模型加载成功，将继续训练")
             except Exception as e:
@@ -1040,7 +1080,9 @@ def main():
                 print("🆕 将创建新的随机初始化模型")
                 model = None
         else:
-            print(f"🆕 未发现现有模型 ({model_name}.zip)，将创建新模型")
+            if os.path.exists(fixed_model_path):
+                print(f"[i] 发现现有模型，但当前未启用续训: {fixed_model_path}")
+            print(f"🆕 当前将从头创建新模型 ({model_name})")
             model = None
 
         if model is None:
@@ -1120,6 +1162,9 @@ def main():
 
         model.save(final_model_path)
         print(f"[OK] 模型已保存: {final_model_path}.zip")
+        stage_sidecar = write_stage_meta_for_model(final_model_path, stage_meta)
+        if stage_sidecar:
+            print(f"[OK] 阶段元数据已保存: {stage_sidecar}")
 
         # 保存最后权重系数（与模型同名）
         weights_path = _derive_weights_path(final_model_path)
@@ -1219,4 +1264,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

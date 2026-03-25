@@ -19,7 +19,18 @@ logger = logging.getLogger("DataCollector")
 class DataCollector:
     """数据采集器类，负责采集和记录扫描数据"""
     
-    def __init__(self, data_dir: Optional[str] = None, collection_interval: float = 1.0, enable_debug_print: bool = False, training_prefix: str = "ddpg"):
+    def __init__(
+        self,
+        data_dir: Optional[str] = None,
+        collection_interval: float = 1.0,
+        enable_debug_print: bool = False,
+        training_prefix: str = "ddpg",
+        experiment_id: str = "",
+        stage_name: str = "",
+        stage_index: int = 1,
+        is_resume: bool = False,
+        source_model: str = "",
+    ):
         """
         初始化数据采集器
         :param data_dir: 数据保存目录（默认使用 DDPG_Weight/airsim_training_logs）
@@ -42,6 +53,11 @@ class DataCollector:
         self.training_header_written = False  # 新增：训练数据表头是否已写入
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
         self.enable_debug_print = enable_debug_print  # 控制DEBUG打印开关
+        self.experiment_id = str(experiment_id or "").strip()
+        self.stage_name = str(stage_name or "").strip()
+        self.stage_index = max(int(stage_index or 1), 1)
+        self.is_resume = bool(is_resume)
+        self.source_model = str(source_model or "").strip()
         
         # 外部数据记录
         self.external_data = {}
@@ -62,6 +78,7 @@ class DataCollector:
         self.terminal_scan_step = None  # 记录 terminal 帧对应 step
         self.last_written_scan_episode = None  # 记录最近一次已写入的 episode
         self.last_written_scan_step = None  # 记录最近一次已写入的 step
+        self.terminal_episode_meta = {}  # 按 episode 锁存终止元数据，避免 episode 切换时写串
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -70,6 +87,41 @@ class DataCollector:
         """设置外部数据（如训练奖励、步数等），将在下一次采集时记录"""
         with self.external_data_lock:
             self.external_data[key] = value
+
+    def set_run_stage_meta(
+        self,
+        experiment_id: str,
+        stage_name: str,
+        stage_index: int,
+        is_resume: bool = False,
+        source_model: str = "",
+    ):
+        """Update stage metadata for rows written after initialization."""
+        self.experiment_id = str(experiment_id or "").strip()
+        self.stage_name = str(stage_name or "").strip()
+        self.stage_index = max(int(stage_index or 1), 1)
+        self.is_resume = bool(is_resume)
+        self.source_model = str(source_model or "").strip()
+
+    def _get_run_stage_meta(self):
+        """Return current run-stage metadata with external overrides when present."""
+        with self.external_data_lock:
+            experiment_id = str(
+                self.external_data.get("experiment_id", self.experiment_id)
+            ).strip()
+            stage_name = str(
+                self.external_data.get("stage_name", self.stage_name)
+            ).strip()
+            stage_index = int(
+                self.external_data.get("stage_index", self.stage_index) or self.stage_index
+            )
+            is_resume = bool(
+                self.external_data.get("is_resume", self.is_resume)
+            )
+            source_model = str(
+                self.external_data.get("source_model", self.source_model)
+            ).strip()
+        return experiment_id, stage_name, stage_index, is_resume, source_model
     
     def _init_csv_file(self, data_dir: Optional[str] = None):
         """初始化CSV文件并写入表头"""
@@ -85,8 +137,15 @@ class DataCollector:
             
             # 生成CSV文件名（带时间戳）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = data_path / f"scan_data_{timestamp}.csv"
-            training_csv_filename = data_path / f"{self.training_prefix}_training_{timestamp}.csv"
+            if self.experiment_id:
+                file_token = f"{self.experiment_id}_stage{self.stage_index:02d}"
+                csv_filename = data_path / f"scan_data_{file_token}_{timestamp}.csv"
+                training_csv_filename = (
+                    data_path / f"{self.training_prefix}_training_{file_token}_{timestamp}.csv"
+                )
+            else:
+                csv_filename = data_path / f"scan_data_{timestamp}.csv"
+                training_csv_filename = data_path / f"{self.training_prefix}_training_{timestamp}.csv"
             
             # 打开 scan_data CSV 文件（表头将在第一次采集数据时写入）
             self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
@@ -103,7 +162,8 @@ class DataCollector:
                       'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
                       'reset_reason', 'collision_count', 'out_of_range_count', 'max_global_scan_ratio', 'min_global_avg_entropy',
                       'collision_object_name', 'collision_penetration_depth', 'collision_position', 'recent_trajectory',
-                      'algorithm_type', 'env_type', 'control_mode']
+                      'algorithm_type', 'env_type', 'control_mode',
+                      'experiment_id', 'stage_name', 'stage_index', 'is_resume', 'source_model']
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
             self.training_header_written = True
@@ -181,6 +241,7 @@ class DataCollector:
         self.last_step = -1
         self.last_scanned_count = 0
         self.last_global_scanned_count = 0
+        self.terminal_episode_meta = {}
         
         # 兼容旧版本调用（如果没有传锁）
         if data_lock is None:
@@ -243,16 +304,21 @@ class DataCollector:
                 elapsed_time = time.time() - self.global_start_time
                 episode_elapsed_time = float(self.current_episode_elapsed_time)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                scan_efficiency = self.last_global_scanned_count / max(episode_elapsed_time, 1.0)
+                # 统一口径：扫描效率使用“格子/步(Cell/Step)”而不是“格子/秒”
+                # 这样才能与图表标题和跨算法对比含义保持一致。
+                scan_efficiency = self.last_global_scanned_count / max(self.current_episode_length, 1)
 
                 avg_weights = [0.0] * 5
                 if self.current_episode_weights:
                     avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
                 with self.external_data_lock:
+                    self._capture_external_terminal_meta_locked()
                     algo_type = self.external_data.get('algorithm_type', '')
                     env_type = self.external_data.get('env_type', '')
                     ctrl_mode = self.external_data.get('control_mode', '')
+                experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+                terminal_meta = self._consume_terminal_meta(self.last_episode)
 
                 training_row = [
                     self.last_episode,
@@ -270,18 +336,23 @@ class DataCollector:
                     f"{avg_weights[2]:.3f}",
                     f"{avg_weights[3]:.3f}",
                     f"{avg_weights[4]:.3f}",
-                    self.external_data.get('reset_reason', ''),
-                    int(self.external_data.get('collision_count', 0)),
-                    int(self.external_data.get('out_of_range_count', 0)),
-                    f"{float(self.external_data.get('max_global_scan_ratio', 0.0)):.2f}%",
-                    f"{float(self.external_data.get('min_global_avg_entropy', 100.0)):.2f}",
-                    self.external_data.get('collision_object_name', ''),
-                    f"{float(self.external_data.get('collision_penetration_depth', 0.0)):.3f}",
-                    self.external_data.get('collision_position', ''),
-                    self.external_data.get('recent_trajectory', ''),
+                    (terminal_meta or {}).get('reset_reason', self.external_data.get('reset_reason', '')),
+                    int((terminal_meta or {}).get('collision_count', self.external_data.get('collision_count', 0))),
+                    int((terminal_meta or {}).get('out_of_range_count', self.external_data.get('out_of_range_count', 0))),
+                    f"{float((terminal_meta or {}).get('max_global_scan_ratio', self.external_data.get('max_global_scan_ratio', 0.0))):.2f}%",
+                    f"{float((terminal_meta or {}).get('min_global_avg_entropy', self.external_data.get('min_global_avg_entropy', 100.0))):.2f}",
+                    (terminal_meta or {}).get('collision_object_name', self.external_data.get('collision_object_name', '')),
+                    f"{float((terminal_meta or {}).get('collision_penetration_depth', self.external_data.get('collision_penetration_depth', 0.0))):.3f}",
+                    (terminal_meta or {}).get('collision_position', self.external_data.get('collision_position', '')),
+                    (terminal_meta or {}).get('recent_trajectory', self.external_data.get('recent_trajectory', '')),
                     algo_type,
                     env_type,
                     ctrl_mode,
+                    experiment_id,
+                    stage_name,
+                    int(stage_index),
+                    int(bool(is_resume)),
+                    source_model,
                 ]
                 self.training_csv_writer.writerow(training_row)
                 self.training_csv_file.flush()
@@ -294,6 +365,49 @@ class DataCollector:
                 self.current_episode_weights = []
             except Exception as e:
                 logger.error(f"????????: {e}")
+
+    def _capture_external_terminal_meta_locked(self):
+        """从 external_data 中抓取并锁存终止元数据，避免 episode 切换时被下一轮覆盖。"""
+        terminal_reason = str(self.external_data.get('terminal_reset_reason', '')).strip()
+        terminal_episode = self.external_data.get('terminal_episode', -1)
+        try:
+            terminal_episode = int(terminal_episode)
+        except (TypeError, ValueError):
+            terminal_episode = -1
+
+        if terminal_episode < 0 or not terminal_reason:
+            return
+
+        self.terminal_episode_meta[terminal_episode] = {
+            'reset_reason': terminal_reason,
+            'collision_count': int(self.external_data.get('terminal_collision_count', 0) or 0),
+            'out_of_range_count': int(self.external_data.get('terminal_out_of_range_count', 0) or 0),
+            'max_global_scan_ratio': float(self.external_data.get('terminal_max_global_scan_ratio', 0.0) or 0.0),
+            'min_global_avg_entropy': float(self.external_data.get('terminal_min_global_avg_entropy', 100.0) or 100.0),
+            'collision_object_name': self.external_data.get('terminal_collision_object_name', ''),
+            'collision_penetration_depth': float(self.external_data.get('terminal_collision_penetration_depth', 0.0) or 0.0),
+            'collision_position': self.external_data.get('terminal_collision_position', ''),
+            'recent_trajectory': self.external_data.get('terminal_recent_trajectory', ''),
+        }
+        self.external_data['terminal_episode'] = -1
+        self.external_data['terminal_reset_reason'] = ''
+        self.external_data['terminal_collision_count'] = 0
+        self.external_data['terminal_out_of_range_count'] = 0
+        self.external_data['terminal_max_global_scan_ratio'] = 0.0
+        self.external_data['terminal_min_global_avg_entropy'] = 100.0
+        self.external_data['terminal_collision_object_name'] = ''
+        self.external_data['terminal_collision_penetration_depth'] = 0.0
+        self.external_data['terminal_collision_position'] = ''
+        self.external_data['terminal_recent_trajectory'] = ''
+
+    def _consume_terminal_meta(self, episode: int):
+        """按 episode 取出锁存的终止元数据。"""
+        try:
+            episode = int(episode)
+        except (TypeError, ValueError):
+            return None
+        return self.terminal_episode_meta.pop(episode, None)
+
     def _collection_thread(self,
                           get_grid_data_func,
                           get_runtime_data_func,
@@ -498,7 +612,12 @@ class DataCollector:
                         'current_out_of_range_steps',
                         'current_out_of_range_duration_sec',
                         'current_out_of_range_count',
-                        'current_drone_reward'
+                        'current_drone_reward',
+                        'experiment_id',
+                        'stage_name',
+                        'stage_index',
+                        'is_resume',
+                        'source_model',
                     ]
                     for drone_name in self.drone_names_list:
                         header.append(f'{drone_name}_action')
@@ -536,6 +655,7 @@ class DataCollector:
 
                     # 提取元数据 (用于 scan_data 行写入)
                     with self.external_data_lock:
+                        self._capture_external_terminal_meta_locked()
                         hl_action_val = self.external_data.get('hl_action', '')
                         hl_goal_x_val = self.external_data.get('hl_goal_x', '')
                         hl_goal_y_val = self.external_data.get('hl_goal_y', '')
@@ -561,6 +681,8 @@ class DataCollector:
                         collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
                         collision_position = self.external_data.get('collision_position', '')
                         recent_trajectory = self.external_data.get('recent_trajectory', '')
+
+                    experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
 
                     # 获取当前episode（从training_data或external_data）
                     current_episode = training_data.get('episode', self.external_data.get('episode', -1))
@@ -590,7 +712,12 @@ class DataCollector:
                         self.last_written_scan_step = None
 
                     valid_step_frame = current_episode_int >= 0 and current_step_int > 0
-                    terminal_reason = str(reset_reason).strip() if valid_step_frame else ""
+                    latched_terminal_meta = self.terminal_episode_meta.get(current_episode_int)
+                    terminal_reason = (
+                        str((latched_terminal_meta or {}).get('reset_reason', reset_reason)).strip()
+                        if valid_step_frame
+                        else ""
+                    )
                     is_terminal_frame = bool(terminal_reason)
                     is_duplicate_step_frame = (
                         current_episode_int == self.last_written_scan_episode
@@ -603,12 +730,12 @@ class DataCollector:
                     )
 
                     row_reset_reason = terminal_reason if is_terminal_frame else ""
-                    row_collision_count = collision_count if is_terminal_frame else 0
-                    row_out_of_range_count = out_of_range_count if is_terminal_frame else 0
-                    row_collision_object_name = collision_object_name if is_terminal_frame else ""
-                    row_collision_penetration_depth = collision_penetration_depth if is_terminal_frame else 0.0
-                    row_collision_position = collision_position if is_terminal_frame else ""
-                    row_recent_trajectory = recent_trajectory if is_terminal_frame else ""
+                    row_collision_count = int((latched_terminal_meta or {}).get('collision_count', collision_count)) if is_terminal_frame else 0
+                    row_out_of_range_count = int((latched_terminal_meta or {}).get('out_of_range_count', out_of_range_count)) if is_terminal_frame else 0
+                    row_collision_object_name = (latched_terminal_meta or {}).get('collision_object_name', collision_object_name) if is_terminal_frame else ""
+                    row_collision_penetration_depth = float((latched_terminal_meta or {}).get('collision_penetration_depth', collision_penetration_depth)) if is_terminal_frame else 0.0
+                    row_collision_position = (latched_terminal_meta or {}).get('collision_position', collision_position) if is_terminal_frame else ""
+                    row_recent_trajectory = (latched_terminal_meta or {}).get('recent_trajectory', recent_trajectory) if is_terminal_frame else ""
 
                     if not should_skip_scan_row:
                         row = [
@@ -660,6 +787,11 @@ class DataCollector:
                             f"{float(current_out_of_range_duration_sec or 0.0):.3f}",
                             int(current_out_of_range_count or 0),
                             f"{float(current_drone_reward):.4f}",
+                            experiment_id,
+                            stage_name,
+                            int(stage_index),
+                            int(bool(is_resume)),
+                            source_model,
                         ]
 
                         for drone_name in self.drone_names_list:
@@ -731,10 +863,10 @@ class DataCollector:
                                 avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
 
                             with self.external_data_lock:
+                                self._capture_external_terminal_meta_locked()
                                 algo_type = self.external_data.get('algorithm_type', '')
                                 env_type = self.external_data.get('env_type', '')
                                 ctrl_mode = self.external_data.get('control_mode', '')
-
                                 reset_reason = self.external_data.get('reset_reason', '')
                                 collision_count = int(self.external_data.get('collision_count', 0))
                                 out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
@@ -744,9 +876,12 @@ class DataCollector:
                                 collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
                                 collision_position = self.external_data.get('collision_position', '')
                                 recent_trajectory = self.external_data.get('recent_trajectory', '')
+                            experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+                            terminal_meta = self._consume_terminal_meta(self.last_episode)
                             elapsed_time = time.time() - self.global_start_time
                             previous_episode_elapsed = float(self.current_episode_elapsed_time)
-                            scan_efficiency = self.last_global_scanned_count / max(previous_episode_elapsed, 1.0)
+                            # 统一口径：训练 CSV 中的 scan_efficiency 始终表示 Cell/Step。
+                            scan_efficiency = self.last_global_scanned_count / max(self.current_episode_length, 1)
 
                             training_row = [
                                 self.last_episode,
@@ -764,18 +899,23 @@ class DataCollector:
                                 f"{avg_weights[2]:.3f}",
                                 f"{avg_weights[3]:.3f}",
                                 f"{avg_weights[4]:.3f}",
-                                reset_reason,
-                                collision_count,
-                                out_of_range_count,
-                                f"{max_global_scan_ratio:.2f}%",
-                                f"{min_global_avg_entropy:.2f}",
-                                collision_object_name,
-                                f"{collision_penetration_depth:.3f}",
-                                collision_position,
-                                recent_trajectory,
+                                (terminal_meta or {}).get('reset_reason', reset_reason),
+                                int((terminal_meta or {}).get('collision_count', collision_count)),
+                                int((terminal_meta or {}).get('out_of_range_count', out_of_range_count)),
+                                f"{float((terminal_meta or {}).get('max_global_scan_ratio', max_global_scan_ratio)):.2f}%",
+                                f"{float((terminal_meta or {}).get('min_global_avg_entropy', min_global_avg_entropy)):.2f}",
+                                (terminal_meta or {}).get('collision_object_name', collision_object_name),
+                                f"{float((terminal_meta or {}).get('collision_penetration_depth', collision_penetration_depth)):.3f}",
+                                (terminal_meta or {}).get('collision_position', collision_position),
+                                (terminal_meta or {}).get('recent_trajectory', recent_trajectory),
                                 algo_type,
                                 env_type,
-                                ctrl_mode
+                                ctrl_mode,
+                                experiment_id,
+                                stage_name,
+                                int(stage_index),
+                                int(bool(is_resume)),
+                                source_model
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()

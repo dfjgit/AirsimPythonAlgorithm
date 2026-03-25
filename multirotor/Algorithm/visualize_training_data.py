@@ -88,11 +88,78 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
     ]
     analyzer = UnifiedTrainingAnalyzer(output_dir=str(out_root))
     analyzer.load_data([str(p) for p in compare_dirs])
+    # 1. Historical full comparison
     analyzer.plot_comparison(metric="reward", data_type="training", x_axis="episode")
     analyzer.plot_comparison(metric="scan_efficiency", data_type="training", x_axis="episode")
     analyzer.plot_comparison(metric="scan_ratio", data_type="scan", x_axis="elapsed_time")
     analyzer.plot_comparison(metric="global_avg_entropy", data_type="scan", x_axis="elapsed_time")
     analyzer.generate_summary_report()
+
+    # 2. Latest-run comparison with the same four core views
+    analyzer.plot_comparison(
+        metric="reward",
+        data_type="training",
+        x_axis="episode",
+        latest_only=True,
+        file_prefix="latest_comparison",
+    )
+    analyzer.plot_comparison(
+        metric="scan_efficiency",
+        data_type="training",
+        x_axis="episode",
+        latest_only=True,
+        file_prefix="latest_comparison",
+    )
+    analyzer.plot_comparison(
+        metric="scan_ratio",
+        data_type="scan",
+        x_axis="elapsed_time",
+        latest_only=True,
+        file_prefix="latest_comparison",
+    )
+    analyzer.plot_comparison(
+        metric="global_avg_entropy",
+        data_type="scan",
+        x_axis="elapsed_time",
+        latest_only=True,
+        file_prefix="latest_comparison",
+    )
+    analyzer.generate_summary_report(latest_only=True, report_prefix="latest_algorithm_comparison")
+
+    # 3. Recent substantial window comparison
+    analyzer.plot_recent_window_comparison(
+        metric="reward",
+        data_type="training",
+        tail_episodes=50,
+        min_training_episodes=20,
+        file_prefix="recent_window_comparison",
+    )
+    analyzer.plot_recent_window_comparison(
+        metric="scan_efficiency",
+        data_type="training",
+        tail_episodes=50,
+        min_training_episodes=20,
+        file_prefix="recent_window_comparison",
+    )
+    analyzer.plot_recent_window_comparison(
+        metric="scan_ratio",
+        data_type="scan",
+        tail_episodes=50,
+        min_training_episodes=20,
+        file_prefix="recent_window_comparison",
+    )
+    analyzer.plot_recent_window_comparison(
+        metric="global_avg_entropy",
+        data_type="scan",
+        tail_episodes=50,
+        min_training_episodes=20,
+        file_prefix="recent_window_comparison",
+    )
+    analyzer.generate_recent_window_report(
+        tail_episodes=50,
+        min_training_episodes=20,
+        report_prefix="recent_window_algorithm_comparison",
+    )
     LOGGER.info("Finished algorithm comparison -> %s", out_root)
     return 0
 
@@ -103,7 +170,12 @@ def main() -> int:
     parser.add_argument("--json", type=str, help="兼容旧参数；当前入口不再处理 JSON，可改用 scan_data CSV")
     parser.add_argument("--csv", type=str, help="分析单个 scan_data CSV 文件")
     parser.add_argument("--dir", type=str, help="分析目录中的 scan_data CSV 文件")
-    parser.add_argument("--out", type=str, default="analysis_results", help="输出目录")
+    parser.add_argument(
+        "--out",
+        type=str,
+        default="multirotor/DQN_Movement/logs/analysis_results",
+        help="输出目录",
+    )
     parser.add_argument("--show", action="store_true", help="兼容旧参数；当前离线模式下忽略")
     parser.add_argument("--compare", action="store_true", help="兼容旧参数；当前入口暂不单独处理")
     parser.add_argument("--compare-algorithms", action="store_true", help="兼容旧参数；当前入口暂不单独处理")

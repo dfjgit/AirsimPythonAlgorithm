@@ -24,7 +24,7 @@
     "total_timesteps": 21600,
     "checkpoint_freq": 3000,
     "step_duration": 2.0,
-    "use_initial_weights": true,
+    "use_initial_weights": false,
     "initial_model_path": null,
     "safety_limit": true,
     "max_weight_delta": 0.5,

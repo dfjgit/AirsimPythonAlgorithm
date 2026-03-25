@@ -457,7 +457,7 @@ class TrainingVisualizer:
                 try:
                     if hasattr(self.server, 'get_battery_voltage'):
                         voltage = self.server.get_battery_voltage(drone_name)
-                        battery_percent = max(0, min(100, (voltage - 3.0) / (4.2 - 3.0) * 100))
+                        battery_percent = max(0, min(100, (voltage - 3.2) / (4.2 - 3.2) * 100))
                         
                         # 根据电量百分比选择颜色
                         if battery_percent > 50:

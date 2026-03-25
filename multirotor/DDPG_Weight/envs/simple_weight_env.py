@@ -12,6 +12,17 @@ import json
 from collections import deque
 
 try:
+    from multirotor.Algorithm.battery_data import BatteryStatus
+except ImportError:
+    try:
+        from Algorithm.battery_data import BatteryStatus
+    except ImportError:
+        import sys
+
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        from multirotor.Algorithm.battery_data import BatteryStatus
+
+try:
     from configs.crazyflie_reward_config import CrazyflieRewardConfig
 except ImportError:
     try:
@@ -67,11 +78,11 @@ class SimpleWeightEnv(gym.Env):
 
         # 统一终止配置
         self.term_cfg = {
-            "target_scan_ratio": 0.95,
-            "max_collision_count": 15,  # 恢复到15次，避免过早终止
-            "max_elapsed_time_sec": 300.0,
-            "out_of_range_reset_enabled": False,  # 禁用出圈立即重置（避免训练频繁中断）
-            "out_of_range_continuous_count": 5,  # 连续出圈5次后重置（给予更多学习时间）
+            "target_scan_ratio": 0.25,
+            "max_collision_count": 6,   # 与DQN主实验口径对齐
+            "max_elapsed_time_sec": 300.0,  # 与DQN主实验口径对齐
+            "out_of_range_reset_enabled": True,
+            "out_of_range_continuous_count": 12,  # 12 * 2s ≈ 24s，与DQN 24s OOR 时长对齐
         }
 
         # 边界控制配置
@@ -128,6 +139,7 @@ class SimpleWeightEnv(gym.Env):
         self._apply_unified_config()
 
         print("[OK] 训练环境已加载奖励配置和终止配置")
+        self.verbose_step_logs = False
 
         # 状态空间: 18维
         # [位置(3) + 速度(3) + 方向(3) + 熵值(3) + Leader(3) + 扫描(3)]
@@ -224,6 +236,10 @@ class SimpleWeightEnv(gym.Env):
         # 首次重置标志（用于跳过启动时的物理重置）
         self._first_reset = True
 
+    def _step_log(self, message: str) -> None:
+        if self.verbose_step_logs:
+            print(message)
+
     def _first_reset_logic(self):
         """处理首次重置逻辑"""
         pass  # Placeholder if needed, or just keep as is in reset()
@@ -275,7 +291,7 @@ class SimpleWeightEnv(gym.Env):
                 if os.path.exists(config_path):
                     import json
 
-                    with open(config_path, "r", encoding="utf-8") as f:
+                    with open(config_path, "r", encoding="utf-8-sig") as f:
                         full_cfg = json.load(f)
                         unified_env_cfg = full_cfg.get("env_config")
             except Exception as e:
@@ -455,6 +471,13 @@ class SimpleWeightEnv(gym.Env):
         print(
             f"  • 预计时长: {self.reward_config.max_steps * self.step_duration / 60:.1f}分钟"
         )
+        print(
+            "  • 终止条件: "
+            f"碰撞>={self.term_cfg.get('max_collision_count')}, "
+            f"时长>={self.term_cfg.get('max_elapsed_time_sec')}s, "
+            f"出圈连续>={self.term_cfg.get('out_of_range_continuous_count')}, "
+            f"目标扫描率>={self.term_cfg.get('target_scan_ratio'):.2f}"
+        )
         print(f"{'=' * 60}\n")
 
         # 通知服务器 Episode 切换 (用于数据采集及时记录上一个 Episode)
@@ -521,20 +544,21 @@ class SimpleWeightEnv(gym.Env):
             self.step_count += 1
             progress_percent = (self.step_count / self.reward_config.max_steps) * 100
 
-            print(f"\n{'─' * 60}")
-            print(
-                f"🔄 步骤 {self.step_count}/{self.reward_config.max_steps} ({progress_percent:.1f}%)"
-            )
-            print(f"{'─' * 60}")
-            print(f"📊 设置权重:")
-            print(f"  • 斥力系数: {weights['repulsionCoefficient']:.3f}")
-            print(f"  • 熵系数:   {weights['entropyCoefficient']:.3f}")
-            print(f"  • 距离系数: {weights['distanceCoefficient']:.3f}")
-            print(f"  • Leader:   {weights['leaderRangeCoefficient']:.3f}")
-            print(f"  • 方向保持: {weights['directionRetentionCoefficient']:.3f}")
-            print(f"🚧 避障参数:")
-            print(f"  • 避障距离: {weights['obstacleRepulsionDistance']:.1f}")
-            print(f"  • 避障系数: {weights['obstacleRepulsionCoefficient']:.1f}")
+            if self.verbose_step_logs:
+                print(f"\n{'─' * 60}")
+                print(
+                    f"🔄 步骤 {self.step_count}/{self.reward_config.max_steps} ({progress_percent:.1f}%)"
+                )
+                print(f"{'─' * 60}")
+                print(f"📊 设置权重:")
+                print(f"  • 斥力系数: {weights['repulsionCoefficient']:.3f}")
+                print(f"  • 熵系数:   {weights['entropyCoefficient']:.3f}")
+                print(f"  • 距离系数: {weights['distanceCoefficient']:.3f}")
+                print(f"  • Leader:   {weights['leaderRangeCoefficient']:.3f}")
+                print(f"  • 方向保持: {weights['directionRetentionCoefficient']:.3f}")
+                print(f"🚧 避障参数:")
+                print(f"  • 避障距离: {weights['obstacleRepulsionDistance']:.1f}")
+                print(f"  • 避障系数: {weights['obstacleRepulsionCoefficient']:.1f}")
 
             # 在 step() 方法中
             if self.server:
@@ -563,36 +587,40 @@ class SimpleWeightEnv(gym.Env):
                                 )
 
                 # 显示所有无人机的当前电量
-                print(f"🔋 电量状态:")
-                for drone_name in self.server.drone_names:
-                    battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                    if battery_info:
-                        current_voltage = battery_info.voltage
-                        print(
-                            f"  • {drone_name}: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)"
-                        )
+                if self.verbose_step_logs:
+                    print(f"🔋 电量状态:")
+                    for drone_name in self.server.drone_names:
+                        battery_info = self.server.battery_manager.get_battery_info(drone_name)
+                        if battery_info:
+                            current_voltage = battery_info.voltage
+                            print(
+                                f"  • {drone_name}: {current_voltage:.2f}V ({battery_info.get_remaining_percentage():.1f}%)"
+                            )
 
                 # 设置权重（算法线程会使用新权重飞行）
                 # 为所有无人机设置相同的权重，确保多机协同训练时都能正常移动
                 for drone_name in self.server.drone_names:
                     self.server.algorithms[drone_name].set_coefficients(weights)
-                print(f"📊 已为所有无人机设置权重: {len(self.server.drone_names)}台")
+                self._step_log(f"📊 已为所有无人机设置权重: {len(self.server.drone_names)}台")
 
                 # 倒计时等待无人机飞行
-                print(f"\n⏱️  等待无人机飞行 {self.step_duration:.0f} 秒...")
+                if self.verbose_step_logs:
+                    print(f"\n⏱️  等待无人机飞行 {self.step_duration:.0f} 秒...")
 
-                # 使用倒计时显示
-                for remaining in range(int(self.step_duration), 0, -1):
-                    elapsed = self.step_duration - remaining
-                    bar_length = 40
-                    filled = int((elapsed / self.step_duration) * bar_length)
-                    bar = "█" * filled + "░" * (bar_length - filled)
+                    # 使用倒计时显示
+                    for remaining in range(int(self.step_duration), 0, -1):
+                        elapsed = self.step_duration - remaining
+                        bar_length = 40
+                        filled = int((elapsed / self.step_duration) * bar_length)
+                        bar = "█" * filled + "░" * (bar_length - filled)
 
-                    sys.stdout.write(f"\r  [{bar}] {remaining:2d}秒剩余  ")
-                    sys.stdout.flush()
-                    time.sleep(1)
+                        sys.stdout.write(f"\r  [{bar}] {remaining:2d}秒剩余  ")
+                        sys.stdout.flush()
+                        time.sleep(1)
 
-                print(f"\r  [{'█' * 40}] ✅ 完成!     ")
+                    print(f"\r  [{'█' * 40}] ✅ 完成!     ")
+                else:
+                    time.sleep(self.step_duration)
             else:
                 time.sleep(0.1)  # 测试模式快速跳过
 
@@ -630,7 +658,7 @@ class SimpleWeightEnv(gym.Env):
             # 出圈检测与重置逻辑（改为基于连续步数）
             if is_out_of_range:
                 self._out_of_range_continuous_count += 1
-                print(
+                self._step_log(
                     f"⚠️  出圈警告: 距离Leader {dist_to_leader:.1f}m > 半径 {leader_radius:.1f}m "
                     f"(连续第{self._out_of_range_continuous_count}步)"
                 )
@@ -653,7 +681,7 @@ class SimpleWeightEnv(gym.Env):
             else:
                 # 回到圈内，重置连续计数
                 if self._out_of_range_continuous_count > 0:
-                    print(f"✅ 回到圈内，重置连续出圈计数")
+                    self._step_log(f"✅ 回到圈内，重置连续出圈计数")
                 self._out_of_range_continuous_count = 0
 
             if not done:
@@ -665,6 +693,22 @@ class SimpleWeightEnv(gym.Env):
                     print(f"[终止] 发生碰撞: {self.collision_count}")
                     done = True
                     reset_reason = "碰撞"
+                elif self.server and hasattr(self.server, "battery_manager"):
+                    battery_info = self.server.battery_manager.get_battery_info(
+                        self.drone_name
+                    )
+                    if battery_info:
+                        current_voltage = float(
+                            getattr(battery_info, "voltage", 4.2) or 4.2
+                        )
+                        battery_status = getattr(battery_info, "status", None)
+                        if (
+                            current_voltage <= 3.2 + 1e-6
+                            or battery_status == BatteryStatus.EMPTY
+                        ):
+                            print(f"[终止] 电量耗尽: {current_voltage:.2f}V")
+                            done = True
+                            reset_reason = "电量耗尽"
                 else:
                     # 检查覆盖率
                     if self.server:
@@ -741,7 +785,7 @@ class SimpleWeightEnv(gym.Env):
                 self.server.data_collector.set_external_data("reset_reason", "")
 
             # 显示奖励信息
-            print(f"\n📈 本步奖励: {reward:+.2f}")
+            self._step_log(f"\n📈 本步奖励: {reward:+.2f}")
 
             if self.server:
                 with self.server.data_lock:
@@ -754,7 +798,7 @@ class SimpleWeightEnv(gym.Env):
                             if cell.entropy < self.reward_config.scan_entropy_threshold
                         )
                         scan_progress = (scanned_cells / total_cells) * 100
-                        print(
+                        self._step_log(
                             f"🗺️  扫描进度: {scanned_cells}/{total_cells} ({scan_progress:.1f}%)"
                         )
 
@@ -805,6 +849,39 @@ class SimpleWeightEnv(gym.Env):
                     )
                     self.server.data_collector.set_external_data(
                         "recent_trajectory", self._get_recent_trajectory_json()
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_episode", int(self.episode_count)
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_reset_reason", reset_reason
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_collision_count", int(self.collision_count)
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_out_of_range_count", int(self._out_of_range_count)
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_max_global_scan_ratio",
+                        float(episode_metrics["episode_max_global_scan_ratio"]),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_min_global_avg_entropy",
+                        float(episode_metrics["episode_min_global_entropy"]),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_collision_object_name", self._last_collision_object_name
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_collision_penetration_depth",
+                        float(self._last_collision_penetration),
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_collision_position", self._last_collision_position
+                    )
+                    self.server.data_collector.set_external_data(
+                        "terminal_recent_trajectory", self._get_recent_trajectory_json()
                     )
                 print(f"\n{'=' * 60}")
                 print(f"✅ Episode #{self.episode_count} 完成！共 {self.step_count} 步")
