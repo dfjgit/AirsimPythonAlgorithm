@@ -131,31 +131,23 @@ class MovementEnv(gym.Env):
             5: np.array([-self.action_step, 0, 0])      # 后 (X-)
         }
 
-    def _step_log(self, message: str) -> None:
-        if self.verbose_step_logs:
-            print(message)
-        
         # 状态记录
         self.prev_scanned_cells = 0
-        
-        # 越界决策诊断信息（用于可视化/日志）
         self.last_oob_diag = {}
-        self.out_of_range_steps = 0
-        
-        # 连续越界步数（用于防止出圈后“摆烂”）
         self.out_of_range_steps = 0
         self.prev_position = None
         self.prev_entropy_sum = 0
         self.step_count = 0
         self.episode_reward = 0
-        
         self.collision_count = 0
         self.out_of_range_count = 0
-        self.last_done_reason = None  # 记录上一次结束的原因
-        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
-        
-        # 首次重置标志（用于跳过启动时的重置）
+        self.last_done_reason = None
+        self.episode_start_time = time.time()
         self._first_reset = True
+
+    def _step_log(self, message: str) -> None:
+        if self.verbose_step_logs:
+            print(message)
     
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
@@ -990,10 +982,6 @@ class MultiDroneMovementEnv(gym.Env):
             5: np.array([-self.action_step, 0, 0])      # 后 (X-)
         }
 
-    def _step_log(self, message: str) -> None:
-        if self.verbose_step_logs:
-            print(message)
-        
         # 为每个无人机维护独立的状态记录
         self.drone_states = {}
         for drone_name in self.drone_names:
@@ -1013,17 +1001,17 @@ class MultiDroneMovementEnv(gym.Env):
                 'oob_no_return_hits': 0,
                 'episode_reward': 0
             }
-        
-        self.last_done_reason = None  # 记录多机模式结束原因
-        # 全局状态
+
+        self.last_done_reason = None
         self.step_count = 0
         self.total_episode_reward = 0
-        self.episode_index = 0  # Episode 计数器（用于 DataCollector）
-        self.episode_start_time = time.time()  # 记录 Episode 开始的真实时间
-        self.last_done_reason = None  # 记录结束原因
-        
-        # 首次重置标志（用于跳过启动时的重置）
+        self.episode_index = 0
+        self.episode_start_time = time.time()
         self._first_reset = True
+
+    def _step_log(self, message: str) -> None:
+        if self.verbose_step_logs:
+            print(message)
         
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""

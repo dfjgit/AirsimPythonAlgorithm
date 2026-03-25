@@ -76,13 +76,15 @@ class ScannerConfigData:
         # 统一环境配置默认值
         self.env_config = {
             "termination": {
-                "target_scan_ratio": 0.95,
-                "max_collision_count": 1,
+                "target_scan_ratio": 0.25,
+                "max_collision_count": 6,
                 "max_elapsed_time_sec": 300.0,
-                "stagnation_timeout_sec": 30.0
+                "stagnation_timeout_sec": 30.0,
+                "out_of_range_reset_enabled": True,
+                "out_of_range_continuous_count": 12
             },
             "battery": {
-                "low_threshold": 3.5,
+                "low_threshold": 3.2,
                 "optimal_min": 3.7,
                 "optimal_max": 4.1
             },
