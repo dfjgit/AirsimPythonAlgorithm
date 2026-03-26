@@ -79,6 +79,7 @@ class DataCollector:
         self.last_written_scan_episode = None  # 记录最近一次已写入的 episode
         self.last_written_scan_step = None  # 记录最近一次已写入的 step
         self.terminal_episode_meta = {}  # 按 episode 锁存终止元数据，避免 episode 切换时写串
+        self.episode_scan_summary = {}  # 按 episode 锁存最后一帧扫描统计，避免下一轮首帧覆盖
         
         # 初始化CSV文件
         self._init_csv_file(data_dir)
@@ -242,6 +243,7 @@ class DataCollector:
         self.last_scanned_count = 0
         self.last_global_scanned_count = 0
         self.terminal_episode_meta = {}
+        self.episode_scan_summary = {}
         
         # 兼容旧版本调用（如果没有传锁）
         if data_lock is None:
@@ -319,18 +321,21 @@ class DataCollector:
                     ctrl_mode = self.external_data.get('control_mode', '')
                 experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
                 terminal_meta = self._consume_terminal_meta(self.last_episode)
+                scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
+                final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
+                final_global_scanned_count = int(scan_summary.get('global_scanned_count', self.last_global_scanned_count))
 
                 training_row = [
                     self.last_episode,
                     f"{self.current_episode_reward:.2f}",
                     self.current_episode_length,
-                    self.last_scanned_count,
-                    self.last_global_scanned_count,
+                    final_scanned_count,
+                    final_global_scanned_count,
                     int(elapsed_time),
                     f"{elapsed_time:.2f}",
                     f"{episode_elapsed_time:.2f}",
                     timestamp,
-                    f"{scan_efficiency:.2f}",
+                    f"{final_global_scanned_count / max(self.current_episode_length, 1):.2f}",
                     f"{avg_weights[0]:.3f}",
                     f"{avg_weights[1]:.3f}",
                     f"{avg_weights[2]:.3f}",
@@ -407,6 +412,14 @@ class DataCollector:
         except (TypeError, ValueError):
             return None
         return self.terminal_episode_meta.pop(episode, None)
+
+    def _consume_episode_scan_summary(self, episode: int):
+        """按 episode 取出锁存的最后一帧扫描统计。"""
+        try:
+            episode = int(episode)
+        except (TypeError, ValueError):
+            return None
+        return self.episode_scan_summary.pop(episode, None)
 
     def _collection_thread(self,
                           get_grid_data_func,
@@ -826,6 +839,15 @@ class DataCollector:
                         self.csv_file.flush()  # 立即刷新到文件
                         self.last_written_scan_episode = current_episode_int
                         self.last_written_scan_step = current_step_int
+                        self.episode_scan_summary[current_episode_int] = {
+                            'scanned_count': int(scanned_count),
+                            'global_scanned_count': int(global_scanned_count),
+                            'scan_ratio': float(scan_ratio),
+                            'global_scan_ratio': float(global_scan_ratio),
+                            'global_avg_entropy': float(global_avg_entropy),
+                        }
+                        self.last_scanned_count = int(scanned_count)
+                        self.last_global_scanned_count = int(global_scanned_count)
 
                         if is_terminal_frame:
                             self.terminal_scan_episode = current_episode_int
@@ -878,17 +900,20 @@ class DataCollector:
                                 recent_trajectory = self.external_data.get('recent_trajectory', '')
                             experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
                             terminal_meta = self._consume_terminal_meta(self.last_episode)
+                            scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
                             elapsed_time = time.time() - self.global_start_time
                             previous_episode_elapsed = float(self.current_episode_elapsed_time)
                             # 统一口径：训练 CSV 中的 scan_efficiency 始终表示 Cell/Step。
-                            scan_efficiency = self.last_global_scanned_count / max(self.current_episode_length, 1)
+                            final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
+                            final_global_scanned_count = int(scan_summary.get('global_scanned_count', self.last_global_scanned_count))
+                            scan_efficiency = final_global_scanned_count / max(self.current_episode_length, 1)
 
                             training_row = [
                                 self.last_episode,
                                 f"{self.current_episode_reward:.2f}",
                                 self.current_episode_length,
-                                self.last_scanned_count,
-                                self.last_global_scanned_count,
+                                final_scanned_count,
+                                final_global_scanned_count,
                                 int(elapsed_time),
                                 f"{elapsed_time:.2f}",
                                 f"{previous_episode_elapsed:.2f}",
