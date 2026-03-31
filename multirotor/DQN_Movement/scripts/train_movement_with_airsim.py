@@ -102,6 +102,7 @@ dqn_config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "move
 with open(dqn_config_path, 'r', encoding='utf-8') as f:
     dqn_config = json.load(f)
 print(f"  ✓ 加载 movement_dqn_config.json")
+target_scan_ratio = float(dqn_config.get('termination_config', {}).get('target_scan_ratio', 0.0) or 0.0)
 
 
 def _env_int(name, default=None):
@@ -252,6 +253,11 @@ if hasattr(server, 'set_experiment_meta'):
         env_type='movement',
         control_mode='dqn'
     )
+if getattr(server, 'data_collector', None):
+    try:
+        server.data_collector.set_external_data('target_scan_ratio', target_scan_ratio)
+    except Exception:
+        pass
 
 print("\n" + "=" * 80)
 print("[步骤4] 创建训练环境")
@@ -387,12 +393,6 @@ checkpoint_callback = CheckpointCallback(
     name_prefix='movement_dqn_airsim'
 )
 
-progress_callback = AirSimProgressCallback(
-    total_timesteps=dqn_config['training']['total_timesteps'],
-    print_freq=500,
-    log_dir=log_dir
-)
-
 class DQNVisualizationCallback(BaseCallback):
     def __init__(self, server, verbose=0):
         super().__init__(verbose)
@@ -423,6 +423,7 @@ class DQNVisualizationCallback(BaseCallback):
         if self.server is None:
             return True
         try:
+            current_episode_index = int(self.episode_count)
             action = None
             if 'actions' in self.locals and len(self.locals['actions']) > 0:
                 action = int(self.locals['actions'][0])
@@ -467,12 +468,55 @@ class DQNVisualizationCallback(BaseCallback):
                     }
                 )
 
+            max_out_of_range_duration_sec = float(
+                max(
+                    [float(info.get('out_of_range_duration_sec', 0.0) or 0.0)]
+                    + [
+                        float(values.get('out_of_range_duration_sec', 0.0) or 0.0)
+                        for values in self.per_drone_actions.values()
+                    ]
+                )
+            )
+
             if is_done:
-                self.episode_count += 1
                 self.reward_history.append(float(self.episode_reward))
                 # 保持奖励历史在合理范围内
                 if len(self.reward_history) > 200:
                     self.reward_history = self.reward_history[-200:]
+                terminal_reason = str(info.get('last_done_reason') or '').strip()
+                data_collector = getattr(self.server, 'data_collector', None)
+                if terminal_reason and data_collector is not None:
+                    try:
+                        with data_collector.external_data_lock:
+                            data_collector.external_data['reset_reason'] = terminal_reason
+                            data_collector.external_data['terminal_episode'] = current_episode_index
+                            data_collector.external_data['terminal_reset_reason'] = terminal_reason
+                            data_collector.external_data['terminal_collision_count'] = int(
+                                info.get('collision_count', 0) or 0
+                            )
+                            data_collector.external_data['terminal_out_of_range_count'] = int(
+                                info.get('out_of_range_count', 0) or 0
+                            )
+                            data_collector.external_data['terminal_max_global_scan_ratio'] = float(
+                                data_collector.external_data.get('max_global_scan_ratio', 0.0) or 0.0
+                            )
+                            data_collector.external_data['terminal_min_global_avg_entropy'] = float(
+                                data_collector.external_data.get('min_global_avg_entropy', 100.0) or 100.0
+                            )
+                            data_collector.external_data['terminal_collision_object_name'] = str(
+                                data_collector.external_data.get('collision_object_name', '') or ''
+                            )
+                            data_collector.external_data['terminal_collision_penetration_depth'] = float(
+                                data_collector.external_data.get('collision_penetration_depth', 0.0) or 0.0
+                            )
+                            data_collector.external_data['terminal_collision_position'] = str(
+                                data_collector.external_data.get('collision_position', '') or ''
+                            )
+                            data_collector.external_data['terminal_recent_trajectory'] = str(
+                                data_collector.external_data.get('recent_trajectory', '') or ''
+                            )
+                    except Exception:
+                        pass
 
             # 写入到server，供IPC外部可视化快照读取
             self.server.current_training_stats = {
@@ -480,7 +524,7 @@ class DQNVisualizationCallback(BaseCallback):
                 'total_steps': self.total_steps,
                 'current_episode_steps': self.current_episode_steps,
                 'steps_per_sec': float(steps_per_sec),
-                'episode_count': self.episode_count,
+                'episode_count': current_episode_index,
                 'current_episode_reward': float(self.episode_reward),
                 'reward_history': list(self.reward_history),
                 'is_done': bool(is_done),
@@ -492,6 +536,7 @@ class DQNVisualizationCallback(BaseCallback):
                 'is_out_of_range': bool(info.get('is_out_of_range', False)),
                 'out_of_range_steps': int(info.get('out_of_range_steps', 0) or 0),
                 'out_of_range_duration_sec': float(info.get('out_of_range_duration_sec', 0.0) or 0.0),
+                'max_out_of_range_duration_sec': max_out_of_range_duration_sec,
                 'out_of_range_count': int(info.get('out_of_range_count', 0) or 0),
                 'current_drone_reward': float(info.get('current_drone_reward', 0.0) or 0.0),
                 'last_done_reason': info.get('last_done_reason'),
@@ -507,6 +552,7 @@ class DQNVisualizationCallback(BaseCallback):
                 pass
 
             if is_done:
+                self.episode_count += 1
                 self.episode_reward = 0.0
                 self.current_episode_steps = 0
         except Exception:
@@ -550,6 +596,11 @@ total_timesteps = int(
         'resume_total_timesteps' if use_pretrained else 'total_timesteps',
         dqn_config['training']['total_timesteps']
     )
+)
+progress_callback = AirSimProgressCallback(
+    total_timesteps=total_timesteps,
+    print_freq=500,
+    log_dir=log_dir
 )
 reset_num_timesteps = True
 if use_pretrained:

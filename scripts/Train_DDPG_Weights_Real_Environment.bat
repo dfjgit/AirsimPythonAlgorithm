@@ -1,4 +1,5 @@
 ﻿﻿@echo off
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul 2>&1
 cls
 
@@ -9,10 +10,10 @@ echo.
 echo This script will train the DDPG model using the real Unity AirSim simulation environment
 echo.
 echo Important Notes:
-   1. Please start the Unity AirSim simulation scene first
-   2. Ensure there are 3 UAVs (UAV1-UAV3) and the environment in the Unity scene
-   3. Training takes about 33 minutes, keep Unity running
-   4. After training, the model will be saved to multirotor\DDPG_Weight\models\
+echo   1. Please start the Unity AirSim simulation scene first
+echo   2. Ensure there are 3 UAVs (UAV1-UAV3) and the environment in the Unity scene
+echo   3. Training takes about 33 minutes, keep Unity running
+echo   4. After training, the model will be saved to multirotor\DDPG_Weight\models\
 echo.
 echo Configuration Options:
 echo   [Recommended] Unified config: unified_train_config.json
@@ -28,8 +29,11 @@ echo.
 
 set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\configs\unified_train_config.json"
 if not "%~1"=="" (
-    set "CONFIG_PATH=%~1"
-    shift
+    set "FIRST_ARG=%~1"
+    if /i not "!FIRST_ARG:~0,2!"=="--" (
+        set "CONFIG_PATH=%~1"
+        shift
+    )
 )
 
 echo Using config: %CONFIG_PATH%

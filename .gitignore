@@ -141,6 +141,9 @@ multirotor/DDPG_Weight/training_visualizer_logs/
 multirotor/DDPG_Weight/logs/
 multirotor/Visualization/training_logs/
 analysis_results/
+output/
+tmp/
+tmp_thesis_extract.txt
 
 # ==================== 训练生成的模型和输出文件 ====================
 # DDPG权重预测模型（带时间戳的训练输出）
