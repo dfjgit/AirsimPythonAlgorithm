@@ -21,6 +21,7 @@ echo.
 echo === DQN移动控制训练 ===
 echo   [7] 训练移动DQN (真实AirSim环境 - 新建模型) [可以使用]
 echo   [8] 训练移动DQN (真实AirSim环境 - 继续训练) [可以使用]
+echo   [R] 训练移动DQN (真实AirSim环境 - 重跑当前 stage02)
 echo   [H] 训练分层DQN (离线/Mock模式)
 echo   [F] 训练分层DQN (AirSim融合模式) [新功能]
 echo   [D] 测试移动DQN模型 [可以使用]
@@ -39,7 +40,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A-H): 
+set /p choice=请输入选项 (0-9,A-H,R):
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_ddpg
@@ -49,6 +50,7 @@ if /i "%choice%"=="5" goto train_weight_airsim_resume
 if /i "%choice%"=="6" goto train_weight_crazyflie_logs
 if /i "%choice%"=="7" goto train_movement_airsim_fresh
 if /i "%choice%"=="8" goto train_movement_airsim_resume
+if /i "%choice%"=="R" goto train_movement_airsim_rerun_stage02
 if /i "%choice%"=="H" goto train_hierarchical_dqn
 if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="D" goto test_movement_dqn
@@ -153,6 +155,30 @@ if not exist "%~dp0multirotor\DQN_Movement\models\movement_dqn_airsim_final.zip"
 set "USE_PRETRAINED=1"
 call scripts\Train_DQN_Movement_Real_Environment.bat
 set "USE_PRETRAINED="
+goto menu
+
+:train_movement_airsim_rerun_stage02
+cls
+echo ============================================================
+echo DQN移动控制训练 (真实AirSim环境 - 重跑当前 stage02)
+echo ============================================================
+echo.
+if not exist "%~dp0multirotor\DQN_Movement\models\movement_dqn_airsim_final.zip" if not exist "%~dp0multirotor\DQN_Movement\models\movement_dqn_final.zip" if not exist "%~dp0multirotor\DQN_Movement\scripts\models\movement_dqn_airsim_final.zip" if not exist "%~dp0multirotor\DQN_Movement\scripts\models\movement_dqn_final.zip" (
+    echo [错误] 未找到可继续训练的 DQN 模型。
+    echo.
+    pause
+    goto menu
+)
+echo [提示] 此入口会在保留当前模型的基础上，将本次训练固定记为 stage02_finetune。
+echo [提示] 这适用于重跑一轮干净的 DQN stage02，用来替换旧的错位 stage02 数据。
+echo.
+set "USE_PRETRAINED=1"
+set "TRAIN_STAGE_NAME=stage02_finetune"
+set "TRAIN_STAGE_INDEX=2"
+call scripts\Train_DQN_Movement_Real_Environment.bat
+set "USE_PRETRAINED="
+set "TRAIN_STAGE_NAME="
+set "TRAIN_STAGE_INDEX="
 goto menu
 
 :train_hierarchical_dqn

@@ -424,11 +424,13 @@ class DQNVisualizationCallback(BaseCallback):
             return True
         try:
             current_episode_index = int(self.episode_count)
+            env_episode_from_env = False
             try:
                 if self.training_env is not None and hasattr(self.training_env, 'get_attr'):
                     env_episode_values = self.training_env.get_attr('episode_index')
                     if env_episode_values:
                         current_episode_index = int(env_episode_values[0])
+                        env_episode_from_env = True
             except Exception:
                 pass
             action = None
@@ -493,10 +495,15 @@ class DQNVisualizationCallback(BaseCallback):
                 terminal_reason = str(info.get('last_done_reason') or '').strip()
                 data_collector = getattr(self.server, 'data_collector', None)
                 if terminal_reason and data_collector is not None:
+                    terminal_episode_index = int(current_episode_index)
+                    if env_episode_from_env and terminal_episode_index > 1:
+                        # VecEnv 在 done 后可能已经自动 reset，
+                        # 此时 get_attr('episode_index') 读到的是下一轮 episode。
+                        terminal_episode_index -= 1
                     try:
                         with data_collector.external_data_lock:
                             data_collector.external_data['reset_reason'] = terminal_reason
-                            data_collector.external_data['terminal_episode'] = current_episode_index
+                            data_collector.external_data['terminal_episode'] = terminal_episode_index
                             data_collector.external_data['terminal_reset_reason'] = terminal_reason
                             data_collector.external_data['terminal_collision_count'] = int(
                                 info.get('collision_count', 0) or 0
@@ -526,7 +533,7 @@ class DQNVisualizationCallback(BaseCallback):
                         pass
 
             # 写入到server，供IPC外部可视化快照读取
-            self.server.current_training_stats = {
+            current_stats_patch = {
                 'timestep': int(getattr(self, 'num_timesteps', 0)),
                 'total_steps': self.total_steps,
                 'current_episode_steps': self.current_episode_steps,
@@ -551,6 +558,13 @@ class DQNVisualizationCallback(BaseCallback):
                     name: dict(values) for name, values in self.per_drone_actions.items()
                 },
             }
+            try:
+                with self.server._training_stats_lock:
+                    merged_stats = dict(getattr(self.server, 'current_training_stats', {}) or {})
+                    merged_stats.update(current_stats_patch)
+                    self.server.current_training_stats = merged_stats
+            except Exception:
+                self.server.current_training_stats = current_stats_patch
             # 强制快照缓存失效
             try:
                 self.server._vis_snapshot_cache = None
