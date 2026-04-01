@@ -263,6 +263,9 @@ class MovementEnv(gym.Env):
         
         if seed is not None:
             np.random.seed(seed)
+
+        if self.server and hasattr(self.server, 'reset_episode_timer'):
+            self.server.reset_episode_timer()
         
         # 首次重置：跳过环境重置（因为无人机刚起飞，领导者刚开始移动）
         if self._first_reset:
@@ -1124,6 +1127,9 @@ class MultiDroneMovementEnv(gym.Env):
 
         if seed is not None:
             np.random.seed(seed)
+
+        if self.server and hasattr(self.server, 'reset_episode_timer'):
+            self.server.reset_episode_timer()
 
         if self._first_reset:
             self._first_reset = False

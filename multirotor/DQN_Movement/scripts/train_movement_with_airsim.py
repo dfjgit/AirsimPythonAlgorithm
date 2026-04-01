@@ -424,6 +424,13 @@ class DQNVisualizationCallback(BaseCallback):
             return True
         try:
             current_episode_index = int(self.episode_count)
+            try:
+                if self.training_env is not None and hasattr(self.training_env, 'get_attr'):
+                    env_episode_values = self.training_env.get_attr('episode_index')
+                    if env_episode_values:
+                        current_episode_index = int(env_episode_values[0])
+            except Exception:
+                pass
             action = None
             if 'actions' in self.locals and len(self.locals['actions']) > 0:
                 action = int(self.locals['actions'][0])

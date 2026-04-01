@@ -478,6 +478,7 @@ class DataCollector:
         self.external_data['terminal_collision_penetration_depth'] = 0.0
         self.external_data['terminal_collision_position'] = ''
         self.external_data['terminal_recent_trajectory'] = ''
+        self.external_data['reset_reason'] = ''
 
     def _consume_terminal_meta(self, episode: int):
         """按 episode 取出锁存的终止元数据。"""
@@ -801,7 +802,7 @@ class DataCollector:
                     valid_step_frame = current_episode_int >= 0 and current_step_int > 0
                     latched_terminal_meta = self.terminal_episode_meta.get(current_episode_int)
                     terminal_reason = (
-                        str((latched_terminal_meta or {}).get('reset_reason', reset_reason)).strip()
+                        str((latched_terminal_meta or {}).get('reset_reason', '')).strip()
                         if valid_step_frame
                         else ""
                     )

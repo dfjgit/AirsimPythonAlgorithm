@@ -508,6 +508,13 @@ class MultiDroneAlgorithmServer:
                 self.current_training_stats["max_reward"] = 0.0
                 self.current_training_stats["min_reward"] = 0.0
 
+    def reset_episode_timer(self):
+        """Reset per-episode timing stats without changing training behavior."""
+        with self._training_stats_lock:
+            self._episode_start_time = _time.time()
+            self.current_training_stats["episode_elapsed_time"] = 0.0
+            self.current_training_stats["current_episode_steps"] = 0
+
         if self.data_collector:
             self.data_collector.set_external_data("episode", episode)
             self.data_collector.set_external_data("step", step)
