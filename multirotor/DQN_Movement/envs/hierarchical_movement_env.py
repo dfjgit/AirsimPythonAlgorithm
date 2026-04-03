@@ -167,64 +167,6 @@ class HierarchicalMovementEnv(gym.Env):
             if u_key in base_rewards:
                 self.config['rewards'][local_key] = float(base_rewards[u_key])
 
-    def _apply_unified_config(self):
-        """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        unified_env_cfg = None
-        
-        # 1. 尝试从 server 获取 (最优先)
-        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
-            unified_env_cfg = self.server.config_data.env_config
-        else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
-            try:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
-                if os.path.exists(scanner_cfg_path):
-                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
-            except Exception as e:
-                logger.warning(f"无法加载统一环境配置: {e}")
-
-        if not unified_env_cfg:
-            # 使用默认终止配置
-            self.term_cfg = self.config.get('termination_config', {
-                "target_scan_ratio": 0.95,
-                "max_collision_count": 1,
-                "max_elapsed_time_sec": 300.0,
-                "stagnation_timeout_sec": 30.0
-            })
-            return
-
-        # --- A. 应用终止阈值 ---
-        self.term_cfg = unified_env_cfg.get('termination', self.config.get('termination_config', {}))
-        
-        # --- B. 应用电量阈值 ---
-        battery_cfg = unified_env_cfg.get('battery', {})
-        if 'thresholds' not in self.config: self.config['thresholds'] = {}
-        
-        self.config['thresholds']['battery_low_threshold'] = battery_cfg.get('low_threshold', 3.5)
-        self.config['thresholds']['battery_optimal_min'] = battery_cfg.get('optimal_min', 3.7)
-        self.config['thresholds']['battery_optimal_max'] = battery_cfg.get('optimal_max', 4.1)
-        
-        # --- C. 应用基础奖励系数 ---
-        base_rewards = unified_env_cfg.get('base_rewards', {})
-        if 'rewards' not in self.config: self.config['rewards'] = {}
-        
-        # 映射统一奖励到本地配置
-        reward_map = {
-            'scan_reward': 'exploration',           # 新扫描奖励
-            'out_of_range_penalty': 'out_of_range', # 越界惩罚
-            'battery_low_penalty': 'battery_low_penalty',
-            'battery_optimal_reward': 'battery_optimal_reward',
-            'collision_penalty': 'collision',
-            'step_penalty': 'step_penalty'
-        }
-        
-        for u_key, local_key in reward_map.items():
-            if u_key in base_rewards:
-                self.config['rewards'][local_key] = float(base_rewards[u_key])
-
     def _load_config(self, config_path):
         if config_path is None:
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -858,64 +800,6 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         self.total_episode_reward = 0
         self.episode_index = 0  # 新增：用于 DataCollector 的 Episode 计数
         self._first_reset = True
-
-    def _apply_unified_config(self):
-        """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        unified_env_cfg = None
-        
-        # 1. 尝试从 server 获取 (最优先)
-        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
-            unified_env_cfg = self.server.config_data.env_config
-        else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
-            try:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
-                if os.path.exists(scanner_cfg_path):
-                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
-            except Exception as e:
-                logger.warning(f"无法加载统一环境配置: {e}")
-
-        if not unified_env_cfg:
-            # 使用默认终止配置
-            self.term_cfg = self.config.get('termination_config', {
-                "target_scan_ratio": 0.95,
-                "max_collision_count": 1,
-                "max_elapsed_time_sec": 300.0,
-                "stagnation_timeout_sec": 30.0
-            })
-            return
-
-        # --- A. 应用终止阈值 ---
-        self.term_cfg = unified_env_cfg.get('termination', self.config.get('termination_config', {}))
-        
-        # --- B. 应用电量阈值 ---
-        battery_cfg = unified_env_cfg.get('battery', {})
-        if 'thresholds' not in self.config: self.config['thresholds'] = {}
-        
-        self.config['thresholds']['battery_low_threshold'] = battery_cfg.get('low_threshold', 3.5)
-        self.config['thresholds']['battery_optimal_min'] = battery_cfg.get('optimal_min', 3.7)
-        self.config['thresholds']['battery_optimal_max'] = battery_cfg.get('optimal_max', 4.1)
-        
-        # --- C. 应用基础奖励系数 ---
-        base_rewards = unified_env_cfg.get('base_rewards', {})
-        if 'rewards' not in self.config: self.config['rewards'] = {}
-        
-        # 映射统一奖励到本地配置
-        reward_map = {
-            'scan_reward': 'exploration',           # 新扫描奖励
-            'out_of_range_penalty': 'out_of_range', # 越界惩罚
-            'battery_low_penalty': 'battery_low_penalty',
-            'battery_optimal_reward': 'battery_optimal_reward',
-            'collision_penalty': 'collision',
-            'step_penalty': 'step_penalty'
-        }
-        
-        for u_key, local_key in reward_map.items():
-            if u_key in base_rewards:
-                self.config['rewards'][local_key] = float(base_rewards[u_key])
 
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""

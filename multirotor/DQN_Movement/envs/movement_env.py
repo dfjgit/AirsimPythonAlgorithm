@@ -68,6 +68,350 @@ def _apply_low_altitude_guard(server, drone_name, displacement, config, action_s
     return displacement
 
 
+_SHARED_REWARD_DEFAULTS = {
+    "exploration": 10.0,
+    "collision": -50.0,
+    "out_of_range": -30.0,
+    "smooth_movement": 1.0,
+    "entropy_reduction": 5.0,
+    "high_entropy_exploration": 5.0,
+    "entropy_gradient_bonus": 2.0,
+    "step_penalty": -0.1,
+    "success": 100.0,
+    "height_penalty": -5.0,
+    "optimal_height_bonus": 1.0,
+}
+
+_UNIFIED_REWARD_MAP = {
+    "scan_reward": "exploration",
+    "out_of_range_penalty": "out_of_range",
+    "battery_low_penalty": "battery_low_penalty",
+    "battery_optimal_reward": "battery_optimal_reward",
+    "collision_penalty": "collision",
+    "step_penalty": "step_penalty",
+}
+
+
+def _default_movement_config(success_scan_ratio: float) -> dict:
+    """Shared default config for single- and multi-drone movement envs."""
+    return {
+        "movement": {
+            "step_size": 1.0,
+            "max_steps": 500
+        },
+        "rewards": dict(_SHARED_REWARD_DEFAULTS),
+        "thresholds": {
+            "collision_distance": 2.0,
+            "scanned_entropy": 30.0,
+            "nearby_entropy_distance": 10.0,
+            "success_scan_ratio": success_scan_ratio,
+            "high_entropy_threshold": 40.0,
+            "min_scan_height": 2.0,
+            "max_scan_height": 15.0,
+            "optimal_scan_height": 8.0
+        }
+    }
+
+
+def _load_movement_config(config_path, default_success_scan_ratio: float):
+    """Load movement DQN config or fall back to a shared default config."""
+    if config_path is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(current_dir, "..", "configs", "movement_dqn_config.json")
+
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return _default_movement_config(default_success_scan_ratio)
+
+
+def _apply_shared_unified_config(server, config, fallback_term_cfg):
+    """Apply shared unified termination, battery and reward defaults."""
+    unified_env_cfg = None
+
+    if server and hasattr(server, 'config_data') and hasattr(server.config_data, 'env_config'):
+        unified_env_cfg = server.config_data.env_config
+    else:
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
+            if os.path.exists(scanner_cfg_path):
+                with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    unified_env_cfg = data.get('env_config')
+        except Exception as e:
+            logger.warning(f"无法加载统一环境配置: {e}")
+
+    if not unified_env_cfg:
+        return config.get('termination_config', dict(fallback_term_cfg))
+
+    merged_term_cfg = dict(unified_env_cfg.get('termination', {}))
+    merged_term_cfg.update(config.get('termination_config', {}))
+
+    battery_cfg = unified_env_cfg.get('battery', {})
+    config.setdefault('thresholds', {})
+    config['thresholds']['battery_low_threshold'] = battery_cfg.get('low_threshold', 3.5)
+    config['thresholds']['battery_optimal_min'] = battery_cfg.get('optimal_min', 3.7)
+    config['thresholds']['battery_optimal_max'] = battery_cfg.get('optimal_max', 4.1)
+
+    base_rewards = unified_env_cfg.get('base_rewards', {})
+    config.setdefault('rewards', {})
+    for unified_key, local_key in _UNIFIED_REWARD_MAP.items():
+        if unified_key in base_rewards and local_key not in config['rewards']:
+            config['rewards'][local_key] = float(base_rewards[unified_key])
+
+    return merged_term_cfg
+
+
+def _reset_episode_timer_if_available(server) -> None:
+    if server and hasattr(server, 'reset_episode_timer'):
+        server.reset_episode_timer()
+
+
+def _reset_battery_for_drones(server, drone_names) -> None:
+    if not server or not hasattr(server, 'reset_battery_voltage'):
+        return
+    for drone_name in drone_names:
+        server.reset_battery_voltage(drone_name)
+
+
+def _reset_world_for_env(server, drone_names, env_tag: str, reason: str, ready_warn_msg: str, done_msg: str) -> None:
+    if not server:
+        return
+    server.reset_environment(reason=f"{env_tag}_{reason}", reset_grid=True)
+    _reset_battery_for_drones(server, drone_names)
+    ready = _wait_for_server_ready(server, drone_names, timeout_sec=12.0)
+    if not ready:
+        print(ready_warn_msg)
+    print(done_msg)
+
+
+def _new_multidrone_episode_state(prev_scanned_cells: int = 0, prev_entropy_sum: float = 0.0) -> dict:
+    return {
+        'prev_scanned_cells': prev_scanned_cells,
+        'prev_position': None,
+        'prev_entropy_sum': prev_entropy_sum,
+        'collision_count': 0,
+        'out_of_range_count': 0,
+        'out_of_range_steps': 0,
+        'out_of_range_duration_sec': 0.0,
+        'oob_started_at': None,
+        'severe_out_of_range_hits': 0,
+        'landed_hits': 0,
+        'idle_hits': 0,
+        'no_scan_hits': 0,
+        'oob_no_return_hits': 0,
+        'episode_reward': 0
+    }
+
+
+def _set_done_reason(env, reason: str, log_prefix: str) -> bool:
+    env.last_done_reason = reason
+    print(f"{log_prefix} {reason}")
+    return True
+
+
+def _check_basic_episode_done(env, elapsed_time: float, scan_ratio: float, total_collisions: int, log_prefix: str) -> bool:
+    if elapsed_time >= env.term_cfg['max_elapsed_time_sec']:
+        return _set_done_reason(
+            env,
+            f"Timeout ({elapsed_time:.1f}s >= {env.term_cfg['max_elapsed_time_sec']}s)",
+            log_prefix
+        )
+
+    if scan_ratio >= env.term_cfg['target_scan_ratio']:
+        return _set_done_reason(
+            env,
+            f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {env.term_cfg['target_scan_ratio']:.2%})",
+            log_prefix
+        )
+
+    if total_collisions >= env.term_cfg['max_collision_count']:
+        return _set_done_reason(
+            env,
+            f"Collision Limit Reached ({total_collisions} >= {env.term_cfg['max_collision_count']})",
+            log_prefix
+        )
+
+    return False
+
+
+def _get_battery_empty_reason(server, drone_name: str):
+    if not server or not hasattr(server, "battery_manager"):
+        return None
+    battery_info = server.battery_manager.get_battery_info(drone_name)
+    if not battery_info:
+        return None
+    current_voltage = float(getattr(battery_info, "voltage", 4.2))
+    battery_status = getattr(battery_info, "status", None)
+    if current_voltage <= 3.2 + 1e-6 or battery_status == BatteryStatus.EMPTY:
+        return f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
+    return None
+
+
+def _get_landed_reason(server, drone_name: str):
+    if not server or not hasattr(server, 'drone_controller'):
+        return None
+    state = server.drone_controller.get_vehicle_state(drone_name)
+    if not state.get("flying", True):
+        return f"Drone {drone_name} Landed (Physics)"
+    return None
+
+
+def _get_leader_distance_stats(server, drone_name: str, severe_ratio: float):
+    if not server:
+        return None
+    with server.data_lock:
+        rd = server.unity_runtime_data.get(drone_name)
+        if not (rd and rd.position and rd.leader_position and rd.leader_scan_radius > 0):
+            return None
+        dist = np.sqrt(
+            (rd.position.x - rd.leader_position.x) ** 2 +
+            (rd.position.y - rd.leader_position.y) ** 2 +
+            (rd.position.z - rd.leader_position.z) ** 2
+        )
+        threshold = rd.leader_scan_radius * severe_ratio
+        is_currently_oob = dist > rd.leader_scan_radius
+        return float(dist), float(threshold), bool(is_currently_oob)
+
+
+def _get_grid_stats(server, scanned_entropy_threshold: float):
+    """Return scanned cell count, total cell count and entropy sum from the shared grid."""
+    if not server or not getattr(server, 'grid_data', None):
+        return 0, 0, 0.0
+
+    try:
+        with server.grid_lock:
+            cells = list(server.grid_data.cells)
+            total = len(cells)
+            scanned = sum(1 for cell in cells if cell.entropy < scanned_entropy_threshold)
+            entropy_sum = sum(cell.entropy for cell in cells)
+            return scanned, total, entropy_sum
+    except Exception:
+        return 0, 0, 0.0
+
+
+def _get_battery_info_array(server, drone_name: str, normalize_percentage: bool = False):
+    """Return battery info as [voltage, percentage], optionally normalized to 0-1."""
+    default_percentage = 1.0 if normalize_percentage else 100.0
+    if not server or not hasattr(server, 'get_battery_voltage'):
+        return np.array([4.2, default_percentage], dtype=np.float32)
+
+    try:
+        voltage = server.get_battery_voltage(drone_name)
+        battery_info = server.battery_manager.get_battery_info(drone_name)
+        if battery_info:
+            percentage = float(battery_info.get_remaining_percentage())
+            if normalize_percentage:
+                percentage /= 100.0
+            return np.array([voltage, percentage], dtype=np.float32)
+        return np.array([voltage, default_percentage], dtype=np.float32)
+    except Exception:
+        return np.array([4.2, default_percentage], dtype=np.float32)
+
+
+def _get_entropy_info_array(grid_data, position, nearby_distance: float):
+    """Return [mean, max, std] entropy stats for nearby cells."""
+    try:
+        nearby_cells = [
+            cell for cell in grid_data.cells
+            if (cell.center - position).magnitude() < nearby_distance
+        ]
+        if nearby_cells:
+            entropies = [cell.entropy for cell in nearby_cells]
+            return np.array([
+                float(np.mean(entropies)),
+                float(np.max(entropies)),
+                float(np.std(entropies)),
+            ], dtype=np.float32)
+    except Exception:
+        pass
+    return np.array([50.0, 50.0, 0.0], dtype=np.float32)
+
+
+def _get_scan_info_array(grid_data, scanned_threshold: float):
+    """Return [scan_ratio, scanned_ratio, unscanned_ratio] from grid cells."""
+    try:
+        total_cells = len(grid_data.cells)
+        if total_cells <= 0:
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        scanned_count = sum(1 for cell in grid_data.cells if cell.entropy < scanned_threshold)
+        unscanned_count = total_cells - scanned_count
+        scan_ratio = float(scanned_count) / float(total_cells)
+        scanned_ratio = float(scanned_count) / float(total_cells)
+        unscanned_ratio = float(unscanned_count) / float(total_cells)
+        return np.array([scan_ratio, scanned_ratio, unscanned_ratio], dtype=np.float32)
+    except Exception:
+        return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+
+def _compute_action_intensity(action_map, action, action_step: float) -> float:
+    """Normalize action magnitude into [0, 1] for battery consumption."""
+    step_norm = float(np.linalg.norm(action_map[action]))
+    base_step = max(float(action_step), 1e-6)
+    return min(1.0, max(0.0, step_norm / base_step))
+
+
+def _compute_height_reward(current_height: float, cfg_thresh, cfg_reward, made_progress: bool = True, require_progress_for_optimal_bonus: bool = False) -> float:
+    """Shared height shaping used by single- and multi-drone DQN envs."""
+    min_scan_height = cfg_thresh.get('min_scan_height', 2.0)
+    max_scan_height = cfg_thresh.get('max_scan_height', 15.0)
+    optimal_height = cfg_thresh.get('optimal_scan_height', 8.0)
+    height_penalty_base = cfg_reward.get('height_penalty', -5.0)
+
+    if current_height < min_scan_height:
+        return height_penalty_base * (min_scan_height - current_height)
+    if current_height > max_scan_height:
+        return height_penalty_base * (current_height - max_scan_height)
+    if abs(current_height - optimal_height) < 1.5:
+        if (not require_progress_for_optimal_bonus) or made_progress:
+            return cfg_reward.get('optimal_height_bonus', 1.0)
+    return 0.0
+
+
+def _compute_battery_reward_and_update(server, drone_name: str, cfg_thresh, cfg_reward, action_intensity: float, made_progress: bool = True, require_progress_for_optimal_bonus: bool = False) -> float:
+    """Shared battery shaping and consumption update."""
+    if not server or not hasattr(server, 'get_battery_voltage'):
+        return 0.0
+
+    reward = 0.0
+    try:
+        current_voltage = server.get_battery_voltage(drone_name)
+        battery_info = server.battery_manager.get_battery_info(drone_name)
+        if battery_info:
+            if 'battery_low_threshold' in cfg_thresh and current_voltage < cfg_thresh['battery_low_threshold']:
+                reward -= cfg_reward.get('battery_low_penalty', 10.0)
+
+            if 'battery_optimal_min' in cfg_thresh and 'battery_optimal_max' in cfg_thresh:
+                opt_min = cfg_thresh['battery_optimal_min']
+                opt_max = cfg_thresh['battery_optimal_max']
+                if opt_min <= current_voltage <= opt_max:
+                    if (not require_progress_for_optimal_bonus) or made_progress:
+                        reward += cfg_reward.get('battery_optimal_reward', 2.0)
+
+        if hasattr(server, 'update_battery_voltage'):
+            server.update_battery_voltage(drone_name, action_intensity)
+    except Exception:
+        return reward
+    return reward
+
+
+def _compute_local_entropy_bonus(local_avg_entropy: float, prev_local_avg_entropy: float, local_max_entropy: float, cfg_thresh, cfg_reward, stability_factor: float, made_progress: bool = True, gate_high_entropy_with_progress: bool = False) -> float:
+    """Shared local entropy exploration shaping."""
+    reward = 0.0
+
+    if local_max_entropy > cfg_thresh.get('high_entropy_threshold', 40.0):
+        if (not gate_high_entropy_with_progress) or made_progress:
+            reward += cfg_reward.get('high_entropy_exploration', 5.0) * stability_factor
+
+    entropy_increase = local_avg_entropy - prev_local_avg_entropy
+    if entropy_increase > 0:
+        if made_progress:
+            reward += entropy_increase * cfg_reward.get('entropy_gradient_bonus', 2.0) * stability_factor
+
+    return reward
+
+
 class MovementEnv(gym.Env):
     """
     无人机移动学习环境
@@ -151,108 +495,24 @@ class MovementEnv(gym.Env):
     
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        unified_env_cfg = None
-        
-        # 1. 尝试从 server 获取 (最优先)
-        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
-            unified_env_cfg = self.server.config_data.env_config
-        else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
-            try:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
-                if os.path.exists(scanner_cfg_path):
-                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
-            except Exception as e:
-                logger.warning(f"无法加载统一环境配置: {e}")
-
-        if not unified_env_cfg:
-            # 使用默认终止配置
-            self.term_cfg = self.config.get('termination_config', {
+        self.term_cfg = _apply_shared_unified_config(
+            self.server,
+            self.config,
+            {
                 "target_scan_ratio": 0.25,
                 "max_collision_count": 15,
                 "max_elapsed_time_sec": 300.0,
                 "stagnation_timeout_sec": 30.0
-            })
-            return
-
-        # DQN 本地配置优先，统一环境配置只作为缺省值。
-        merged_term_cfg = dict(unified_env_cfg.get('termination', {}))
-        merged_term_cfg.update(self.config.get('termination_config', {}))
-        self.term_cfg = merged_term_cfg
-        
-        # --- B. 应用电量阈值 ---
-        battery_cfg = unified_env_cfg.get('battery', {})
-        if 'thresholds' not in self.config: self.config['thresholds'] = {}
-        
-        self.config['thresholds']['battery_low_threshold'] = battery_cfg.get('low_threshold', 3.5)
-        self.config['thresholds']['battery_optimal_min'] = battery_cfg.get('optimal_min', 3.7)
-        self.config['thresholds']['battery_optimal_max'] = battery_cfg.get('optimal_max', 4.1)
-        
-        # --- C. 应用基础奖励系数 ---
-        base_rewards = unified_env_cfg.get('base_rewards', {})
-        if 'rewards' not in self.config: self.config['rewards'] = {}
-        
-        # 映射统一奖励到本地配置
-        reward_map = {
-            'scan_reward': 'exploration',           # 新扫描奖励
-            'out_of_range_penalty': 'out_of_range', # 越界惩罚
-            'battery_low_penalty': 'battery_low_penalty',
-            'battery_optimal_reward': 'battery_optimal_reward',
-            'collision_penalty': 'collision',
-            'step_penalty': 'step_penalty'
-        }
-        
-        for u_key, local_key in reward_map.items():
-            if u_key in base_rewards and local_key not in self.config['rewards']:
-                self.config['rewards'][local_key] = float(base_rewards[u_key])
+            }
+        )
 
     def _load_config(self, config_path):
         """加载配置文件"""
-        if config_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(current_dir, "..", "configs", "movement_dqn_config.json")
-        
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        else:
-            # 返回默认配置
-            return self._default_config()
+        return _load_movement_config(config_path, 0.25)
     
     def _default_config(self):
         """默认配置"""
-        return {
-            "movement": {
-                "step_size": 1.0,
-                "max_steps": 500
-            },
-            "rewards": {
-                "exploration": 10.0,
-                "collision": -50.0,
-                "out_of_range": -30.0,
-                "smooth_movement": 1.0,
-                "entropy_reduction": 5.0,
-                "high_entropy_exploration": 5.0,
-                "entropy_gradient_bonus": 2.0,
-                "step_penalty": -0.1,
-                "success": 100.0,
-                "height_penalty": -5.0,
-                "optimal_height_bonus": 1.0
-            },
-            "thresholds": {
-                "collision_distance": 2.0,
-                "scanned_entropy": 30.0,
-                "nearby_entropy_distance": 10.0,
-                "success_scan_ratio": 0.25,
-                "high_entropy_threshold": 40.0,
-                "min_scan_height": 2.0,
-                "max_scan_height": 15.0,
-                "optimal_scan_height": 8.0
-            }
-        }
+        return _default_movement_config(0.25)
     
     def reset(self, seed=None, options=None):
         """重置环境"""
@@ -264,29 +524,27 @@ class MovementEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)
 
-        if self.server and hasattr(self.server, 'reset_episode_timer'):
-            self.server.reset_episode_timer()
+        _reset_episode_timer_if_available(self.server)
         
         # 首次重置：跳过环境重置（因为无人机刚起飞，领导者刚开始移动）
         if self._first_reset:
             self._first_reset = False
             print(f"[DQN环境] 🚀 首次reset，跳过环境重置，直接初始化状态")
             # 仅重置电量（确保电量从满电开始）
-            if self.server and hasattr(self.server, 'reset_battery_voltage'):
-                self.server.reset_battery_voltage(self.drone_name)
+            _reset_battery_for_drones(self.server, [self.drone_name])
         else:
             # 后续重置：执行完整的环境重置（Episode结束）
             if self.server:
                 reason = getattr(self, 'last_done_reason', 'manual')
                 print(f"[DQN环境] 🔄 Episode结束，执行完整环境重置... (原因: {reason})")
-                self.server.reset_environment(reason=f"MovementEnv_{reason}", reset_grid=True)
-                # 重置电量
-                if hasattr(self.server, 'reset_battery_voltage'):
-                    self.server.reset_battery_voltage(self.drone_name)
-                ready = _wait_for_server_ready(self.server, [self.drone_name], timeout_sec=12.0)
-                if not ready:
-                    print(f"[DQN环境] ⚠️ 重置后数据未完全就绪，继续尝试使用当前状态")
-                print(f"[DQN环境] ✅ 环境重置完成")
+                _reset_world_for_env(
+                    self.server,
+                    [self.drone_name],
+                    "MovementEnv",
+                    reason,
+                    "[DQN环境] ⚠️ 重置后数据未完全就绪，继续尝试使用当前状态",
+                    "[DQN环境] ✅ 环境重置完成"
+                )
         
         print(f"[DQN环境] 初始化状态...")
         self.prev_scanned_cells = self._count_scanned_cells()
@@ -604,37 +862,27 @@ class MovementEnv(gym.Env):
                 # 修正索引：0-2位置, 3-5速度, 6-8方向, 9-11熵信息
                 local_avg_entropy = next_state[9]  # 局部平均熵
                 local_max_entropy = next_state[10] # 局部最大熵
-                
-                # 奖励进入高熵区域的行为 (受稳定性系数影响)
-                if local_max_entropy > cfg_thresh.get('high_entropy_threshold', 40.0):
-                    entropy_exploration_bonus = cfg_reward.get('high_entropy_exploration', 5.0)
-                    reward += entropy_exploration_bonus * stability_factor
-                    
-                # 奖励向高熵方向移动 (受稳定性系数影响)
-                if self.prev_position:
-                    prev_local_avg_entropy = prev_state[9]
-                    entropy_increase = local_avg_entropy - prev_local_avg_entropy
-                    if entropy_increase > 0:
-                        entropy_gradient_reward = entropy_increase * cfg_reward.get('entropy_gradient_bonus', 2.0)
-                        reward += entropy_gradient_reward * stability_factor
+                prev_local_avg_entropy = prev_state[9] if (self.prev_position and prev_state is not None) else local_avg_entropy
+                reward += _compute_local_entropy_bonus(
+                    local_avg_entropy,
+                    prev_local_avg_entropy,
+                    local_max_entropy,
+                    cfg_thresh,
+                    cfg_reward,
+                    stability_factor,
+                    made_progress=True,
+                    gate_high_entropy_with_progress=False,
+                )
                 
                 # 4. 高度控制奖励/惩罚
                 current_height = pos.y # 修正：Unity中Y轴是高度
-                
-                # 检查是否在合理的扫描高度范围内
-                min_scan_height = cfg_thresh.get('min_scan_height', 2.0)
-                max_scan_height = cfg_thresh.get('max_scan_height', 15.0)
-                optimal_height = cfg_thresh.get('optimal_scan_height', 8.0)
-                
-                if current_height < min_scan_height:
-                    # 飞得太低
-                    reward += cfg_reward.get('height_penalty', -5.0) * (min_scan_height - current_height)
-                elif current_height > max_scan_height:
-                    # 飞得太高
-                    reward += cfg_reward.get('height_penalty', -5.0) * (current_height - max_height)
-                elif abs(current_height - optimal_height) < 1.5:
-                    # 在最佳扫描高度附近
-                    reward += cfg_reward.get('optimal_height_bonus', 1.0)
+                reward += _compute_height_reward(
+                    current_height,
+                    cfg_thresh,
+                    cfg_reward,
+                    made_progress=True,
+                    require_progress_for_optimal_bonus=False,
+                )
                 
                 # 5. 碰撞惩罚与容忍机制
                 min_dist = self._get_min_distance_to_others(runtime_data)
@@ -677,32 +925,16 @@ class MovementEnv(gym.Env):
                     reward += cfg_reward['success']
                 
                 # 10. 电量奖励与惩罚
-                if hasattr(self.server, 'get_battery_voltage'):
-                    current_voltage = self.server.get_battery_voltage(self.drone_name)
-                    battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
-                    if battery_info:
-                        remaining_pct = battery_info.get_remaining_percentage()
-                        
-                        # 电量过低惩罚
-                        if 'battery_low_threshold' in cfg_thresh and current_voltage < cfg_thresh['battery_low_threshold']:
-                            penalty = cfg_reward.get('battery_low_penalty', 10.0)
-                            reward -= penalty
-                        
-                        # 电量最优范围奖励
-                        if 'battery_optimal_min' in cfg_thresh and 'battery_optimal_max' in cfg_thresh:
-                            if cfg_thresh['battery_optimal_min'] <= current_voltage <= cfg_thresh['battery_optimal_max']:
-                                bonus = cfg_reward.get('battery_optimal_reward', 2.0)
-                                reward += bonus
-                
-                # 每个动作都更新电量消耗
-                if hasattr(self.server, 'update_battery_voltage'):
-                    # 计算动作强度（位移长度归一化）
-                    # 在 step 函数中已经根据 action 计算好了 displacement
-                    # displacement 是 NumPy 数组: [dx, dy, dz]
-                    step_norm = float(np.linalg.norm(self.action_map[action]))
-                    base_step = max(self.action_step, 1e-6)
-                    action_intensity = min(1.0, max(0.0, step_norm / base_step))
-                    self.server.update_battery_voltage(self.drone_name, action_intensity)
+                action_intensity = _compute_action_intensity(self.action_map, action, self.action_step)
+                reward += _compute_battery_reward_and_update(
+                    self.server,
+                    self.drone_name,
+                    cfg_thresh,
+                    cfg_reward,
+                    action_intensity,
+                    made_progress=True,
+                    require_progress_for_optimal_bonus=False,
+                )
                 
         except Exception as e:
             print(f"计算奖励失败: {str(e)}")
@@ -714,21 +946,15 @@ class MovementEnv(gym.Env):
         elapsed_time = time.time() - self.episode_start_time
         cfg_thresh = self.config.get('thresholds', {})
 
-        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
-            print(f"[??] {self.last_done_reason}")
-            return True
-
         scan_ratio = self._get_scan_ratio()
-        if scan_ratio >= self.term_cfg['target_scan_ratio']:
-            self.last_done_reason = f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%})"
-            print(f"[??] {self.last_done_reason}")
-            return True
-
-        total_collisions = sum(state['collision_count'] for state in self.drone_states.values())
-        if total_collisions >= self.term_cfg['max_collision_count']:
-            self.last_done_reason = f"Collision Limit Reached ({total_collisions} >= {self.term_cfg['max_collision_count']})"
-            print(f"[??] {self.last_done_reason}")
+        total_collisions = int(self.collision_count)
+        if _check_basic_episode_done(
+            self,
+            elapsed_time,
+            scan_ratio,
+            total_collisions,
+            "[DQN Done]"
+        ):
             return True
 
         terminate_on_out_of_range = bool(cfg_thresh.get('terminate_on_out_of_range', True))
@@ -742,106 +968,71 @@ class MovementEnv(gym.Env):
         severe_ratio = float(cfg_thresh.get('severe_out_of_range_ratio', 1.05))
 
         if self.server:
-            for drone_name in self.drone_names:
-                try:
-                    state = self.server.drone_controller.get_vehicle_state(drone_name)
-                    if not state.get("flying", True):
-                        self.last_done_reason = f"Drone {drone_name} Landed (Physics)"
-                        print(f"[??] {self.last_done_reason}")
-                        return True
+            drone_name = self.drone_name
+            try:
+                landed_reason = _get_landed_reason(self.server, drone_name)
+                if landed_reason:
+                    return _set_done_reason(self, landed_reason, "[DQN Done]")
 
-                    drone_state = self.drone_states.get(drone_name, {})
-                    current_oob_steps = int(drone_state.get('out_of_range_steps', 0))
-                    if current_oob_steps > 0 and terminate_on_out_of_range:
-                        self.last_done_reason = (
-                            f"Drone {drone_name} Out of Range Reset "
-                            f"(steps={current_oob_steps})"
+                current_oob_steps = int(self.out_of_range_steps)
+                if current_oob_steps > 0 and terminate_on_out_of_range:
+                    return _set_done_reason(
+                        self,
+                        f"Drone {drone_name} Out of Range Reset (steps={current_oob_steps})",
+                        "[DQN Done]"
+                    )
+
+                if current_oob_steps >= max_oob_steps and terminate_on_out_of_range:
+                    return _set_done_reason(
+                        self,
+                        f"Drone {drone_name} Out of Range Too Long ({current_oob_steps} >= {max_oob_steps})",
+                        "[DQN Done]"
+                    )
+
+                leader_stats = _get_leader_distance_stats(self.server, drone_name, severe_ratio)
+                if leader_stats is not None:
+                    dist, threshold, _ = leader_stats
+                    if dist > threshold:
+                        return _set_done_reason(
+                            self,
+                            f"Drone {drone_name} Severe Out of Range ({dist:.1f}m > {threshold:.1f}m)",
+                            "[DQN Done]"
                         )
-                        print(f"[??] {self.last_done_reason}")
-                        return True
 
-                    if current_oob_steps >= max_oob_steps and terminate_on_out_of_range:
-                        self.last_done_reason = (
-                            f"Drone {drone_name} Out of Range Too Long "
-                            f"({current_oob_steps} >= {max_oob_steps})"
-                        )
-                        print(f"[??] {self.last_done_reason}")
-                        return True
-
-                    with self.server.data_lock:
-                        rd = self.server.unity_runtime_data.get(drone_name)
-                        if rd and rd.position and rd.leader_position and rd.leader_scan_radius > 0:
-                            dist = np.sqrt(
-                                (rd.position.x - rd.leader_position.x) ** 2 +
-                                (rd.position.y - rd.leader_position.y) ** 2 +
-                                (rd.position.z - rd.leader_position.z) ** 2
-                            )
-                            threshold = rd.leader_scan_radius * severe_ratio
-                            if dist > threshold:
-                                self.last_done_reason = (
-                                    f"Drone {drone_name} Severe Out of Range "
-                                    f"({dist:.1f}m > {threshold:.1f}m)"
-                                )
-                                print(f"[??] {self.last_done_reason}")
-                                return True
-
-                    if hasattr(self.server, "battery_manager"):
-                        battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                        if battery_info:
-                            current_voltage = float(getattr(battery_info, "voltage", 4.2))
-                            battery_status = getattr(battery_info, "status", None)
-                            if current_voltage <= 3.2 + 1e-6 or battery_status == BatteryStatus.EMPTY:
-                                self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
-                                print(f"[??] {self.last_done_reason}")
-                                return True
-                except Exception as exc:
-                    logger.debug(f"Done check skipped for {drone_name}: {exc}")
-                    continue
+                battery_reason = _get_battery_empty_reason(self.server, drone_name)
+                if battery_reason:
+                    return _set_done_reason(self, battery_reason, "[DQN Done]")
+            except Exception as exc:
+                logger.debug(f"Done check skipped for {drone_name}: {exc}")
 
         return False
 
     def _count_scanned_cells(self):
         """统计已扫描单元格数量"""
-        if not self.server or not self.server.grid_data:
-            return 0
-            
-        try:
-            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
-                return sum(
-                    1 for cell in self.server.grid_data.cells
-                    if cell.entropy < self.config['thresholds']['scanned_entropy']
-                )
-        except:
-            return 0
+        scanned, _, _ = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        return scanned
         
     def _get_total_entropy(self):
         """获取总熙值"""
-        if not self.server or not self.server.grid_data:
-            return 0.0
-            
-        try:
-            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
-                return sum(cell.entropy for cell in self.server.grid_data.cells)
-        except:
-            return 0.0
+        _, _, entropy_sum = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        return entropy_sum
         
     def _get_scan_ratio(self):
         """获取扫描完成比例"""
-        if not self.server or not self.server.grid_data:
+        scanned, total, _ = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        if total <= 0:
             return 0.0
-            
-        try:
-            with self.server.grid_lock:  # 使用 grid_lock 而不是 data_lock
-                total = len(self.server.grid_data.cells)
-                if total == 0:
-                    return 0.0
-                scanned = sum(
-                    1 for cell in self.server.grid_data.cells
-                    if cell.entropy < self.config['thresholds']['scanned_entropy']
-                )
-                return scanned / total
-        except:
-            return 0.0
+        return scanned / total
+
+    def _get_entropy_info(self, grid_data, position):
+        """获取局部熵统计信息：[平均熵, 最大熵, 熵标准差]"""
+        nearby_distance = self.config['thresholds']['nearby_entropy_distance']
+        return _get_entropy_info_array(grid_data, position, nearby_distance)
+
+    def _get_scan_info(self, grid_data):
+        """获取扫描信息：[扫描比例, 已扫描比例, 未扫描比例]"""
+        scanned_threshold = self.config['thresholds']['scanned_entropy']
+        return _get_scan_info_array(grid_data, scanned_threshold)
     
     def _get_min_distance_to_others(self, runtime_data):
         """获取到其他无人机的最小距离"""
@@ -861,19 +1052,7 @@ class MovementEnv(gym.Env):
     
     def _get_battery_info(self):
         """获取电量信息：[电压, 剩余百分比]"""
-        if not self.server or not hasattr(self.server, 'get_battery_voltage'):
-            return np.array([4.2, 100.0], dtype=np.float32)  # 默认值：满电
-        
-        try:
-            voltage = self.server.get_battery_voltage(self.drone_name)
-            battery_info = self.server.battery_manager.get_battery_info(self.drone_name)
-            if battery_info:
-                percentage = battery_info.get_remaining_percentage()
-                return np.array([voltage, percentage], dtype=np.float32)
-            else:
-                return np.array([voltage, 100.0], dtype=np.float32)
-        except:
-            return np.array([4.2, 100.0], dtype=np.float32)
+        return _get_battery_info_array(self.server, self.drone_name, normalize_percentage=False)
     
     def render(self, mode='human'):
         """可视化（可选）"""
@@ -883,53 +1062,12 @@ class MovementEnv(gym.Env):
         """关闭环境"""
         pass
 
-
-# 测试代码
-if __name__ == "__main__":
-    print("=" * 60)
-    print("测试 MovementEnv - 无人机移动DQN环境")
-    print("=" * 60)
-    
-    # 创建环境（无server，测试模式）
-    env = MovementEnv(server=None, drone_name="UAV1")
-    
-    print(f"\n观察空间: {env.observation_space}")
-    print(f"动作空间: {env.action_space}")
-    print(f"动作映射:")
-    for action, displacement in env.action_map.items():
-        action_name = ['上', '下', '左', '右', '前', '后'][action]
-        print(f"  {action}: {action_name} -> {displacement}")
-    
-    # 重置环境
-    state, info = env.reset()
-    print(f"\n初始状态shape: {state.shape}")
-    print(f"初始状态前5维: {state[:5]}")
-    
-    # 执行几步测试
-    print("\n执行动作测试:")
-    for i in range(6):
-        action = i  # 测试所有6个动作
-        action_name = ['上', '下', '左', '右', '前', '后'][action]
-        
-        print(f"\n步骤 {i+1}: 动作={action} ({action_name})")
-        state, reward, done, info = env.step(action)
-        print(f"  奖励: {reward:.2f}")
-        print(f"  完成: {done}")
-        print(f"  信息: {info}")
-        
-        if done:
-            break
-    
-    print("\n" + "=" * 60)
-    print("[OK] 环境测试通过！")
-    print("=" * 60)
-
-
 class MultiDroneMovementEnv(gym.Env):
     """
     多无人机移动学习环境（参数共享）
     
-    多个无人机轮流执行动作，共享同一个 DQN 模型
+    多个无人机轮流执行动作，共享同一个 DQN 模型。
+    当前 AirSim 正式训练默认走这条路径；单机脚本和诊断测试仍使用上面的 MovementEnv。
     动作空间: 6个离散动作（上/下/左/右/前/后）
     观察空间: 位置、速度、熙值、leader位置等
     """
@@ -988,22 +1126,7 @@ class MultiDroneMovementEnv(gym.Env):
         # 为每个无人机维护独立的状态记录
         self.drone_states = {}
         for drone_name in self.drone_names:
-            self.drone_states[drone_name] = {
-                'prev_scanned_cells': 0,
-                'prev_position': None,
-                'prev_entropy_sum': 0,
-                'collision_count': 0,
-                'out_of_range_count': 0,
-                'out_of_range_steps': 0,
-                'out_of_range_duration_sec': 0.0,
-                'oob_started_at': None,
-                'severe_out_of_range_hits': 0,
-                'landed_hits': 0,
-                'idle_hits': 0,
-                'no_scan_hits': 0,
-                'oob_no_return_hits': 0,
-                'episode_reward': 0
-            }
+            self.drone_states[drone_name] = _new_multidrone_episode_state()
 
         self.last_done_reason = None
         self.step_count = 0
@@ -1018,107 +1141,24 @@ class MultiDroneMovementEnv(gym.Env):
         
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        unified_env_cfg = None
-        
-        # 1. 尝试从 server 获取 (最优先)
-        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
-            unified_env_cfg = self.server.config_data.env_config
-        else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
-            try:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
-                if os.path.exists(scanner_cfg_path):
-                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
-            except Exception as e:
-                logger.warning(f"无法加载统一环境配置: {e}")
-
-        if not unified_env_cfg:
-            # 使用默认终止配置
-            self.term_cfg = self.config.get('termination_config', {
+        self.term_cfg = _apply_shared_unified_config(
+            self.server,
+            self.config,
+            {
                 "target_scan_ratio": 0.95,
                 "max_collision_count": 1,
                 "max_elapsed_time_sec": 300.0,
                 "stagnation_timeout_sec": 30.0
-            })
-            return
-
-        # DQN 本地配置优先，统一环境配置只作为缺省值。
-        merged_term_cfg = dict(unified_env_cfg.get('termination', {}))
-        merged_term_cfg.update(self.config.get('termination_config', {}))
-        self.term_cfg = merged_term_cfg
-        
-        # --- B. 应用电量阈值 ---
-        battery_cfg = unified_env_cfg.get('battery', {})
-        if 'thresholds' not in self.config: self.config['thresholds'] = {}
-        
-        self.config['thresholds']['battery_low_threshold'] = battery_cfg.get('low_threshold', 3.5)
-        self.config['thresholds']['battery_optimal_min'] = battery_cfg.get('optimal_min', 3.7)
-        self.config['thresholds']['battery_optimal_max'] = battery_cfg.get('optimal_max', 4.1)
-        
-        # --- C. 应用基础奖励系数 ---
-        base_rewards = unified_env_cfg.get('base_rewards', {})
-        if 'rewards' not in self.config: self.config['rewards'] = {}
-        
-        # 映射统一奖励到本地配置
-        reward_map = {
-            'scan_reward': 'exploration',           # 新扫描奖励
-            'out_of_range_penalty': 'out_of_range', # 越界惩罚
-            'battery_low_penalty': 'battery_low_penalty',
-            'battery_optimal_reward': 'battery_optimal_reward',
-            'collision_penalty': 'collision',
-            'step_penalty': 'step_penalty'
-        }
-        
-        for u_key, local_key in reward_map.items():
-            if u_key in base_rewards and local_key not in self.config['rewards']:
-                self.config['rewards'][local_key] = float(base_rewards[u_key])
+            }
+        )
 
     def _load_config(self, config_path):
         """加载配置文件"""
-        if config_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(current_dir, "..", "configs", "movement_dqn_config.json")
-        
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        else:
-            return self._default_config()
+        return _load_movement_config(config_path, 0.95)
     
     def _default_config(self):
         """默认配置"""
-        return {
-            "movement": {
-                "step_size": 1.0,
-                "max_steps": 500
-            },
-            "rewards": {
-                "exploration": 10.0,
-                "collision": -50.0,
-                "out_of_range": -30.0,
-                "smooth_movement": 1.0,
-                "entropy_reduction": 5.0,
-                "high_entropy_exploration": 5.0,
-                "entropy_gradient_bonus": 2.0,
-                "step_penalty": -0.1,
-                "success": 100.0,
-                "height_penalty": -5.0,
-                "optimal_height_bonus": 1.0
-            },
-            "thresholds": {
-                "collision_distance": 2.0,
-                "scanned_entropy": 30.0,
-                "nearby_entropy_distance": 10.0,
-                "success_scan_ratio": 0.95,
-                "high_entropy_threshold": 40.0,
-                "min_scan_height": 2.0,
-                "max_scan_height": 15.0,
-                "optimal_scan_height": 8.0
-            }
-        }
+        return _default_movement_config(0.95)
     
     def reset(self, seed=None, options=None):
         """Reset the multi-drone episode state."""
@@ -1128,46 +1168,31 @@ class MultiDroneMovementEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)
 
-        if self.server and hasattr(self.server, 'reset_episode_timer'):
-            self.server.reset_episode_timer()
+        _reset_episode_timer_if_available(self.server)
 
         if self._first_reset:
             self._first_reset = False
             print("[DQN Multi] First reset: skip world reset and only initialize state")
-            if self.server and hasattr(self.server, 'reset_battery_voltage'):
-                for drone_name in self.drone_names:
-                    self.server.reset_battery_voltage(drone_name)
+            _reset_battery_for_drones(self.server, self.drone_names)
         else:
             if self.server:
                 reset_reason = reason if reason not in (None, 'None') else 'manual'
                 print(f"[DQN Multi] Episode finished, resetting environment (reason: {reset_reason})")
-                self.server.reset_environment(reason=f"MultiDroneMovementEnv_{reset_reason}", reset_grid=True)
-                if hasattr(self.server, 'reset_battery_voltage'):
-                    for d_name in self.drone_names:
-                        self.server.reset_battery_voltage(d_name)
-                ready = _wait_for_server_ready(self.server, self.drone_names, timeout_sec=12.0)
-                if not ready:
-                    print("[DQN Multi] WARNING: runtime/grid data not fully ready after reset")
-                print("[DQN Multi] Environment reset complete")
+                _reset_world_for_env(
+                    self.server,
+                    self.drone_names,
+                    "MultiDroneMovementEnv",
+                    reset_reason,
+                    "[DQN Multi] WARNING: runtime/grid data not fully ready after reset",
+                    "[DQN Multi] Environment reset complete"
+                )
 
         print(f"[DQN Multi] Resetting state for {self.num_drones} drones")
         for drone_name in self.drone_names:
-            self.drone_states[drone_name] = {
-                'prev_scanned_cells': self._count_scanned_cells(),
-                'prev_position': None,
-                'prev_entropy_sum': self._get_total_entropy(),
-                'collision_count': 0,
-                'out_of_range_count': 0,
-                'out_of_range_steps': 0,
-                'out_of_range_duration_sec': 0.0,
-                'oob_started_at': None,
-                'severe_out_of_range_hits': 0,
-                'landed_hits': 0,
-                'idle_hits': 0,
-                'no_scan_hits': 0,
-                'oob_no_return_hits': 0,
-                'episode_reward': 0
-            }
+            self.drone_states[drone_name] = _new_multidrone_episode_state(
+                prev_scanned_cells=self._count_scanned_cells(),
+                prev_entropy_sum=self._get_total_entropy()
+            )
 
         self.step_count = 0
         self.total_episode_reward = 0
@@ -1438,27 +1463,15 @@ class MultiDroneMovementEnv(gym.Env):
                     scan_info = np.array([0.0, 0.0, 0.0], dtype=np.float32)
                     min_dist_info = np.array([100.0], dtype=np.float32)
                 else:
-                    nearby_distance = self.config['thresholds']['nearby_entropy_distance']
-                    nearby_cells = [c for c in grid_data.cells if (c.center - pos).magnitude() < nearby_distance]
-                    if nearby_cells:
-                        entropies = [c.entropy for c in nearby_cells]
-                        entropy_info = np.array([
-                            float(np.mean(entropies)),
-                            float(np.max(entropies)),
-                            float(np.std(entropies))
-                        ], dtype=np.float32)
-                    else:
-                        entropy_info = np.array([50.0, 50.0, 0.0], dtype=np.float32)
-
-                    scanned_threshold = self.config['thresholds']['scanned_entropy']
-                    scanned_count = sum(1 for cell in grid_data.cells if cell.entropy < scanned_threshold)
-                    total_cells = len(grid_data.cells)
-                    unscanned_count = total_cells - scanned_count
-                    scan_ratio = scanned_count / total_cells if total_cells > 0 else 0.0
-                    scanned_ratio = float(scanned_count) / total_cells if total_cells > 0 else 0.0
-                    unscanned_ratio = float(unscanned_count) / total_cells if total_cells > 0 else 0.0
-                    scan_info = np.array([scan_ratio, scanned_ratio, unscanned_ratio], dtype=np.float32)
-
+                    entropy_info = _get_entropy_info_array(
+                        grid_data,
+                        pos,
+                        self.config['thresholds']['nearby_entropy_distance']
+                    )
+                    scan_info = _get_scan_info_array(
+                        grid_data,
+                        self.config['thresholds']['scanned_entropy']
+                    )
                     min_dist_info = np.array([100.0], dtype=np.float32)
             finally:
                 self.server.grid_lock.release()
@@ -1517,19 +1530,7 @@ class MultiDroneMovementEnv(gym.Env):
     
     def _get_battery_info_for_drone(self, drone_name):
         """获取指定无人机的电量信息：[电压, 剩余百分比]"""
-        if not self.server or not hasattr(self.server, 'get_battery_voltage'):
-            return np.array([4.2, 1.0], dtype=np.float32)  # 默认值：满电
-        
-        try:
-            voltage = self.server.get_battery_voltage(drone_name)
-            battery_info = self.server.battery_manager.get_battery_info(drone_name)
-            if battery_info:
-                percentage = battery_info.get_remaining_percentage()
-                return np.array([voltage, percentage / 100.0], dtype=np.float32)
-            else:
-                return np.array([voltage, 1.0], dtype=np.float32)
-        except:
-            return np.array([4.2, 1.0], dtype=np.float32)
+        return _get_battery_info_array(self.server, drone_name, normalize_percentage=True)
     
     def _apply_movement(self, drone_name, displacement):
         """应用移动到无人机（通过AlgorithmServer的DQN控制模式）"""
@@ -1766,17 +1767,17 @@ class MultiDroneMovementEnv(gym.Env):
         # 修正索引：9-平均熵, 10-最大熵
         local_avg_entropy = next_state[9]
         local_max_entropy = next_state[10]
-            
-        if made_scan_progress and local_max_entropy > cfg_thresh.get('high_entropy_threshold', 40.0):
-            entropy_exploration_bonus = cfg_reward.get('high_entropy_exploration', 5.0)
-            reward += entropy_exploration_bonus * stability_factor
-            
-        if drone_state['prev_position']:
-            prev_local_avg_entropy = current_state[9]
-            entropy_increase = local_avg_entropy - prev_local_avg_entropy
-            if made_scan_progress and entropy_increase > 0:
-                entropy_gradient_reward = entropy_increase * cfg_reward.get('entropy_gradient_bonus', 2.0)
-                reward += entropy_gradient_reward * stability_factor
+        prev_local_avg_entropy = current_state[9] if drone_state['prev_position'] else local_avg_entropy
+        reward += _compute_local_entropy_bonus(
+            local_avg_entropy,
+            prev_local_avg_entropy,
+            local_max_entropy,
+            cfg_thresh,
+            cfg_reward,
+            stability_factor,
+            made_progress=made_scan_progress,
+            gate_high_entropy_with_progress=True,
+        )
             
         # 4. 【新增】高度控制奖励/惩罚
         try:
@@ -1785,17 +1786,13 @@ class MultiDroneMovementEnv(gym.Env):
                 pos = runtime_data.position
                 current_height = pos.y # 修正：Unity中Y轴是高度
                     
-                min_scan_height = cfg_thresh.get('min_scan_height', 2.0)
-                max_scan_height = cfg_thresh.get('max_scan_height', 15.0)
-                optimal_height = cfg_thresh.get('optimal_scan_height', 8.0)
-                height_penalty_base = cfg_reward.get('height_penalty', -5.0)
-                    
-                if current_height < min_scan_height:
-                    reward += height_penalty_base * (min_scan_height - current_height)
-                elif current_height > max_scan_height:
-                    reward += height_penalty_base * (current_height - max_scan_height)
-                elif made_scan_progress and abs(current_height - optimal_height) < 1.5:
-                    reward += cfg_reward.get('optimal_height_bonus', 1.0)
+                reward += _compute_height_reward(
+                    current_height,
+                    cfg_thresh,
+                    cfg_reward,
+                    made_progress=made_scan_progress,
+                    require_progress_for_optimal_bonus=True,
+                )
                     
                 drone_state['prev_position'] = pos
         except Exception as e:
@@ -1848,31 +1845,17 @@ class MultiDroneMovementEnv(gym.Env):
         # 7. 步骤惩罚
         reward += cfg_reward['step_penalty']
         
-        # 8. ???????
-        if self.server and hasattr(self.server, 'get_battery_voltage'):
-            try:
-                current_voltage = self.server.get_battery_voltage(drone_name)
-                battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                if battery_info:
-                    if 'battery_low_threshold' in cfg_thresh:
-                        if current_voltage < cfg_thresh['battery_low_threshold']:
-                            penalty = cfg_reward.get('battery_low_penalty', 10.0)
-                            reward -= penalty
-
-                    if 'battery_optimal_min' in cfg_thresh and 'battery_optimal_max' in cfg_thresh:
-                        opt_min = cfg_thresh['battery_optimal_min']
-                        opt_max = cfg_thresh['battery_optimal_max']
-                        if made_scan_progress and opt_min <= current_voltage <= opt_max:
-                            bonus = cfg_reward.get('battery_optimal_reward', 2.0)
-                            reward += bonus
-
-                if hasattr(self.server, 'update_battery_voltage'):
-                    step_norm = float(np.linalg.norm(self.action_map[action]))
-                    base_step = max(self.action_step, 1e-6)
-                    action_intensity = min(1.0, max(0.0, step_norm / base_step))
-                    self.server.update_battery_voltage(drone_name, action_intensity)
-            except Exception as e:
-                logger.debug(f"????????: {str(e)}")
+        # 8. 电量奖励与更新
+        action_intensity = _compute_action_intensity(self.action_map, action, self.action_step)
+        reward += _compute_battery_reward_and_update(
+            self.server,
+            drone_name,
+            cfg_thresh,
+            cfg_reward,
+            action_intensity,
+            made_progress=made_scan_progress,
+            require_progress_for_optimal_bonus=True,
+        )
 
         return reward
 
@@ -1889,21 +1872,15 @@ class MultiDroneMovementEnv(gym.Env):
         severe_oob_enabled = bool(cfg_thresh.get('severe_out_of_range_enabled', False))
         severe_confirm_steps = max(1, int(cfg_thresh.get('severe_out_of_range_confirm_steps', 3)))
 
-        if elapsed_time >= self.term_cfg['max_elapsed_time_sec']:
-            self.last_done_reason = f"Timeout ({elapsed_time:.1f}s >= {self.term_cfg['max_elapsed_time_sec']}s)"
-            print(f"[Done] {self.last_done_reason}")
-            return True
-
         scan_ratio = self._get_scan_ratio()
-        if scan_ratio >= self.term_cfg['target_scan_ratio']:
-            self.last_done_reason = f"Target Scan Ratio Reached ({scan_ratio:.2%} >= {self.term_cfg['target_scan_ratio']:.2%})"
-            print(f"[Done] {self.last_done_reason}")
-            return True
-
         total_collisions = sum(state['collision_count'] for state in self.drone_states.values())
-        if total_collisions >= self.term_cfg['max_collision_count']:
-            self.last_done_reason = f"Collision Limit Reached ({total_collisions} >= {self.term_cfg['max_collision_count']})"
-            print(f"[Done] {self.last_done_reason}")
+        if _check_basic_episode_done(
+            self,
+            elapsed_time,
+            scan_ratio,
+            total_collisions,
+            "[Done]"
+        ):
             return True
 
         terminate_on_out_of_range = bool(cfg_thresh.get('terminate_on_out_of_range', True))
@@ -1916,85 +1893,71 @@ class MultiDroneMovementEnv(gym.Env):
         if self.server:
             for drone_name in self.drone_names:
                 try:
-                    state = self.server.drone_controller.get_vehicle_state(drone_name)
                     drone_state = self.drone_states.get(drone_name, {})
-                    if not state.get("flying", True) and elapsed_time >= landed_grace_sec:
+                    landed_reason = _get_landed_reason(self.server, drone_name)
+                    if landed_reason and elapsed_time >= landed_grace_sec:
                         drone_state['landed_hits'] = int(drone_state.get('landed_hits', 0)) + 1
                         if drone_state['landed_hits'] >= landed_confirm_steps:
-                            self.last_done_reason = f"Drone {drone_name} Landed (Physics)"
-                            print(f"[Done] {self.last_done_reason}")
-                            return True
+                            return _set_done_reason(self, landed_reason, "[Done]")
                     else:
                         drone_state['landed_hits'] = 0
 
                     current_oob_steps = int(drone_state.get('out_of_range_steps', 0))
                     oob_checks_active = self._oob_checks_active()
 
-                    with self.server.data_lock:
-                        rd = self.server.unity_runtime_data.get(drone_name)
-                        if rd and rd.position and rd.leader_position and rd.leader_scan_radius > 0:
-                            dist = np.sqrt(
-                                (rd.position.x - rd.leader_position.x) ** 2 +
-                                (rd.position.y - rd.leader_position.y) ** 2 +
-                                (rd.position.z - rd.leader_position.z) ** 2
-                            )
-                            threshold = rd.leader_scan_radius * severe_ratio
-                            is_currently_oob = dist > rd.leader_scan_radius
-                            if oob_checks_active and is_currently_oob:
-                                started_at = drone_state.get('oob_started_at')
-                                if started_at is None:
-                                    drone_state['oob_started_at'] = elapsed_time
-                                    drone_state['out_of_range_duration_sec'] = 0.0
-                                else:
-                                    drone_state['out_of_range_duration_sec'] = max(
-                                        0.0, elapsed_time - float(started_at)
-                                    )
-                            else:
-                                drone_state['oob_started_at'] = None
+                    leader_stats = _get_leader_distance_stats(self.server, drone_name, severe_ratio)
+                    if leader_stats is not None:
+                        dist, threshold, is_currently_oob = leader_stats
+                        if oob_checks_active and is_currently_oob:
+                            started_at = drone_state.get('oob_started_at')
+                            if started_at is None:
+                                drone_state['oob_started_at'] = elapsed_time
                                 drone_state['out_of_range_duration_sec'] = 0.0
-
-                            current_oob_duration = float(
-                                drone_state.get('out_of_range_duration_sec', 0.0)
-                            )
-                            if (
-                                terminate_on_out_of_range
-                                and oob_checks_active
-                                and (
-                                    current_oob_steps >= max_oob_steps
-                                    or current_oob_duration >= max_oob_duration_sec
-                                )
-                            ):
-                                self.last_done_reason = (
-                                    f"Drone {drone_name} Out of Range Too Long "
-                                    f"({current_oob_duration:.1f}s / {current_oob_steps} steps)"
-                                )
-                                print(f"[Done] {self.last_done_reason}")
-                                return True
-
-                            if dist > threshold:
-                                drone_state['severe_out_of_range_hits'] = int(
-                                    drone_state.get('severe_out_of_range_hits', 0)
-                                ) + 1
-                                if (
-                                    severe_oob_enabled
-                                    and oob_checks_active
-                                    and drone_state['severe_out_of_range_hits'] >= severe_confirm_steps
-                                ):
-                                    self.last_done_reason = f"Drone {drone_name} Severe Out of Range ({dist:.1f}m > {threshold:.1f}m)"
-                                    print(f"[Done] {self.last_done_reason}")
-                                    return True
                             else:
-                                drone_state['severe_out_of_range_hits'] = 0
+                                drone_state['out_of_range_duration_sec'] = max(
+                                    0.0, elapsed_time - float(started_at)
+                                )
+                        else:
+                            drone_state['oob_started_at'] = None
+                            drone_state['out_of_range_duration_sec'] = 0.0
 
-                    if hasattr(self.server, "battery_manager"):
-                        battery_info = self.server.battery_manager.get_battery_info(drone_name)
-                        if battery_info:
-                            current_voltage = float(getattr(battery_info, "voltage", 4.2))
-                            battery_status = getattr(battery_info, "status", None)
-                            if current_voltage <= 3.2 + 1e-6 or battery_status == BatteryStatus.EMPTY:
-                                self.last_done_reason = f"Drone {drone_name} Battery Empty ({current_voltage:.2f}V)"
-                                print(f"[Done] {self.last_done_reason}")
-                                return True
+                        current_oob_duration = float(
+                            drone_state.get('out_of_range_duration_sec', 0.0)
+                        )
+                        if (
+                            terminate_on_out_of_range
+                            and oob_checks_active
+                            and (
+                                current_oob_steps >= max_oob_steps
+                                or current_oob_duration >= max_oob_duration_sec
+                            )
+                        ):
+                            return _set_done_reason(
+                                self,
+                                f"Drone {drone_name} Out of Range Too Long ({current_oob_duration:.1f}s / {current_oob_steps} steps)",
+                                "[Done]"
+                            )
+
+                        if dist > threshold:
+                            drone_state['severe_out_of_range_hits'] = int(
+                                drone_state.get('severe_out_of_range_hits', 0)
+                            ) + 1
+                            if (
+                                severe_oob_enabled
+                                and oob_checks_active
+                                and drone_state['severe_out_of_range_hits'] >= severe_confirm_steps
+                            ):
+                                return _set_done_reason(
+                                    self,
+                                    f"Drone {drone_name} Severe Out of Range ({dist:.1f}m > {threshold:.1f}m)",
+                                    "[Done]"
+                                )
+                        else:
+                            drone_state['severe_out_of_range_hits'] = 0
+
+                    battery_reason = _get_battery_empty_reason(self.server, drone_name)
+                    if battery_reason:
+                        return _set_done_reason(self, battery_reason, "[Done]")
                 except Exception as exc:
                     logger.debug(f"Done check skipped for {drone_name}: {exc}")
                     continue
@@ -2003,37 +1966,17 @@ class MultiDroneMovementEnv(gym.Env):
 
     def _count_scanned_cells(self):
         """统计已扫描单元格数量"""
-        if not self.server:
-            return 0
-        try:
-            with self.server.grid_lock:
-                scanned_threshold = self.config['thresholds']['scanned_entropy']
-                return sum(1 for cell in self.server.grid_data.cells if cell.entropy < scanned_threshold)
-        except:
-            return 0
+        scanned, _, _ = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        return scanned
     
     def _get_total_entropy(self):
         """获取总熙值"""
-        if not self.server:
-            return 0.0
-        try:
-            with self.server.grid_lock:
-                return sum(cell.entropy for cell in self.server.grid_data.cells)
-        except:
-            return 0.0
+        _, _, entropy_sum = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        return entropy_sum
     
     def _get_scan_ratio(self):
         """获取扫描比例"""
-        if not self.server:
+        scanned, total, _ = _get_grid_stats(self.server, self.config['thresholds']['scanned_entropy'])
+        if total <= 0:
             return 0.0
-        try:
-            with self.server.grid_lock:
-                total = len(self.server.grid_data.cells)
-                if total == 0:
-                    return 0.0
-                # 直接在这里计算，而不是调用 _count_scanned_cells()（避免重复获取锁）
-                scanned_threshold = self.config['thresholds']['scanned_entropy']
-                scanned = sum(1 for cell in self.server.grid_data.cells if cell.entropy < scanned_threshold)
-                return scanned / total
-        except:
-            return 0.0
+        return scanned / total
