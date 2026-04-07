@@ -1,218 +1,218 @@
-# Real-Flight Weighted Online Training Design
+# 实飞高权重在线训练设计
 
-Date: 2026-04-07
+日期：2026-04-07
 
-## Summary
+## 摘要
 
-This design adds a "real-flight high-impact update" capability to the existing DDPG weight-training pipeline.
+本设计用于在现有 DDPG 权重训练链路中加入“实飞数据高影响力更新”能力。
 
-The main training body remains AirSim-based pretraining. During later real-flight sessions, online-collected real-flight transitions should influence the model more strongly than their raw sample count would normally allow. The first implementation target is:
+整体训练主体仍然是基于 AirSim 的预训练。进入后续实飞阶段后，在线采集到的实飞 transition 不应只按样本数量自然影响模型，而应以更高权重参与模型更新。第一阶段的实现目标是：
 
-- collect real-flight transitions online during flight
-- apply model updates at episode end
-- make those updates strongly favor real-flight data
-- use the updated model for the next real-flight episode
+- 在飞行过程中在线采集实飞数据
+- 在每个 episode 结束后统一更新模型
+- 让更新过程明显偏向实飞数据
+- 将更新后的模型用于下一次实飞 episode
 
-The design must also leave a clean path to a future inflight-update mode, where updates can be applied during a flight rather than only after an episode ends.
+同时，设计上要为后续的 `inflight` 模式预留路径，也就是未来允许在一次飞行过程中更新模型，而不是只能在 episode 结束后更新。
 
-## Problem
+## 问题背景
 
-The current system already supports:
+当前系统已经具备以下训练能力：
 
-- AirSim virtual training via `multirotor/DDPG_Weight/train_with_airsim_improved.py`
-- real-flight online training via `multirotor/DDPG_Weight/train_with_crazyflie_online.py`
-- real-flight log training via `multirotor/DDPG_Weight/train_with_crazyflie_logs.py`
-- hybrid mirror training via `multirotor/DDPG_Weight/train_with_hybrid.py`
+- AirSim 虚拟训练：`multirotor/DDPG_Weight/train_with_airsim_improved.py`
+- 实飞在线训练：`multirotor/DDPG_Weight/train_with_crazyflie_online.py`
+- 实飞日志训练：`multirotor/DDPG_Weight/train_with_crazyflie_logs.py`
+- 虚实镜像混合训练：`multirotor/DDPG_Weight/train_with_hybrid.py`
 
-However, it does not provide an explicit mechanism to say:
+但系统目前还没有一个明确机制，能够表达下面这个需求：
 
-- "the number of real-flight samples is small"
-- "but each real-flight sample should affect the model much more strongly than simulation samples"
+- 实飞样本数量很少
+- 但每一条实飞样本对模型的影响要明显大于仿真样本
 
-Today, the practical workaround is staged training:
+现阶段能做到的近似方式是分阶段训练：
 
-1. pretrain in simulation
-2. continue training on real flight
+1. 先在仿真中预训练
+2. 再在实飞阶段继续训练
 
-That already helps, but it does not make "real-flight influence strength" a configurable system capability.
+这确实有帮助，但它还不是一个显式、可配置、可观测的“实飞高权重影响”能力。
 
-## Goals
+## 目标
 
-- Keep AirSim pretraining as the main training stage.
-- Support online collection of real-flight data during actual flight.
-- Add an explicit high-impact update mechanism for real-flight data.
-- Make the first release operate in `episode_end` mode for safety.
-- Preserve compatibility with the current DDPG environment and server flow.
-- Prepare a future extension path to `inflight` update timing.
+- 保持 AirSim 预训练仍然是主训练阶段
+- 支持在实体机飞行过程中在线采集实飞数据
+- 增加显式的实飞高权重更新机制
+- 第一阶段采用 `episode_end` 模式以降低安全风险
+- 与现有 DDPG 环境、AlgorithmServer、Crazyflie 数据链路兼容
+- 为未来切换到 `inflight` 更新模式预留清晰扩展点
 
-## Non-Goals
+## 非目标
 
-- Replacing Stable-Baselines3 DDPG with a custom RL framework in this phase.
-- Reworking `AlgorithmServer` transport, Unity communication, or Crazyflie logging formats.
-- Changing the reward definition as part of this feature.
-- Making the first release hot-swap model parameters during the same flight.
+- 第一阶段不替换 Stable-Baselines3 DDPG
+- 第一阶段不重做 `AlgorithmServer`、Unity 通信或 Crazyflie 日志格式
+- 第一阶段不顺带修改奖励函数定义
+- 第一阶段不在同一次飞行中热切换模型参数
 
-## Recommended Approach
+## 推荐方案
 
-The recommended implementation is a two-buffer weighted-update design built around the current online DDPG flow.
+推荐采用“实飞优先的双层缓冲更新设计”，并基于当前在线 DDPG 流程落地。
 
-Core idea:
+核心思想如下：
 
-- keep simulation pretraining unchanged
-- during real-flight training, store online real-flight transitions in a dedicated real buffer
-- at episode end, run extra update passes that preferentially sample from the real buffer
-- optionally mix in a smaller amount of simulation-derived transitions if available, but let real-flight dominate the update batch
+- 保持仿真预训练链路不变
+- 在实飞阶段，把在线采集的实飞 transition 存入专用的 `real_buffer`
+- 在每个 episode 结束后，执行额外的实飞优先更新轮次
+- 如果未来需要，也允许引入少量仿真 transition 参与混合 batch，但默认仍由实飞数据主导
 
-This is preferred over a direct inflight-update implementation because it matches the current code structure, reduces flight risk, and still gives real-flight data disproportionately strong influence over the model before the next episode begins.
+相比一上来就做 `inflight` 在线热更新，这个方案更适合当前代码结构，也更安全。它仍然能够让少量实飞数据在下一次飞行前对模型产生远超样本数量占比的影响。
 
-## Why This Fits the Current Architecture
+## 为什么符合当前架构
 
-The current code already has the right separation points:
+当前代码已经具备合适的分层边界：
 
-- training entrypoint: `multirotor/DDPG_Weight/train_with_crazyflie_online.py`
-- online environment: `multirotor/DDPG_Weight/envs/crazyflie_weight_env.py`
-- simulation pretraining entrypoint: `multirotor/DDPG_Weight/train_with_airsim_improved.py`
+- 训练入口：`multirotor/DDPG_Weight/train_with_crazyflie_online.py`
+- 实飞环境：`multirotor/DDPG_Weight/envs/crazyflie_weight_env.py`
+- 仿真预训练入口：`multirotor/DDPG_Weight/train_with_airsim_improved.py`
 
-The online environment already exposes the full transition loop:
+在线环境已经完整暴露了一个标准 transition 流程：
 
-- current observation from real-flight runtime state
-- action chosen by the policy
-- reward computed after the flight step
-- next observation collected from the updated real state
+- 从实飞运行时状态读取当前 observation
+- 用策略输出 action
+- 飞行一步后计算 reward
+- 再读取新的 real state 作为 next observation
 
-That means the missing capability is not data access. The missing capability is training-time weighting and update scheduling.
+这说明当前缺的不是数据入口，而是训练阶段的加权策略和更新调度机制。
 
-## Design Overview
+## 总体设计
 
-### 1. Update timing modes
+### 1. 更新时机模式
 
-Introduce an explicit update timing concept:
+引入明确的更新时机概念：
 
-- `episode_end`: collect transitions during flight, update the model after the episode, use the new model on the next episode
-- `inflight`: reserved for future work; update during flight with stricter safety controls
+- `episode_end`：飞行过程中只采集 transition，不更新模型；episode 结束后统一更新，并把新模型用于下一次飞行
+- `inflight`：预留给未来，在飞行过程中按更严格的安全策略进行更新
 
-Phase 1 implements only `episode_end`, but all new interfaces should accept the timing mode so the system is not painted into a corner.
+第一阶段只实现 `episode_end`，但新增接口和配置时都要兼容时机模式，避免后续扩展时推翻现有设计。
 
-### 2. Real-flight priority trainer
+### 2. 实飞优先训练器
 
-Add a trainer-side component responsible for real-flight weighting behavior.
+新增一个训练器侧组件，专门负责“实飞高权重”逻辑。
 
-Suggested responsibility:
+建议职责如下：
 
-- receive transitions collected from the online environment
-- store them with a source tag such as `real`
-- trigger extra training passes at episode end
-- enforce a configurable real-flight influence policy
+- 接收在线环境产生的 transition
+- 为 transition 打上数据来源标签，例如 `real`
+- 在 episode 结束时触发额外训练轮次
+- 根据配置执行实飞优先的更新策略
 
-Suggested name:
+建议命名：
 
 - `RealFlightPriorityTrainer`
 
-This component should live under `multirotor/DDPG_Weight/` and remain training-layer only. It should not own flight control.
+该组件应放在 `multirotor/DDPG_Weight/` 下，保持为训练层组件，不直接拥有飞控逻辑。
 
-### 3. Source-aware transition storage
+### 3. 感知数据来源的 transition 存储
 
-Introduce source-aware storage for transitions.
+新增感知数据来源的 transition 存储设计。
 
-Minimum design:
+最小实现如下：
 
-- `real_buffer`: stores transitions collected during current and recent real-flight episodes
-- optional `sim_buffer`: stores transitions loaded from prior simulation experience if later needed
+- `real_buffer`：存储当前及最近若干个实飞 episode 采集到的 transition
+- `sim_buffer`：可选，未来如需做混合 batch 再引入
 
-For the first phase, the feature should work even if only the real buffer is implemented. The pretrained AirSim model parameters already carry simulation knowledge, so phase 1 does not require importing simulation transitions into the online weighted trainer. That is the simplest safe version.
+第一阶段即使只实现 `real_buffer` 也可以满足需求。因为仿真预训练得到的模型参数本身已经携带了仿真知识，所以第一阶段没有必要把仿真 transition 再导入实飞高权重训练器，这是最简单也最稳妥的版本。
 
-Each transition record should include:
+每条 transition 至少包含：
 
-- observation
-- action
-- reward
-- next_observation
-- done
-- source (`real`)
-- episode index
-- step index
-- collection timestamp
+- `observation`
+- `action`
+- `reward`
+- `next_observation`
+- `done`
+- `source`
+- `episode_index`
+- `step_index`
+- `timestamp`
 
-## Weighting Strategy
+## 加权策略
 
-The first release should support explicit real-flight dominance through trainer configuration.
+第一阶段需要通过训练器配置显式表达“实飞数据占主导”。
 
-Recommended controls:
+建议新增以下控制项：
 
 - `real_update_multiplier`
-  - how many extra gradient-update rounds are run from real-flight data after each episode
+  - 每个实飞 episode 结束后，基于实飞数据额外执行多少轮更新
 - `real_batch_ratio`
-  - target fraction of real-flight samples inside a mixed batch
+  - 混合 batch 中实飞样本的目标占比
 - `min_real_samples_before_update`
-  - avoids unstable updates from tiny sample counts
+  - 实飞样本数低于阈值时跳过更新，避免样本太少导致不稳定
 - `max_real_updates_per_episode`
-  - caps compute time and reduces overfitting risk
+  - 每个 episode 最多额外执行多少轮更新，避免计算量过大或过拟合
 - `real_buffer_capacity`
-  - how much recent real-flight experience is retained
+  - `real_buffer` 最大容量
 
-Recommended phase-1 default behavior:
+第一阶段推荐默认策略：
 
-- use only real-flight transitions for the post-episode high-impact update
-- if there are too few real samples, skip the weighted update for that episode
+- episode 结束后的高权重更新只使用实飞 transition
+- 当实飞样本数不足时，本次高权重更新直接跳过
 
-This keeps the implementation simple and makes the meaning of "real-flight high weight" direct and auditable.
+这样实现最简单，也最容易解释“为什么这次模型会被实飞数据强力拉动”。
 
-## Data Flow
+## 数据流
 
-### AirSim pretraining stage
+### AirSim 预训练阶段
 
-1. Train in AirSim using the existing virtual pipeline.
-2. Save the pretrained DDPG model.
-3. Enter real-flight training using that model as the initialization point.
+1. 通过现有虚拟训练链路在 AirSim 中完成预训练
+2. 保存预训练 DDPG 模型
+3. 进入实飞训练阶段时，以该模型作为初始化模型
 
-### Real-flight episode stage
+### 实飞 episode 阶段
 
-1. `train_with_crazyflie_online.py` loads the pretrained model.
-2. `CrazyflieOnlineWeightEnv` runs the flight episode normally.
-3. After each environment step, the transition is copied into the real buffer.
-4. During the flight, control continues using the stable model parameters from episode start.
-5. At episode end, the priority trainer runs the configured real-flight weighted updates.
-6. If update validation passes, the updated model becomes the control model for the next episode.
+1. `train_with_crazyflie_online.py` 读取预训练模型
+2. `CrazyflieOnlineWeightEnv` 正常执行一次实飞 episode
+3. 每一步交互产生的 transition 被复制到 `real_buffer`
+4. 本次飞行过程中，控制侧始终使用该 episode 开始时的稳定模型
+5. episode 结束后，由优先训练器执行配置好的实飞高权重更新
+6. 如果更新验证通过，更新后的模型用于下一次实飞 episode
 
-## Component Boundaries
+## 组件边界
 
 ### `train_with_crazyflie_online.py`
 
-Responsibilities after the change:
+改造后的职责：
 
-- parse new weighting-related config
-- construct the priority trainer
-- load the pretrained model
-- orchestrate the sequence:
-  - fly episode
-  - collect real transitions
-  - run post-episode weighted update
-  - checkpoint model and training metadata
+- 解析新增的加权配置
+- 构建优先训练器
+- 读取预训练模型
+- 负责整体编排：
+  - 执行飞行 episode
+  - 收集实飞 transition
+  - 触发 episode 结束后的高权重更新
+  - 保存模型和训练元数据
 
-It should remain the orchestration entrypoint rather than absorbing buffer or weighting logic directly.
+它仍然是顶层编排入口，不应把 buffer 和加权细节直接塞进这个脚本里。
 
 ### `CrazyflieOnlineWeightEnv`
 
-Responsibilities after the change:
+改造后的职责：
 
-- continue producing standard Gym-style transitions
-- expose enough per-step data for the trainer to store transitions cleanly
-- avoid owning weighting policy or update scheduling
+- 继续以标准 Gym 风格产生 transition
+- 暴露足够的每步数据，便于训练器干净地存储 transition
+- 不直接负责加权策略和更新调度
 
-The environment should stay focused on interaction with the real platform.
+环境本身应继续聚焦“与实体平台交互”这一件事。
 
-### New trainer helper
+### 新增训练器辅助组件
 
-Responsibilities after the change:
+改造后的职责：
 
-- store source-aware transitions
-- execute post-episode weighted updates
-- return update summary metrics
-- support future extension to `inflight`
+- 管理带来源标签的 transition 存储
+- 执行 episode 结束后的高权重更新
+- 返回更新结果与统计信息
+- 为未来的 `inflight` 模式保留统一接口
 
-## Configuration Design
+## 配置设计
 
-Extend the online training config with a nested block such as:
+建议在在线训练配置中增加一个嵌套块，例如：
 
 ```json
 {
@@ -229,46 +229,46 @@ Extend the online training config with a nested block such as:
 }
 ```
 
-Interpretation:
+含义如下：
 
-- `real_batch_ratio = 1.0` means post-episode weighted updates use only real-flight data
-- later, mixed-batch strategies can use values like `0.7`
-- `rollback_on_bad_update` enables safety rollback if update validation fails
+- `real_batch_ratio = 1.0` 表示 episode 结束后的高权重更新只使用实飞数据
+- 后续如果需要混合 batch，可以用 `0.7` 之类的值
+- `rollback_on_bad_update` 表示更新后如发现异常则自动回滚
 
-## Safety and Failure Handling
+## 安全与失败处理
 
-Safety is the main reason to ship `episode_end` first.
+之所以第一阶段先做 `episode_end`，核心原因就是安全。
 
-Required protections:
+必须具备的保护措施：
 
-- no parameter hot-swap during the same flight in phase 1
-- skip update if the episode produced too few valid transitions
-- keep a pre-update checkpoint before weighted update begins
-- rollback to the pre-update checkpoint if:
-  - loss becomes non-finite
-  - update crashes
-  - post-update sanity checks fail
+- 第一阶段不允许在同一次飞行中热切换模型参数
+- 如果某个 episode 产出的有效实飞 transition 太少，则跳过更新
+- 开始高权重更新前保存一份更新前检查点
+- 出现以下情况时自动回滚到更新前模型：
+  - loss 出现非有限值
+  - 更新过程异常崩溃
+  - 更新后的 sanity check 不通过
 
-Recommended sanity checks:
+建议的 sanity check：
 
-- no NaN/Inf in policy parameters
-- parameter delta below a configurable bound
-- sampled action remains inside expected range on a small fixed probe-state set
+- 策略参数中没有 NaN 或 Inf
+- 参数变化幅度不超过配置阈值
+- 在一组固定 probe state 上采样得到的 action 仍在合理范围内
 
-## Observability
+## 可观测性
 
-The system should log enough information to explain how strongly real-flight data affected the model.
+系统需要输出足够的日志，让我们能够解释“本次实飞数据到底对模型产生了多大影响”。
 
-Required logging:
+必须记录的内容：
 
-- episode real sample count
-- whether weighted update ran or was skipped
-- number of extra update rounds
-- effective batch composition
-- parameter delta summary
-- rollback events
+- 当前 episode 采集到的实飞样本数
+- 本次高权重更新是否执行
+- 额外更新轮数
+- 实际 batch 构成
+- 参数变化摘要
+- 是否触发回滚
 
-Recommended output fields:
+建议输出字段：
 
 - `real_samples_collected`
 - `weighted_update_rounds`
@@ -277,58 +277,57 @@ Recommended output fields:
 - `policy_param_delta_norm`
 - `rollback_triggered`
 
-## Testing Strategy
+## 测试策略
 
-### Unit-level
+### 单元测试
 
-- transition storage correctness
-- weighting config parsing
-- update skip conditions
-- rollback path
+- transition 存储是否正确
+- 加权配置解析是否正确
+- 样本不足时是否正确跳过更新
+- 回滚路径是否正确
 
-### Integration-level
+### 集成测试
 
-- load pretrained AirSim model into online trainer
-- run a mocked real-flight episode
-- confirm transitions enter the real buffer
-- confirm episode-end weighted update is triggered
-- confirm updated model is used on the next episode
+- 能否把 AirSim 预训练模型加载到在线训练入口
+- 使用模拟实飞 episode 时，transition 是否进入 `real_buffer`
+- episode 结束后是否正确触发高权重更新
+- 更新后的模型是否在下一次 episode 中生效
 
-### Safety regression
+### 安全回归测试
 
-- verify no update is applied mid-episode in `episode_end` mode
-- verify failures restore the pre-update model
+- 验证 `episode_end` 模式下不会在飞行中途更新模型
+- 验证更新失败后能正确恢复到更新前模型
 
-## Migration Path to Future `inflight` Mode
+## 向未来 `inflight` 模式迁移的路径
 
-The first implementation should intentionally leave these extension points:
+第一阶段实现时应主动预留以下扩展点：
 
-- `update_timing` enum-like config
-- trainer API that can be called either at step time or episode end
-- model handoff mechanism separated from environment stepping
+- `update_timing` 配置项
+- 训练器 API 同时支持按 step 调用和按 episode 调用
+- 模型切换机制与环境 step 过程解耦
 
-When moving to `inflight`, the main changes should be:
+未来从 `episode_end` 升级到 `inflight` 时，主要变化应该是：
 
-- add step-interval or time-interval update triggers
-- add stricter action-delta and parameter-delta guards
-- optionally use a shadow-model promotion flow instead of direct hot-swap
+- 增加按步数或按时间间隔触发的更新策略
+- 增加更严格的 action 变化幅度与参数变化幅度保护
+- 必要时引入 shadow model 提升流程，而不是直接热切换
 
-If these boundaries are respected now, moving from `episode_end` to `inflight` later should be a moderate extension rather than a redesign.
+只要第一阶段守住这些边界，后续从 `episode_end` 切换到 `inflight` 应该属于中等扩展，而不是重新设计。
 
-## Risks
+## 风险
 
-- Real-flight sample count may be too small in a single episode to support stable updates.
-- Over-weighting real data may overfit to one flight condition or one battery state.
-- Tight coupling to SB3 internals could make upgrades harder if implementation reaches too deeply into library-private APIs.
+- 单个实飞 episode 的样本数可能过少，难以支撑稳定更新
+- 实飞数据权重过高时，可能过拟合到某一次飞行条件、电量状态或环境扰动
+- 如果实现过度耦合 SB3 内部私有接口，后续升级库版本会变得困难
 
-## Decision
+## 最终决策
 
-Implement phase 1 as:
+第一阶段按以下方式实现：
 
-- AirSim pretraining unchanged
-- real-flight online collection unchanged at the environment boundary
-- new source-aware real buffer
-- explicit post-episode weighted updates with real-flight dominance
-- configuration prepared for future `inflight` mode
+- 保持 AirSim 预训练链路不变
+- 保持实飞在线采集链路不变
+- 新增带来源标签的 `real_buffer`
+- 在 episode 结束后执行实飞主导的高权重更新
+- 配置层提前为未来的 `inflight` 模式预留接口
 
-This gives the system a true "real-flight high influence" capability without introducing same-flight hot-update risk in the first release.
+这样可以在第一阶段就让系统具备真正意义上的“实飞数据高影响力”能力，同时避免把同一次飞行中的热更新风险一起引入。
