@@ -330,6 +330,74 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
         self.assertEqual(model.buffer_len_during_train, 2)
         self.assertEqual(model.replay_buffer.entries, ["original"])
 
+    def test_weighted_update_respects_zero_multiplier(self):
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 0}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=10, step_index=0))
+        model = FakeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=10)
+
+        self.assertEqual(result.status, "skipped_no_updates")
+        self.assertEqual(result.extra_gradient_steps, 0)
+        self.assertEqual(model.train_calls, [])
+
+    def test_weighted_update_reports_failed_sanity_without_rollback(self):
+        config = normalize_real_flight_weighting_config(
+            {
+                "min_real_samples_before_update": 1,
+                "real_update_multiplier": 1,
+                "rollback_on_bad_update": False,
+            }
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=11, step_index=0))
+        model = FakeModel(invalid_after_train=True)
+
+        result = trainer.apply_post_episode_update(model, episode_index=11)
+
+        self.assertEqual(result.status, "failed_sanity")
+        self.assertFalse(result.rollback_triggered)
+
+    def test_temp_replay_buffer_add_uses_sb3_shapes(self):
+        class SB3LikeReplayBuffer:
+            def __init__(self, buffer_size, observation_space=None, action_space=None, device=None):
+                self.entries = []
+                self.n_envs = 1
+                self.observation_space = observation_space
+                self.action_space = action_space
+                self.device = device
+
+            def add(self, obs, next_obs, action, reward, done, infos):
+                self.entries.append((obs, next_obs, action, reward, done, infos))
+
+        class SB3LikeModel(FakeModel):
+            def __init__(self):
+                super().__init__()
+                self.replay_buffer = SB3LikeReplayBuffer(10)
+                self.buffer_during_train = None
+
+            def train(self, gradient_steps, batch_size):
+                self.buffer_during_train = self.replay_buffer
+                super().train(gradient_steps, batch_size)
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=12, step_index=0))
+        model = SB3LikeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=12)
+
+        self.assertEqual(result.status, "applied")
+        original_obs, next_obs, action, reward, done, infos = model.buffer_during_train.entries[0]
+        self.assertEqual(reward.shape, (1,))
+        self.assertEqual(done.shape, (1,))
+        self.assertEqual(infos, [{}])
+
     def test_train_exception_rolls_back_policy_state(self):
         class ExplodingModel(FakeModel):
             def train(self, gradient_steps, batch_size):

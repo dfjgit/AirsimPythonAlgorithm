@@ -182,14 +182,19 @@ class RealFlightPriorityTrainer:
             )
 
         snapshot = copy.deepcopy(model.policy.state_dict())
-        gradient_steps = min(
-            self.config.max_real_updates_per_episode,
-            max(
-                1,
-                math.ceil(episode_real_samples / max(1, int(model.batch_size)))
-                * self.config.real_update_multiplier,
-            ),
-        )
+        computed_steps = math.ceil(
+            episode_real_samples / max(1, int(model.batch_size))
+        ) * self.config.real_update_multiplier
+        gradient_steps = min(self.config.max_real_updates_per_episode, computed_steps)
+
+        if gradient_steps <= 0:
+            return WeightedUpdateResult(
+                "skipped_no_updates",
+                episode_real_samples,
+                0,
+                False,
+                0.0,
+            )
 
         original_replay_buffer = getattr(model, "replay_buffer", None)
         temp_replay_buffer = None
@@ -228,6 +233,13 @@ class RealFlightPriorityTrainer:
                     True,
                     0.0,
                 )
+            return WeightedUpdateResult(
+                "failed_sanity",
+                episode_real_samples,
+                gradient_steps,
+                False,
+                0.0,
+            )
 
         delta = self._policy_param_delta_norm(snapshot, model.policy.state_dict())
         return WeightedUpdateResult(
@@ -286,14 +298,17 @@ class RealFlightPriorityTrainer:
 
     @staticmethod
     def _add_to_replay_buffer(buffer, transition: RealFlightTransition) -> None:
+        reward = np.array([transition.reward], dtype=np.float32)
+        done = np.array([transition.done], dtype=np.float32)
+        infos = [{}]
         try:
             buffer.add(
                 transition.observation,
                 transition.next_observation,
                 transition.action,
-                transition.reward,
-                transition.done,
-                infos=None,
+                reward,
+                done,
+                infos,
             )
             return
         except TypeError:
@@ -304,8 +319,8 @@ class RealFlightPriorityTrainer:
                 transition.observation,
                 transition.next_observation,
                 transition.action,
-                transition.reward,
-                transition.done,
+                reward,
+                done,
             )
             return
         except TypeError:
