@@ -38,6 +38,21 @@ class RealFlightWeightingConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_real_flight_weighting_config({"enable_real_weighting": "maybe"})
 
+    def test_normalize_real_weighting_clamps_negative_limits(self):
+        config = normalize_real_flight_weighting_config(
+            {
+                "real_update_multiplier": -3,
+                "min_real_samples_before_update": -1,
+                "max_real_updates_per_episode": -5,
+                "real_buffer_capacity": -10,
+            }
+        )
+
+        self.assertEqual(config.real_update_multiplier, 0)
+        self.assertEqual(config.min_real_samples_before_update, 0)
+        self.assertEqual(config.max_real_updates_per_episode, 0)
+        self.assertEqual(config.real_buffer_capacity, 1)
+
 class RealFlightTransitionStoreTests(unittest.TestCase):
     def test_store_evicts_oldest_transition_when_capacity_is_exceeded(self):
         store = RealFlightTransitionStore(capacity=2)
@@ -203,14 +218,14 @@ class FakeModel:
 
 
 class RealFlightPriorityTrainerTests(unittest.TestCase):
-    def _build_transition(self, episode_index, step_index):
+    def _build_transition(self, episode_index, step_index, source="real"):
         return RealFlightTransition(
             observation=np.full(18, step_index, dtype=np.float32),
             action=np.full(7, 0.5, dtype=np.float32),
             reward=1.0,
             next_observation=np.full(18, step_index + 1, dtype=np.float32),
             done=False,
-            source="real",
+            source=source,
             episode_index=episode_index,
             step_index=step_index,
             timestamp=200.0 + step_index,
@@ -253,6 +268,43 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
 
         self.assertEqual(result.status, "applied")
         self.assertAlmostEqual(result.policy_param_delta_norm, np.sqrt(5.0))
+
+    def test_weighted_update_counts_only_real_samples(self):
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 2, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=5, step_index=0))
+        trainer.record_transition(
+            self._build_transition(episode_index=5, step_index=1, source="sim")
+        )
+        model = FakeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=5)
+
+        self.assertEqual(result.status, "skipped_min_samples")
+        self.assertEqual(result.episode_real_samples, 1)
+        self.assertEqual(model.train_calls, [])
+
+    def test_train_exception_rolls_back_policy_state(self):
+        class ExplodingModel(FakeModel):
+            def train(self, gradient_steps, batch_size):
+                self.train_calls.append((gradient_steps, batch_size))
+                self.policy.state["weight"] = 99.0
+                raise RuntimeError("boom")
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=7, step_index=0))
+        model = ExplodingModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=7)
+
+        self.assertEqual(result.status, "rolled_back")
+        self.assertTrue(result.rollback_triggered)
+        self.assertEqual(model.policy.state["weight"], 1.0)
 
     def test_skip_weighted_update_when_episode_has_too_few_real_samples(self):
         config = normalize_real_flight_weighting_config(

@@ -45,11 +45,13 @@ def normalize_real_flight_weighting_config(raw: Dict) -> RealFlightWeightingConf
     return RealFlightWeightingConfig(
         update_timing=str(raw.get("update_timing", "episode_end")),
         enable_real_weighting=_coerce_bool(raw.get("enable_real_weighting"), True),
-        real_update_multiplier=int(raw.get("real_update_multiplier", 4)),
+        real_update_multiplier=max(0, int(raw.get("real_update_multiplier", 4))),
         real_batch_ratio=float(raw.get("real_batch_ratio", 1.0)),
-        min_real_samples_before_update=int(raw.get("min_real_samples_before_update", 32)),
-        max_real_updates_per_episode=int(raw.get("max_real_updates_per_episode", 8)),
-        real_buffer_capacity=int(raw.get("real_buffer_capacity", 5000)),
+        min_real_samples_before_update=max(
+            0, int(raw.get("min_real_samples_before_update", 32))
+        ),
+        max_real_updates_per_episode=max(0, int(raw.get("max_real_updates_per_episode", 8))),
+        real_buffer_capacity=max(1, int(raw.get("real_buffer_capacity", 5000))),
         rollback_on_bad_update=_coerce_bool(raw.get("rollback_on_bad_update"), True),
     )
 
@@ -150,7 +152,8 @@ class RealFlightPriorityTrainer:
 
     def apply_post_episode_update(self, model, episode_index: int) -> WeightedUpdateResult:
         episode_transitions = self.store.get_episode(episode_index)
-        episode_real_samples = len(episode_transitions)
+        real_transitions = [item for item in episode_transitions if item.source == "real"]
+        episode_real_samples = len(real_transitions)
 
         if not self.config.enable_real_weighting:
             return WeightedUpdateResult("disabled", episode_real_samples, 0, False, 0.0)
@@ -174,11 +177,21 @@ class RealFlightPriorityTrainer:
             ),
         )
 
-        model.train(gradient_steps=gradient_steps, batch_size=model.batch_size)
+        try:
+            model.train(gradient_steps=gradient_steps, batch_size=model.batch_size)
+        except Exception:
+            if self.config.rollback_on_bad_update:
+                model.policy.load_state_dict(snapshot)
+                return WeightedUpdateResult(
+                    "rolled_back",
+                    episode_real_samples,
+                    gradient_steps,
+                    True,
+                    0.0,
+                )
+            raise
 
-        probe_states = [
-            item.observation for item in episode_transitions[: min(4, episode_real_samples)]
-        ]
+        probe_states = [item.observation for item in real_transitions[: min(4, episode_real_samples)]]
         if not self._sanity_check(model, probe_states):
             if self.config.rollback_on_bad_update:
                 model.policy.load_state_dict(snapshot)
