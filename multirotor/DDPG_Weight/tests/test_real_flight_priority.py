@@ -4,6 +4,7 @@ import numpy as np
 from multirotor.DDPG_Weight.real_flight_priority import (
     RealFlightTransition,
     RealFlightTransitionStore,
+    RealFlightPriorityTrainer,
     normalize_real_flight_weighting_config,
 )
 
@@ -170,6 +171,78 @@ class RealFlightTransitionStoreTests(unittest.TestCase):
         )
 
         self.assertEqual(store.get_episode(1), [])
+
+
+class FakePolicy:
+    def __init__(self):
+        self.state = {"weight": 1.0}
+
+    def state_dict(self):
+        return dict(self.state)
+
+    def load_state_dict(self, state):
+        self.state = dict(state)
+
+
+class FakeModel:
+    def __init__(self, invalid_after_train=False):
+        self.batch_size = 4
+        self.policy = FakePolicy()
+        self.invalid_after_train = invalid_after_train
+        self.train_calls = []
+        self.action_value = 1.0
+
+    def train(self, gradient_steps, batch_size):
+        self.train_calls.append((gradient_steps, batch_size))
+        self.policy.state["weight"] = 99.0
+        if self.invalid_after_train:
+            self.action_value = float("nan")
+
+    def predict(self, observation, deterministic=True):
+        return np.full(7, self.action_value, dtype=np.float32), None
+
+
+class RealFlightPriorityTrainerTests(unittest.TestCase):
+    def _build_transition(self, episode_index, step_index):
+        return RealFlightTransition(
+            observation=np.full(18, step_index, dtype=np.float32),
+            action=np.full(7, 0.5, dtype=np.float32),
+            reward=1.0,
+            next_observation=np.full(18, step_index + 1, dtype=np.float32),
+            done=False,
+            source="real",
+            episode_index=episode_index,
+            step_index=step_index,
+            timestamp=200.0 + step_index,
+        )
+
+    def test_skip_weighted_update_when_episode_has_too_few_real_samples(self):
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 3, "real_update_multiplier": 2}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=2, step_index=0))
+        model = FakeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=2)
+
+        self.assertEqual(result.status, "skipped_min_samples")
+        self.assertEqual(model.train_calls, [])
+
+    def test_bad_weighted_update_rolls_policy_back(self):
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 2, "real_update_multiplier": 2}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=4, step_index=0))
+        trainer.record_transition(self._build_transition(episode_index=4, step_index=1))
+        model = FakeModel(invalid_after_train=True)
+
+        result = trainer.apply_post_episode_update(model, episode_index=4)
+
+        self.assertEqual(result.status, "rolled_back")
+        self.assertTrue(result.rollback_triggered)
+        self.assertEqual(model.policy.state["weight"], 1.0)
 
 
 if __name__ == "__main__":

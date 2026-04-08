@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import math
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Dict, List, Set
@@ -127,3 +129,81 @@ class RealFlightTransitionStore:
     def _mark_truncated(self, episode_index: int) -> None:
         if self._episode_counts.get(episode_index, 0) > 0:
             self._truncated_episodes.add(episode_index)
+
+
+@dataclass(frozen=True)
+class WeightedUpdateResult:
+    status: str
+    episode_real_samples: int
+    extra_gradient_steps: int
+    rollback_triggered: bool
+    policy_param_delta_norm: float
+
+
+class RealFlightPriorityTrainer:
+    def __init__(self, config: RealFlightWeightingConfig):
+        self.config = config
+        self.store = RealFlightTransitionStore(capacity=config.real_buffer_capacity)
+
+    def record_transition(self, transition: RealFlightTransition) -> None:
+        self.store.add(transition)
+
+    def apply_post_episode_update(self, model, episode_index: int) -> WeightedUpdateResult:
+        episode_transitions = self.store.get_episode(episode_index)
+        episode_real_samples = len(episode_transitions)
+
+        if not self.config.enable_real_weighting:
+            return WeightedUpdateResult("disabled", episode_real_samples, 0, False, 0.0)
+
+        if episode_real_samples < self.config.min_real_samples_before_update:
+            return WeightedUpdateResult(
+                "skipped_min_samples",
+                episode_real_samples,
+                0,
+                False,
+                0.0,
+            )
+
+        snapshot = copy.deepcopy(model.policy.state_dict())
+        gradient_steps = min(
+            self.config.max_real_updates_per_episode,
+            max(
+                1,
+                math.ceil(episode_real_samples / max(1, int(model.batch_size)))
+                * self.config.real_update_multiplier,
+            ),
+        )
+
+        model.train(gradient_steps=gradient_steps, batch_size=model.batch_size)
+
+        probe_states = [
+            item.observation for item in episode_transitions[: min(4, episode_real_samples)]
+        ]
+        if not self._sanity_check(model, probe_states):
+            if self.config.rollback_on_bad_update:
+                model.policy.load_state_dict(snapshot)
+                return WeightedUpdateResult(
+                    "rolled_back",
+                    episode_real_samples,
+                    gradient_steps,
+                    True,
+                    0.0,
+                )
+
+        delta = abs(float(model.policy.state_dict()["weight"]) - float(snapshot["weight"]))
+        return WeightedUpdateResult(
+            "applied",
+            episode_real_samples,
+            gradient_steps,
+            False,
+            delta,
+        )
+
+    def _sanity_check(self, model, probe_states) -> bool:
+        for observation in probe_states:
+            action, _ = model.predict(observation, deterministic=True)
+            if not np.isfinite(action).all():
+                return False
+            if np.any(action < 0.5) or np.any(action > 30.0):
+                return False
+        return True
