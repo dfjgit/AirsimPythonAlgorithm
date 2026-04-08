@@ -13,6 +13,7 @@ import json
 import math
 import os
 import sys
+import time
 from typing import List, Optional
 
 import gym
@@ -807,6 +808,9 @@ class CrazyflieOnlineWeightEnv(gym.Env):
             done: 是否结束episode（布尔值）
             info: 包含额外信息的字典（如当前权重）
         """
+        current_state = self._get_state()
+        transition_timestamp = time.time()
+
         # 分离APF权重和避障参数
         apf_action = action[:5]
         obstacle_action = action[5:] if len(action) > 5 else np.array([15.0, 5.0])
@@ -854,8 +858,6 @@ class CrazyflieOnlineWeightEnv(gym.Env):
 
         # 等待指定时间，让无人机执行动作并产生状态变化
         if self.step_duration > 0:
-            import time
-
             time.sleep(self.step_duration)
 
         # 获取新状态并计算奖励
@@ -902,6 +904,17 @@ class CrazyflieOnlineWeightEnv(gym.Env):
                         done = True
 
         info = {"weights": weights}
+        info["transition_payload"] = {
+            "observation": np.array(current_state, copy=True),
+            "action": np.array(action, copy=True),
+            "reward": float(reward),
+            "next_observation": np.array(next_state, copy=True),
+            "done": bool(done),
+            "source": "real",
+            "episode_index": int(self.episode_count),
+            "step_index": int(self.step_count),
+            "timestamp": float(transition_timestamp),
+        }
         return next_state, reward, done, info
 
     def _get_state(self) -> np.ndarray:
