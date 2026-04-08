@@ -286,6 +286,50 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
         self.assertEqual(result.episode_real_samples, 1)
         self.assertEqual(model.train_calls, [])
 
+    def test_weighted_update_uses_real_buffer_transitions_for_training(self):
+        class TrackingReplayBuffer:
+            def __init__(self):
+                self.entries = []
+
+            def add(self, obs, next_obs, action, reward, done, infos=None):
+                self.entries.append((obs, next_obs, action, reward, done))
+
+            def __len__(self):
+                return len(self.entries)
+
+        class BufferModel(FakeModel):
+            def __init__(self):
+                super().__init__()
+                self.replay_buffer = TrackingReplayBuffer()
+                self.replay_buffer.entries.append("original")
+                self.buffer_during_train = None
+                self.buffer_len_during_train = None
+
+            def train(self, gradient_steps, batch_size):
+                self.buffer_during_train = self.replay_buffer
+                self.buffer_len_during_train = len(self.replay_buffer)
+                super().train(gradient_steps, batch_size)
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=8, step_index=0))
+        trainer.record_transition(self._build_transition(episode_index=9, step_index=0))
+        trainer.record_transition(
+            self._build_transition(episode_index=8, step_index=1, source="sim")
+        )
+        model = BufferModel()
+        original_buffer = model.replay_buffer
+
+        result = trainer.apply_post_episode_update(model, episode_index=8)
+
+        self.assertEqual(result.status, "applied")
+        self.assertIs(model.replay_buffer, original_buffer)
+        self.assertIsNot(model.buffer_during_train, original_buffer)
+        self.assertEqual(model.buffer_len_during_train, 2)
+        self.assertEqual(model.replay_buffer.entries, ["original"])
+
     def test_train_exception_rolls_back_policy_state(self):
         class ExplodingModel(FakeModel):
             def train(self, gradient_steps, batch_size):

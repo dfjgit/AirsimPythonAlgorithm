@@ -142,6 +142,17 @@ class WeightedUpdateResult:
     policy_param_delta_norm: float
 
 
+class _SimpleReplayBuffer:
+    def __init__(self):
+        self.entries = []
+
+    def add(self, obs, next_obs, action, reward, done, infos=None):
+        self.entries.append((obs, next_obs, action, reward, done, infos))
+
+    def __len__(self):
+        return len(self.entries)
+
+
 class RealFlightPriorityTrainer:
     def __init__(self, config: RealFlightWeightingConfig):
         self.config = config
@@ -154,6 +165,9 @@ class RealFlightPriorityTrainer:
         episode_transitions = self.store.get_episode(episode_index)
         real_transitions = [item for item in episode_transitions if item.source == "real"]
         episode_real_samples = len(real_transitions)
+        training_transitions = [
+            item for item in self.store.transitions if item.source == "real"
+        ]
 
         if not self.config.enable_real_weighting:
             return WeightedUpdateResult("disabled", episode_real_samples, 0, False, 0.0)
@@ -177,6 +191,15 @@ class RealFlightPriorityTrainer:
             ),
         )
 
+        original_replay_buffer = getattr(model, "replay_buffer", None)
+        temp_replay_buffer = None
+        if original_replay_buffer is not None:
+            temp_replay_buffer = self._build_temp_replay_buffer(
+                original_replay_buffer, training_transitions
+            )
+            if temp_replay_buffer is not None:
+                model.replay_buffer = temp_replay_buffer
+
         try:
             model.train(gradient_steps=gradient_steps, batch_size=model.batch_size)
         except Exception:
@@ -190,6 +213,9 @@ class RealFlightPriorityTrainer:
                     0.0,
                 )
             raise
+        finally:
+            if temp_replay_buffer is not None:
+                model.replay_buffer = original_replay_buffer
 
         probe_states = [item.observation for item in real_transitions[: min(4, episode_real_samples)]]
         if not self._sanity_check(model, probe_states):
@@ -220,6 +246,75 @@ class RealFlightPriorityTrainer:
             if np.any(action < 0.5) or np.any(action > 30.0):
                 return False
         return True
+
+    def _build_temp_replay_buffer(self, original_buffer, transitions):
+        capacity = max(1, len(transitions))
+        temp_buffer = self._instantiate_buffer_like(original_buffer, capacity)
+        if temp_buffer is None:
+            temp_buffer = _SimpleReplayBuffer()
+
+        for transition in transitions:
+            self._add_to_replay_buffer(temp_buffer, transition)
+
+        return temp_buffer
+
+    @staticmethod
+    def _instantiate_buffer_like(original_buffer, capacity: int):
+        if original_buffer is None:
+            return None
+        buffer_class = original_buffer.__class__
+        kwargs = {}
+        if hasattr(original_buffer, "observation_space"):
+            kwargs["observation_space"] = original_buffer.observation_space
+        if hasattr(original_buffer, "action_space"):
+            kwargs["action_space"] = original_buffer.action_space
+        if hasattr(original_buffer, "device"):
+            kwargs["device"] = original_buffer.device
+        if hasattr(original_buffer, "n_envs"):
+            kwargs["n_envs"] = original_buffer.n_envs
+        if hasattr(original_buffer, "optimize_memory_usage"):
+            kwargs["optimize_memory_usage"] = original_buffer.optimize_memory_usage
+        if hasattr(original_buffer, "handle_timeout_termination"):
+            kwargs["handle_timeout_termination"] = original_buffer.handle_timeout_termination
+
+        if "observation_space" in kwargs and "action_space" in kwargs:
+            try:
+                return buffer_class(buffer_size=capacity, **kwargs)
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _add_to_replay_buffer(buffer, transition: RealFlightTransition) -> None:
+        try:
+            buffer.add(
+                transition.observation,
+                transition.next_observation,
+                transition.action,
+                transition.reward,
+                transition.done,
+                infos=None,
+            )
+            return
+        except TypeError:
+            pass
+
+        try:
+            buffer.add(
+                transition.observation,
+                transition.next_observation,
+                transition.action,
+                transition.reward,
+                transition.done,
+            )
+            return
+        except TypeError:
+            pass
+
+        try:
+            buffer.add(transition)
+        except Exception:
+            return
 
     @staticmethod
     def _policy_param_delta_norm(snapshot: Dict, current: Dict) -> float:
