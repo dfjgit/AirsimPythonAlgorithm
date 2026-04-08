@@ -216,6 +216,44 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
             timestamp=200.0 + step_index,
         )
 
+    def test_weighted_update_returns_delta_norm_for_multi_param_policy(self):
+        class MultiParamPolicy:
+            def __init__(self):
+                self.state = {
+                    "w1": np.array([1.0, 2.0], dtype=np.float32),
+                    "w2": np.array([[3.0]], dtype=np.float32),
+                }
+
+            def state_dict(self):
+                return {k: np.array(v, copy=True) for k, v in self.state.items()}
+
+            def load_state_dict(self, state):
+                self.state = {k: np.array(v, copy=True) for k, v in state.items()}
+
+        class MultiParamModel:
+            def __init__(self):
+                self.batch_size = 4
+                self.policy = MultiParamPolicy()
+
+            def train(self, gradient_steps, batch_size):
+                self.policy.state["w1"] = np.array([2.0, 2.0], dtype=np.float32)
+                self.policy.state["w2"] = np.array([[5.0]], dtype=np.float32)
+
+            def predict(self, observation, deterministic=True):
+                return np.full(7, 1.0, dtype=np.float32), None
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=6, step_index=0))
+        model = MultiParamModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=6)
+
+        self.assertEqual(result.status, "applied")
+        self.assertAlmostEqual(result.policy_param_delta_norm, np.sqrt(5.0))
+
     def test_skip_weighted_update_when_episode_has_too_few_real_samples(self):
         config = normalize_real_flight_weighting_config(
             {"min_real_samples_before_update": 3, "real_update_multiplier": 2}

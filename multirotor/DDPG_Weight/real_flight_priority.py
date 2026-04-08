@@ -190,7 +190,7 @@ class RealFlightPriorityTrainer:
                     0.0,
                 )
 
-        delta = abs(float(model.policy.state_dict()["weight"]) - float(snapshot["weight"]))
+        delta = self._policy_param_delta_norm(snapshot, model.policy.state_dict())
         return WeightedUpdateResult(
             "applied",
             episode_real_samples,
@@ -207,3 +207,40 @@ class RealFlightPriorityTrainer:
             if np.any(action < 0.5) or np.any(action > 30.0):
                 return False
         return True
+
+    @staticmethod
+    def _policy_param_delta_norm(snapshot: Dict, current: Dict) -> float:
+        total = 0.0
+        for key, current_value in current.items():
+            if key not in snapshot:
+                continue
+            previous_value = snapshot[key]
+            current_array = RealFlightPriorityTrainer._to_numpy(current_value)
+            previous_array = RealFlightPriorityTrainer._to_numpy(previous_value)
+            if current_array is None or previous_array is None:
+                continue
+            diff = current_array - previous_array
+            total += float(np.sum(diff * diff))
+        return float(math.sqrt(total))
+
+    @staticmethod
+    def _to_numpy(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float, np.number)):
+            return np.array(value, dtype=np.float64)
+        if isinstance(value, np.ndarray):
+            return value.astype(np.float64, copy=False)
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            try:
+                return np.array(value.numpy(), dtype=np.float64, copy=False)
+            except Exception:
+                pass
+        try:
+            return np.array(value, dtype=np.float64, copy=False)
+        except Exception:
+            return None
