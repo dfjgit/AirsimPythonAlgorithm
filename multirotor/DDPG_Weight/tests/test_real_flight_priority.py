@@ -361,6 +361,21 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
         self.assertEqual(result.status, "failed_sanity")
         self.assertFalse(result.rollback_triggered)
 
+    def test_weighted_update_uses_action_space_bounds_for_sanity_check(self):
+        class ActionSpace:
+            low = np.full(7, -2.0, dtype=np.float32)
+            high = np.full(7, 2.0, dtype=np.float32)
+
+        model = FakeModel()
+        model.action_space = ActionSpace()
+        model.action_value = -1.0
+        trainer = RealFlightPriorityTrainer(normalize_real_flight_weighting_config({}))
+
+        self.assertTrue(trainer._sanity_check(model, [np.zeros(18, dtype=np.float32)]))
+
+        model.action_value = 3.0
+        self.assertFalse(trainer._sanity_check(model, [np.zeros(18, dtype=np.float32)]))
+
     def test_temp_replay_buffer_add_uses_sb3_shapes(self):
         class SB3LikeReplayBuffer:
             def __init__(self, buffer_size, observation_space=None, action_space=None, device=None):
@@ -418,6 +433,86 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
         self.assertTrue(result.rollback_triggered)
         self.assertEqual(model.policy.state["weight"], 1.0)
 
+    def test_train_exception_rolls_back_optimizer_state_when_available(self):
+        class FakeOptimizer:
+            def __init__(self, state):
+                self.state = dict(state)
+
+            def state_dict(self):
+                return {"state": dict(self.state)}
+
+            def load_state_dict(self, state):
+                self.state = dict(state["state"])
+
+        class FakeModuleWithOptimizer:
+            def __init__(self, state):
+                self.optimizer = FakeOptimizer(state)
+
+        class ExplodingModel(FakeModel):
+            def __init__(self):
+                super().__init__()
+                self.actor = FakeModuleWithOptimizer({"step": 1})
+                self.critic = FakeModuleWithOptimizer({"step": 2})
+
+            def train(self, gradient_steps, batch_size):
+                self.train_calls.append((gradient_steps, batch_size))
+                self.policy.state["weight"] = 99.0
+                self.actor.optimizer.state["step"] = 10
+                self.critic.optimizer.state["step"] = 20
+                raise RuntimeError("boom")
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=14, step_index=0))
+        model = ExplodingModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=14)
+
+        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(model.actor.optimizer.state["step"], 1)
+        self.assertEqual(model.critic.optimizer.state["step"], 2)
+
+    def test_failed_sanity_rolls_back_optimizer_state_when_available(self):
+        class FakeOptimizer:
+            def __init__(self, state):
+                self.state = dict(state)
+
+            def state_dict(self):
+                return {"state": dict(self.state)}
+
+            def load_state_dict(self, state):
+                self.state = dict(state["state"])
+
+        class FakeModuleWithOptimizer:
+            def __init__(self, state):
+                self.optimizer = FakeOptimizer(state)
+
+        class InvalidActionModel(FakeModel):
+            def __init__(self):
+                super().__init__(invalid_after_train=True)
+                self.actor = FakeModuleWithOptimizer({"step": 3})
+                self.critic = FakeModuleWithOptimizer({"step": 4})
+
+            def train(self, gradient_steps, batch_size):
+                super().train(gradient_steps, batch_size)
+                self.actor.optimizer.state["step"] = 30
+                self.critic.optimizer.state["step"] = 40
+
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=15, step_index=0))
+        model = InvalidActionModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=15)
+
+        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(model.actor.optimizer.state["step"], 3)
+        self.assertEqual(model.critic.optimizer.state["step"], 4)
+
     def test_skip_weighted_update_when_episode_has_too_few_real_samples(self):
         config = normalize_real_flight_weighting_config(
             {"min_real_samples_before_update": 3, "real_update_multiplier": 2}
@@ -429,6 +524,40 @@ class RealFlightPriorityTrainerTests(unittest.TestCase):
         result = trainer.apply_post_episode_update(model, episode_index=2)
 
         self.assertEqual(result.status, "skipped_min_samples")
+        self.assertEqual(model.train_calls, [])
+
+    def test_skips_weighted_update_when_episode_was_truncated_from_store(self):
+        config = normalize_real_flight_weighting_config(
+            {
+                "min_real_samples_before_update": 1,
+                "real_update_multiplier": 1,
+                "real_buffer_capacity": 2,
+            }
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=20, step_index=0))
+        trainer.record_transition(self._build_transition(episode_index=20, step_index=1))
+        trainer.record_transition(self._build_transition(episode_index=21, step_index=0))
+        model = FakeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=20)
+
+        self.assertEqual(result.status, "skipped_missing_episode")
+        self.assertEqual(result.episode_real_samples, 0)
+        self.assertEqual(model.train_calls, [])
+
+    def test_skips_weighted_update_when_episode_is_missing_from_store(self):
+        config = normalize_real_flight_weighting_config(
+            {"min_real_samples_before_update": 1, "real_update_multiplier": 1}
+        )
+        trainer = RealFlightPriorityTrainer(config)
+        trainer.record_transition(self._build_transition(episode_index=22, step_index=0))
+        model = FakeModel()
+
+        result = trainer.apply_post_episode_update(model, episode_index=999)
+
+        self.assertEqual(result.status, "skipped_missing_episode")
+        self.assertEqual(result.episode_real_samples, 0)
         self.assertEqual(model.train_calls, [])
 
     def test_bad_weighted_update_rolls_policy_back(self):

@@ -90,10 +90,5 @@ class EpisodeAwareTrainingCallback(BaseCallback):
                 self.last_episode_index = int(payload["episode_index"])
             else:
                 self.last_episode_index = None
-            return False
-
-        if self.episode_finished or self.last_episode_index is not None:
-            self.episode_finished = False
-            self.last_episode_index = None
 
         return True

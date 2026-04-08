@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Callable, List
 
 
+def _has_remaining_training_budget(total_timesteps: int, current_timesteps: int) -> bool:
+    return int(total_timesteps) > 0 and int(current_timesteps) < int(total_timesteps)
+
+
 def run_weighted_online_training(
     model,
     total_timesteps: int,
@@ -14,16 +18,16 @@ def run_weighted_online_training(
     update_results: List[object] = []
 
     while True:
+        if not first_call and not _has_remaining_training_budget(
+            total_timesteps=total_timesteps,
+            current_timesteps=getattr(model, "num_timesteps", 0),
+        ):
+            break
+
         callback = callback_factory()
-        learn_total_timesteps = total_timesteps
-        if not first_call or not reset_num_timesteps:
-            remaining_steps = int(total_timesteps) - int(model.num_timesteps)
-            if remaining_steps <= 0:
-                break
-            learn_total_timesteps = remaining_steps
 
         model.learn(
-            total_timesteps=learn_total_timesteps,
+            total_timesteps=1,
             reset_num_timesteps=reset_num_timesteps if first_call else False,
             callback=callback,
         )

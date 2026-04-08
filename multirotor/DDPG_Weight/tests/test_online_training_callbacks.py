@@ -81,7 +81,7 @@ class EpisodeAwareTrainingCallbackTests(unittest.TestCase):
         self.assertEqual(len(trainer.transitions), 1)
         self.assertEqual(trainer.transitions[0].episode_index, 4)
 
-    def test_callback_clears_episode_state_on_non_terminal_step(self):
+    def test_callback_keeps_latched_episode_state_until_training_restarts(self):
         callback = EpisodeAwareTrainingCallback(
             total_timesteps=10,
             print_interval_steps=1,
@@ -100,10 +100,10 @@ class EpisodeAwareTrainingCallbackTests(unittest.TestCase):
         should_continue = callback._handle_episode_boundary_for_test()
 
         self.assertTrue(should_continue)
-        self.assertFalse(callback.episode_finished)
-        self.assertIsNone(callback.last_episode_index)
+        self.assertTrue(callback.episode_finished)
+        self.assertEqual(callback.last_episode_index, 7)
 
-    def test_callback_marks_episode_finished_and_stops_on_done(self):
+    def test_callback_marks_episode_finished_without_stopping_on_done(self):
         callback = EpisodeAwareTrainingCallback(
             total_timesteps=10,
             print_interval_steps=1,
@@ -133,9 +133,26 @@ class EpisodeAwareTrainingCallbackTests(unittest.TestCase):
 
         should_continue = callback._handle_episode_boundary_for_test()
 
-        self.assertFalse(should_continue)
+        self.assertTrue(should_continue)
         self.assertTrue(callback.episode_finished)
         self.assertEqual(callback.last_episode_index, 2)
+
+    def test_training_start_clears_latched_episode_state(self):
+        callback = EpisodeAwareTrainingCallback(
+            total_timesteps=10,
+            print_interval_steps=1,
+            print_interval_sec=60,
+            training_visualizer=None,
+            data_logger=None,
+            priority_trainer=None,
+        )
+        callback.episode_finished = True
+        callback.last_episode_index = 9
+
+        callback._on_training_start()
+
+        self.assertFalse(callback.episode_finished)
+        self.assertIsNone(callback.last_episode_index)
 
 
 if __name__ == "__main__":

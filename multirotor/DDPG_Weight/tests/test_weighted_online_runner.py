@@ -38,7 +38,7 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
             on_episode_end=seen_updates.append,
         )
 
-        self.assertEqual(model.learn_calls, [(10, True)])
+        self.assertEqual(model.learn_calls, [(1, True)])
         self.assertEqual(seen_updates, [1])
 
     def test_runner_skips_post_update_when_episode_index_is_missing(self):
@@ -53,7 +53,7 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
             on_episode_end=seen_updates.append,
         )
 
-        self.assertEqual(model.learn_calls, [(5, True)])
+        self.assertEqual(model.learn_calls, [(1, True)])
         self.assertEqual(seen_updates, [])
 
     def test_warm_start_first_call_uses_remaining_steps(self):
@@ -69,7 +69,7 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
             on_episode_end=seen_updates.append,
         )
 
-        self.assertEqual(model.learn_calls, [(5, False)])
+        self.assertEqual(model.learn_calls, [(1, False)])
         self.assertEqual(seen_updates, [1])
 
     def test_runner_triggers_post_update_after_each_finished_episode(self):
@@ -95,8 +95,9 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
 
         self.assertEqual(seen_episode_updates, [1, 2])
         self.assertEqual(len(model.learn_calls), 2)
+        self.assertEqual(model.learn_calls, [(1, True), (1, False)])
 
-    def test_subsequent_calls_pass_remaining_steps(self):
+    def test_subsequent_calls_keep_single_step_segment_requests(self):
         model = FakeModel(scripted_results=[(5, False, None), (5, True, 1)])
         seen_updates = []
 
@@ -108,7 +109,7 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
             on_episode_end=seen_updates.append,
         )
 
-        self.assertEqual(model.learn_calls, [(10, True), (5, False)])
+        self.assertEqual(model.learn_calls, [(1, True), (1, False)])
         self.assertEqual(seen_updates, [1])
 
     def test_runner_continues_if_episode_not_finished(self):
@@ -124,7 +125,7 @@ class WeightedOnlineRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(len(model.learn_calls), 3)
-        self.assertEqual(model.learn_calls[-1], (4, False))
+        self.assertEqual(model.learn_calls, [(1, True), (1, False), (1, False)])
         self.assertEqual(seen_updates, [1])
 
 

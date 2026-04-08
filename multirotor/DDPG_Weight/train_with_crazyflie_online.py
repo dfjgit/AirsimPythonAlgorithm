@@ -789,6 +789,7 @@ def main():
     # 读取配置文件（若未提供则用空配置，后续会回退到默认值）
     config = _load_train_config(args.config)
     real_weighting_config = _load_real_weighting_config(config)
+    raw_real_weighting = config.get("real_weighting") if isinstance(config, dict) else None
 
     # 从命令行/配置中解析训练超参数
     # 规则：命令行优先，其次配置文件，最后默认值
@@ -1061,6 +1062,10 @@ def main():
                 real_weighting_config.min_real_samples_before_update,
                 real_weighting_config.max_real_updates_per_episode,
             )
+            if isinstance(raw_real_weighting, dict) and "real_batch_ratio" in raw_real_weighting:
+                logger.info(
+                    "[RealWeight] real_batch_ratio 当前版本仅保留兼容性，不参与实际训练采样"
+                )
             priority_trainer = RealFlightPriorityTrainer(real_weighting_config)
 
             def _callback_factory():

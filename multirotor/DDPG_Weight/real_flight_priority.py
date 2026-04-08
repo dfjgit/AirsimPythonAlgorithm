@@ -162,7 +162,14 @@ class RealFlightPriorityTrainer:
         self.store.add(transition)
 
     def apply_post_episode_update(self, model, episode_index: int) -> WeightedUpdateResult:
-        episode_transitions = self.store.get_episode(episode_index)
+        try:
+            episode_transitions = self.store.get_episode(episode_index)
+        except ValueError:
+            return WeightedUpdateResult("skipped_missing_episode", 0, 0, False, 0.0)
+
+        if not episode_transitions:
+            return WeightedUpdateResult("skipped_missing_episode", 0, 0, False, 0.0)
+
         real_transitions = [item for item in episode_transitions if item.source == "real"]
         episode_real_samples = len(real_transitions)
         training_transitions = [
@@ -182,6 +189,7 @@ class RealFlightPriorityTrainer:
             )
 
         snapshot = copy.deepcopy(model.policy.state_dict())
+        optimizer_snapshots = self._snapshot_optimizer_states(model)
         computed_steps = math.ceil(
             episode_real_samples / max(1, int(model.batch_size))
         ) * self.config.real_update_multiplier
@@ -209,7 +217,7 @@ class RealFlightPriorityTrainer:
             model.train(gradient_steps=gradient_steps, batch_size=model.batch_size)
         except Exception:
             if self.config.rollback_on_bad_update:
-                model.policy.load_state_dict(snapshot)
+                self._restore_training_state(model, snapshot, optimizer_snapshots)
                 return WeightedUpdateResult(
                     "rolled_back",
                     episode_real_samples,
@@ -225,7 +233,7 @@ class RealFlightPriorityTrainer:
         probe_states = [item.observation for item in real_transitions[: min(4, episode_real_samples)]]
         if not self._sanity_check(model, probe_states):
             if self.config.rollback_on_bad_update:
-                model.policy.load_state_dict(snapshot)
+                self._restore_training_state(model, snapshot, optimizer_snapshots)
                 return WeightedUpdateResult(
                     "rolled_back",
                     episode_real_samples,
@@ -251,13 +259,58 @@ class RealFlightPriorityTrainer:
         )
 
     def _sanity_check(self, model, probe_states) -> bool:
+        action_low, action_high = self._resolve_action_bounds(model)
         for observation in probe_states:
             action, _ = model.predict(observation, deterministic=True)
             if not np.isfinite(action).all():
                 return False
-            if np.any(action < 0.5) or np.any(action > 30.0):
+            if np.any(action < action_low) or np.any(action > action_high):
                 return False
         return True
+
+    @staticmethod
+    def _restore_training_state(model, policy_snapshot: Dict, optimizer_snapshots) -> None:
+        model.policy.load_state_dict(policy_snapshot)
+        for optimizer, snapshot in optimizer_snapshots:
+            optimizer.load_state_dict(snapshot)
+
+    @staticmethod
+    def _snapshot_optimizer_states(model):
+        snapshots = []
+        seen = set()
+        optimizer_holders = [
+            getattr(model, "policy", None),
+            getattr(model, "actor", None),
+            getattr(model, "critic", None),
+            getattr(model, "actor_target", None),
+            getattr(model, "critic_target", None),
+        ]
+        for holder in optimizer_holders:
+            optimizer = getattr(holder, "optimizer", None)
+            if optimizer is None:
+                continue
+            if not hasattr(optimizer, "state_dict") or not hasattr(optimizer, "load_state_dict"):
+                continue
+            optimizer_id = id(optimizer)
+            if optimizer_id in seen:
+                continue
+            seen.add(optimizer_id)
+            snapshots.append((optimizer, copy.deepcopy(optimizer.state_dict())))
+        return snapshots
+
+    @staticmethod
+    def _resolve_action_bounds(model):
+        action_space = getattr(model, "action_space", None)
+        low = getattr(action_space, "low", None)
+        high = getattr(action_space, "high", None)
+        if low is None or high is None:
+            return 0.5, 30.0
+
+        low_array = np.asarray(low, dtype=np.float32)
+        high_array = np.asarray(high, dtype=np.float32)
+        if low_array.size == 0 or high_array.size == 0:
+            return 0.5, 30.0
+        return low_array, high_array
 
     def _build_temp_replay_buffer(self, original_buffer, transitions):
         capacity = max(1, len(transitions))
