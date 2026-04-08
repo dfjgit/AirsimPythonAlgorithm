@@ -37,7 +37,17 @@
     "reset_unity": false,
     "safety_max_delta": 0.5,
     "no_safety_limit": false,
-    "model_name": "weight_predictor_crazyflie_online"
+    "model_name": "weight_predictor_crazyflie_online",
+    "real_weighting": {
+      "update_timing": "episode_end",
+      "enable_real_weighting": true,
+      "real_update_multiplier": 4,
+      "real_batch_ratio": 1.0,
+      "min_real_samples_before_update": 32,
+      "max_real_updates_per_episode": 8,
+      "real_buffer_capacity": 5000,
+      "rollback_on_bad_update": true
+    }
   },
   "crazyflie_logs": {
     "_comment": "Crazyflie offline log training defaults.",
