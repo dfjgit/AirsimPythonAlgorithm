@@ -172,6 +172,7 @@ multirotor/Visualization/visualization_data/
 
 # ==================== Claude Code 配置忽略 ====================
 .claude/
+.worktrees/
 
 # ==================== Python 虚拟环境忽略 ====================
 # 虚拟环境目录
