@@ -72,6 +72,28 @@ class SystemConfigTests(unittest.TestCase):
         self.assertEqual(load_environment_rules(config), config.get_environment_rules())
         self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.4)
 
+    def test_environment_rules_are_isolated_from_internal_state(self):
+        system_path = self._write_json(
+            "system_config.json",
+            {
+                "drones": {
+                    "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False},
+                },
+                "environment": {
+                    "termination": {"target_scan_ratio": 0.25},
+                    "battery": {"low_threshold": 3.5, "optimal_min": 3.7, "optimal_max": 4.1},
+                },
+            },
+        )
+
+        config = SystemConfig(config_file=str(system_path))
+        rules = config.get_environment_rules()
+        rules["termination"]["target_scan_ratio"] = 0.99
+        rules["battery"]["low_threshold"] = 3.2
+
+        self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.25)
+        self.assertEqual(config.get_environment_rules()["battery"]["low_threshold"], 3.5)
+
 
 if __name__ == "__main__":
     unittest.main()

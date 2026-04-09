@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -55,7 +56,7 @@ class SystemConfig:
         return bool(info and info.get("isCrazyflieMirror", False))
 
     def get_environment_rules(self) -> Dict[str, Any]:
-        return dict(self.config.get("environment", {}))
+        return deepcopy(self.config.get("environment", {}))
 
 
 def load_environment_rules(source: SystemConfig) -> Dict[str, Any]:
