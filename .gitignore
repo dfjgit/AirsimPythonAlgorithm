@@ -144,6 +144,12 @@ analysis_results/
 output/
 tmp/
 tmp_thesis_extract.txt
+.codex_tmp/
+.mplconfig/
+.tmp_collision_count_trend_tests/
+.tmp_collision_stability_tests/
+.tmp_compare_smoke_main/
+tmp*/
 
 # ==================== 训练生成的模型和输出文件 ====================
 # DDPG权重预测模型（带时间戳的训练输出）
