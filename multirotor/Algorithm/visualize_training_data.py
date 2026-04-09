@@ -91,6 +91,7 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
     # 1. Historical full comparison
     analyzer.plot_comparison(metric="reward", data_type="training", x_axis="episode")
     analyzer.plot_comparison(metric="scan_efficiency", data_type="training", x_axis="episode")
+    analyzer.plot_comparison(metric="collision_rate", data_type="training", x_axis="episode")
     analyzer.plot_comparison(metric="scan_ratio", data_type="scan", x_axis="elapsed_time")
     analyzer.plot_comparison(metric="global_avg_entropy", data_type="scan", x_axis="elapsed_time")
     analyzer.generate_summary_report()
@@ -105,6 +106,13 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
     )
     analyzer.plot_comparison(
         metric="scan_efficiency",
+        data_type="training",
+        x_axis="episode",
+        latest_only=True,
+        file_prefix="latest_comparison",
+    )
+    analyzer.plot_comparison(
+        metric="collision_rate",
         data_type="training",
         x_axis="episode",
         latest_only=True,
@@ -136,6 +144,13 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
     )
     analyzer.plot_recent_window_comparison(
         metric="scan_efficiency",
+        data_type="training",
+        tail_episodes=50,
+        min_training_episodes=20,
+        file_prefix="recent_window_comparison",
+    )
+    analyzer.plot_recent_window_comparison(
+        metric="collision_rate",
         data_type="training",
         tail_episodes=50,
         min_training_episodes=20,

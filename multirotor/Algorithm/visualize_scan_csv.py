@@ -13,6 +13,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+try:
+    from .collision_analysis import collision_termination_rate_percent
+except ImportError:  # script-mode fallback
+    from collision_analysis import collision_termination_rate_percent
+
 LOGGER = logging.getLogger("scan_csv_visualizer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -179,6 +184,47 @@ def moving_average(series: pd.Series, window: int = 20) -> pd.Series:
     return series.rolling(window=window, min_periods=1).mean()
 
 
+def rolling_std(series: pd.Series, window: int = 20) -> pd.Series:
+    return series.rolling(window=window, min_periods=2).std().fillna(0.0)
+
+
+def plot_mean_with_band(
+    ax,
+    x_values,
+    y_values,
+    *,
+    label: str | None = None,
+    color: str | None = None,
+    window: int = 20,
+    linewidth: float = 2.4,
+    linestyle: str = "-",
+    band_alpha: float = 0.18,
+) -> None:
+    x_series = pd.to_numeric(pd.Series(x_values), errors="coerce")
+    y_series = pd.to_numeric(pd.Series(y_values), errors="coerce")
+    mask = ~(x_series.isna() | y_series.isna())
+    if not mask.any():
+        return
+
+    x = x_series[mask].to_numpy(dtype=float)
+    y = y_series[mask].reset_index(drop=True)
+    mean = moving_average(y, window=window)
+    std = rolling_std(y, window=window)
+
+    line, = ax.plot(
+        x,
+        mean.to_numpy(dtype=float),
+        label=label,
+        color=color,
+        linewidth=linewidth,
+        linestyle=linestyle,
+    )
+    band_color = line.get_color()
+    lower = (mean - std).to_numpy(dtype=float)
+    upper = (mean + std).to_numpy(dtype=float)
+    ax.fill_between(x, lower, upper, color=band_color, alpha=band_alpha, linewidth=0)
+
+
 def parse_topdown_position(value: str) -> tuple[float, float] | None:
     text = str(value).strip()
     if not text:
@@ -208,8 +254,14 @@ def plot_episode_performance_summary(run: RunData) -> None:
     for col, title, ax, color in configs:
         if col not in df.columns:
             continue
-        ax.plot(x, df[col], alpha=0.25, color=color, linewidth=1.0, label="raw")
-        ax.plot(x, moving_average(df[col]), color=color, linewidth=2.4, label="MA20")
+        plot_mean_with_band(
+            ax,
+            x,
+            df[col],
+            color=color,
+            label="Rolling Mean ± 1σ",
+            window=20,
+        )
         ax.set_ylabel(title)
         ax.legend(loc="best")
     axes[2].set_xlabel("Episode")
@@ -231,14 +283,44 @@ def plot_reset_reason_rolling_ratio(run: RunData) -> None:
     fig, ax = plt.subplots(figsize=(14, 5))
     x = df["episode"]
     for reason in reasons:
-        values = (df["reset_reason"] == reason).astype(float)
-        ax.plot(x, moving_average(values, 20) * 100.0, linewidth=2.2, label=reason)
+        values = (df["reset_reason"] == reason).astype(float) * 100.0
+        plot_mean_with_band(ax, x, values, label=reason, window=20, linewidth=2.2)
     ax.set_title("Reset Reason Rolling Ratio (20 episodes)")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Ratio (%)")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "reset_reason_rolling_ratio.png", dpi=160)
+    plt.close(fig)
+
+
+def plot_collision_stability(run: RunData) -> None:
+    df = run.episode_df
+    if df.empty or "episode" not in df.columns:
+        return
+
+    collision_rate = collision_termination_rate_percent(df)
+    if collision_rate.empty:
+        return
+
+    x = pd.to_numeric(df["episode"], errors="coerce")
+    fig, ax = plt.subplots(figsize=(14, 5))
+    plot_mean_with_band(
+        ax,
+        x,
+        collision_rate,
+        color="#e76f51",
+        label="Rolling Mean ± 1σ",
+        window=20,
+    )
+    ax.set_title("Collision Stability")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Collision Termination Ratio (%)")
+    ax.set_ylim(-5, 105)
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(run.output_dir / "collision_stability.png", dpi=160)
     plt.close(fig)
 
 
@@ -294,7 +376,15 @@ def plot_algorithm_weights_stability(run: RunData) -> None:
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
     for col in cols:
         numeric = pd.to_numeric(df[col], errors="coerce")
-        axes[0].plot(df["elapsed_time"], moving_average(numeric, 50), linewidth=2, label=col)
+        plot_mean_with_band(
+            axes[0],
+            df["elapsed_time"],
+            numeric,
+            label=col,
+            window=50,
+            linewidth=2.0,
+            band_alpha=0.15,
+        )
         axes[1].plot(df["elapsed_time"], numeric.rolling(50, min_periods=5).std(), linewidth=1.8, label=col)
     axes[0].set_title("Weight Rolling Mean (window=50)")
     axes[1].set_title("Weight Rolling Std (window=50)")
@@ -321,6 +411,109 @@ def _episode_topdown_xz(run: RunData, episode: int) -> dict[str, tuple[np.ndarra
             if mask.any():
                 result[drone] = (x[mask], z[mask])
     return result
+
+
+def _select_representative_episodes(run: RunData, limit: int = 4) -> list[tuple[str, int]]:
+    df = run.episode_df
+    if df.empty or "episode" not in df.columns:
+        return []
+
+    working = df.copy()
+    working["episode"] = pd.to_numeric(working["episode"], errors="coerce")
+    working = working.dropna(subset=["episode"]).sort_values("episode")
+    if working.empty:
+        return []
+
+    if "episode_scan_ratio" in working.columns:
+        working["episode_scan_ratio"] = pd.to_numeric(
+            working["episode_scan_ratio"], errors="coerce"
+        )
+    else:
+        working["episode_scan_ratio"] = np.nan
+
+    if "episode_reward" in working.columns:
+        working["episode_reward"] = pd.to_numeric(
+            working["episode_reward"], errors="coerce"
+        )
+    else:
+        working["episode_reward"] = np.nan
+
+    if "episode_min_entropy" in working.columns:
+        working["episode_min_entropy"] = pd.to_numeric(
+            working["episode_min_entropy"], errors="coerce"
+        )
+    else:
+        working["episode_min_entropy"] = np.nan
+
+    if "reset_reason" in working.columns:
+        working["reset_reason"] = working["reset_reason"].fillna("").astype(str).str.strip()
+    else:
+        working["reset_reason"] = ""
+
+    candidates: list[tuple[str, int]] = []
+
+    def _append_from_row(label: str, row: pd.Series | None) -> None:
+        if row is None or row.empty:
+            return
+        try:
+            episode = int(row["episode"])
+        except Exception:
+            return
+        candidates.append((label, episode))
+
+    best_scan = working.sort_values(
+        ["episode_scan_ratio", "episode_reward", "episode"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+    _append_from_row("Best Scan", best_scan.iloc[0] if not best_scan.empty else None)
+
+    best_entropy = working.sort_values(
+        ["episode_min_entropy", "episode_scan_ratio", "episode"],
+        ascending=[True, False, False],
+        na_position="last",
+    )
+    _append_from_row(
+        "Lowest Entropy", best_entropy.iloc[0] if not best_entropy.empty else None
+    )
+
+    _append_from_row("Latest Episode", working.iloc[-1])
+
+    failure_mask = (
+        (working["reset_reason"] != "")
+        & (~working["reset_reason"].isin(["达到时长上限", "扫描完成"]))
+    )
+    failure_rows = working[failure_mask]
+    if not failure_rows.empty:
+        _append_from_row("Representative Failure", failure_rows.iloc[-1])
+
+    worst_scan = working.sort_values(
+        ["episode_scan_ratio", "episode", "episode_reward"],
+        ascending=[True, False, True],
+        na_position="last",
+    )
+    _append_from_row("Worst Scan", worst_scan.iloc[0] if not worst_scan.empty else None)
+
+    deduped: list[tuple[str, int]] = []
+    seen: set[int] = set()
+    for label, episode in candidates:
+        if episode not in seen:
+            deduped.append((label, episode))
+            seen.add(episode)
+        if len(deduped) >= limit:
+            break
+
+    if len(deduped) < limit:
+        for _, row in working.iloc[::-1].iterrows():
+            episode = int(row["episode"])
+            if episode in seen:
+                continue
+            deduped.append((f"Recent Ep {episode}", episode))
+            seen.add(episode)
+            if len(deduped) >= limit:
+                break
+
+    return deduped
 
 
 def plot_best_vs_recent_trajectory_comparison(run: RunData) -> None:
@@ -357,8 +550,13 @@ def plot_scan_progress(run: RunData) -> None:
     if df.empty or "episode_scan_ratio" not in df.columns:
         return
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(df["episode"], df["episode_scan_ratio"], alpha=0.35, label="raw")
-    ax.plot(df["episode"], moving_average(df["episode_scan_ratio"], 20), linewidth=2.4, label="MA20")
+    plot_mean_with_band(
+        ax,
+        df["episode"],
+        df["episode_scan_ratio"],
+        label="Rolling Mean ± 1σ",
+        window=20,
+    )
     ax.set_title("Episode Scan Progress")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Max Global Scan Ratio (%)")
@@ -373,8 +571,13 @@ def plot_entropy_trend(run: RunData) -> None:
     if df.empty or "episode_min_entropy" not in df.columns:
         return
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(df["episode"], df["episode_min_entropy"], alpha=0.35, label="raw")
-    ax.plot(df["episode"], moving_average(df["episode_min_entropy"], 20), linewidth=2.4, label="MA20")
+    plot_mean_with_band(
+        ax,
+        df["episode"],
+        df["episode_min_entropy"],
+        label="Rolling Mean ± 1σ",
+        window=20,
+    )
     ax.set_title("Episode Min Entropy Trend")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Min Global Avg Entropy")
@@ -385,26 +588,49 @@ def plot_entropy_trend(run: RunData) -> None:
 
 
 def plot_trajectories_xy(run: RunData) -> None:
-    df = run.scan_df
-    if df.empty or not run.drones:
+    if run.scan_df.empty or not run.drones:
         return
-    fig, ax = plt.subplots(figsize=(8, 8))
+    selected = _select_representative_episodes(run, limit=4)
+    if not selected:
+        return
+
+    n = len(selected)
+    ncols = 2 if n > 1 else 1
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(7 * ncols, 6 * nrows),
+        squeeze=False,
+        sharex=False,
+        sharey=False,
+    )
     plotted = False
-    for drone in run.drones:
-        x_col = f"{drone}_x"
-        z_col = f"{drone}_z"
-        if x_col in df.columns and z_col in df.columns:
-            x = pd.to_numeric(df[x_col], errors="coerce")
-            z = pd.to_numeric(df[z_col], errors="coerce")
-            ax.plot(x, z, linewidth=0.9, alpha=0.7, label=drone)
-            plotted = True
+
+    axes_list = axes.flatten().tolist()
+
+    for ax, (label, episode) in zip(axes_list, selected):
+        xz = _episode_topdown_xz(run, episode)
+        if not xz:
+            ax.set_visible(False)
+            continue
+        plotted = True
+        for drone, (x, z) in xz.items():
+            ax.plot(x, z, linewidth=1.6, alpha=0.9, label=drone)
+        ax.set_title(f"{label} | Episode {episode}")
+        ax.set_xlabel("X")
+        ax.set_ylabel("Z")
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="best")
+
+    for ax in axes_list[n:]:
+        ax.set_visible(False)
+
     if not plotted:
         plt.close(fig)
         return
-    ax.set_title("All Trajectories (Top-Down XZ)")
-    ax.set_xlabel("X")
-    ax.set_ylabel("Z")
-    ax.legend(loc="best")
+
+    fig.suptitle("Representative Trajectories (Top-Down XZ)", fontsize=16)
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_xy.png", dpi=160)
     plt.close(fig)
@@ -414,27 +640,55 @@ def plot_trajectories_3d(run: RunData) -> None:
     df = run.scan_df
     if df.empty or not run.drones:
         return
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection="3d")
+    selected = _select_representative_episodes(run, limit=4)
+    if not selected:
+        return
+
+    n = len(selected)
+    ncols = 2 if n > 1 else 1
+    nrows = math.ceil(n / ncols)
+    fig = plt.figure(figsize=(7 * ncols, 6 * nrows))
     plotted = False
-    for drone in run.drones:
-        x_col = f"{drone}_x"
-        y_col = f"{drone}_y"
-        z_col = f"{drone}_z"
-        if all(c in df.columns for c in [x_col, y_col, z_col]):
-            x = pd.to_numeric(df[x_col], errors="coerce")
-            y = pd.to_numeric(df[y_col], errors="coerce")  # Unity vertical axis
-            z = pd.to_numeric(df[z_col], errors="coerce")
-            ax.plot(x, z, y, linewidth=0.9, alpha=0.7, label=drone)
-            plotted = True
+
+    for index, (label, episode) in enumerate(selected, start=1):
+        ax = fig.add_subplot(nrows, ncols, index, projection="3d")
+        subset = df[df["episode"] == episode]
+        episode_plotted = False
+        for drone in run.drones:
+            x_col = f"{drone}_x"
+            y_col = f"{drone}_y"
+            z_col = f"{drone}_z"
+            if all(c in subset.columns for c in [x_col, y_col, z_col]):
+                x = pd.to_numeric(subset[x_col], errors="coerce")
+                y = pd.to_numeric(subset[y_col], errors="coerce")
+                z = pd.to_numeric(subset[z_col], errors="coerce")
+                mask = ~(x.isna() | y.isna() | z.isna())
+                if not mask.any():
+                    continue
+                ax.plot(
+                    x[mask].to_numpy(),
+                    z[mask].to_numpy(),
+                    y[mask].to_numpy(),
+                    linewidth=1.3,
+                    alpha=0.9,
+                    label=drone,
+                )
+                episode_plotted = True
+                plotted = True
+        if episode_plotted:
+            ax.set_title(f"{label} | Episode {episode}")
+            ax.set_xlabel("X")
+            ax.set_ylabel("Z")
+            ax.set_zlabel("Y (Height)")
+            ax.legend(loc="best")
+        else:
+            ax.set_visible(False)
+
     if not plotted:
         plt.close(fig)
         return
-    ax.set_title("All Trajectories (3D, Height=Y)")
-    ax.set_xlabel("X")
-    ax.set_ylabel("Z")
-    ax.set_zlabel("Y (Height)")
-    ax.legend(loc="best")
+
+    fig.suptitle("Representative Trajectories (3D, Height=Y)", fontsize=16)
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_3d.png", dpi=160)
     plt.close(fig)
@@ -447,8 +701,13 @@ def plot_uncertainty_elimination_efficiency(run: RunData) -> None:
     denom = df["episode_length"].replace(0, np.nan)
     efficiency = df["episode_scan_ratio"] / denom
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(df["episode"], efficiency, alpha=0.35, label="raw")
-    ax.plot(df["episode"], moving_average(efficiency, 20), linewidth=2.4, label="MA20")
+    plot_mean_with_band(
+        ax,
+        df["episode"],
+        efficiency,
+        label="Rolling Mean ± 1σ",
+        window=20,
+    )
     ax.set_title("Uncertainty Elimination Efficiency")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Scan Ratio per Step")
@@ -503,31 +762,33 @@ def plot_selected_episode_trajectories(run: RunData) -> None:
         return
     traj_dir = run.output_dir / "episode_trajectories"
     ensure_dir(traj_dir)
-    episodes = set()
-    top = df.sort_values(["episode_scan_ratio", "episode_reward"], ascending=[False, False]).head(5)
-    low = df.sort_values(["episode_scan_ratio", "episode_reward"], ascending=[True, True]).head(5)
-    recent = df.tail(5)
-    collisions = df[(df.get("collision_object_name", "").astype(str).str.len() > 0) | (df.get("collision_position", "").astype(str).str.len() > 0)].tail(5)
-    for subset in [top, low, recent, collisions]:
-        episodes.update(int(v) for v in subset["episode"].dropna().tolist())
-
-    if not episodes:
+    selected = _select_representative_episodes(run, limit=6)
+    if not selected:
         return
 
-    for episode in sorted(episodes):
+    for label, episode in selected:
         xz = _episode_topdown_xz(run, episode)
         if not xz:
             continue
         fig, ax = plt.subplots(figsize=(7, 7))
         for drone, (x, z) in xz.items():
             ax.plot(x, z, linewidth=1.4, label=drone)
-        ax.set_title(f"Episode {episode} Trajectory Top-Down XZ")
+        ax.set_title(f"{label} | Episode {episode} Trajectory Top-Down XZ")
         ax.set_xlabel("X")
         ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)
         ax.legend(loc="best")
         fig.tight_layout()
-        fig.savefig(traj_dir / f"episode_{episode:03d}_trajectory_xy.png", dpi=140)
+        safe_label = (
+            label.lower()
+            .replace(" ", "_")
+            .replace("|", "_")
+            .replace("/", "_")
+        )
+        fig.savefig(
+            traj_dir / f"episode_{episode:03d}_{safe_label}_trajectory_xy.png",
+            dpi=140,
+        )
         plt.close(fig)
 
 
@@ -556,6 +817,7 @@ def safe_plot(plot_fn, *args, **kwargs) -> None:
 PLOT_PIPELINE = [
     (plot_episode_performance_summary, "episode_performance_summary"),
     (plot_reset_reason_rolling_ratio, "reset_reason_rolling_ratio"),
+    (plot_collision_stability, "collision_stability"),
     (plot_collision_hotspots, "collision_hotspots_xy"),
     (plot_collision_object_breakdown, "collision_object_breakdown"),
     (plot_algorithm_weights_stability, "algorithm_weights_stability"),

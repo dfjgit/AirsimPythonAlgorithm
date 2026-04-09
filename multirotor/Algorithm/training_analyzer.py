@@ -21,6 +21,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .collision_analysis import collision_termination_rate_percent
+except ImportError:
+    from collision_analysis import collision_termination_rate_percent
+
+try:
     import seaborn as sns
 except ImportError:
     sns = None
@@ -33,6 +38,13 @@ logger = logging.getLogger("TrainingAnalyzer")
 class UnifiedTrainingAnalyzer:
     """Load DDPG/DQN CSV logs and generate unified comparison outputs."""
 
+    ALGO_STYLE_MAP = {
+        "ddpg_apf": {"color": "#F4A261", "linestyle": "-"},
+        "pure_dqn": {"color": "#2A9D8F", "linestyle": "--"},
+        "hrl_dqn_apf": {"color": "#3A86FF", "linestyle": "-."},
+        "unknown": {"color": "#7A7A7A", "linestyle": ":"},
+    }
+
     ALGO_NAME_MAP = {
         "hrl_dqn_apf": "双层融合训练 (HRL+APF)",
         "pure_dqn": "纯 DQN 移动控制",
@@ -43,6 +55,7 @@ class UnifiedTrainingAnalyzer:
     METRIC_NAME_MAP = {
         "reward": "累计奖励",
         "scan_efficiency": "扫描效率 (Cell/Step)",
+        "collision_rate": "碰撞终止占比(%)",
         "scan_ratio": "扫描完成度(%)",
         "global_avg_entropy": "全局平均熵值",
         "episode": "训练轮次 (Episode)",
@@ -68,6 +81,10 @@ class UnifiedTrainingAnalyzer:
             "弱可比",
             "受实现效率、控制链路与仿真节奏影响，不是纯策略质量指标。",
         ),
+        "平均碰撞终止占比(%)": (
+            "中等可比",
+            "可用于比较训练稳定性，但仍受终止机制与重置口径影响，不替代最终结果指标。",
+        ),
         "最终效率": (
             "强可比",
             "统一换算为 Cell/Step 后，可直接比较单位决策步的扫描产出。",
@@ -87,6 +104,7 @@ class UnifiedTrainingAnalyzer:
         "最高奖励": ("过程对比", "用于观察训练过程中出现过的最佳回合表现。"),
         "训练轮次": ("过程对比", "用于描述训练规模和训练推进程度。"),
         "总耗时(s)": ("过程对比", "用于描述训练和仿真成本。"),
+        "平均碰撞终止占比(%)": ("过程对比", "用于比较训练过程中因碰撞终止的频繁程度和稳定性趋势。"),
         "最终效率": ("结果对比", "用于比较最终单位决策步的扫描产出。"),
         "最终扫描率(%)": ("结果对比", "用于比较最终任务覆盖效果。"),
         "最低熵值": ("结果对比", "用于比较最终不确定性消减效果。"),
@@ -321,6 +339,7 @@ class UnifiedTrainingAnalyzer:
         if efficiency_source is not None:
             normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
 
+        normalized["collision_rate"] = collision_termination_rate_percent(normalized)
         return normalized
 
     def _find_matching_scan_run(self, training_run: dict):
@@ -440,6 +459,132 @@ class UnifiedTrainingAnalyzer:
             )
         return pd.DataFrame(rows)
 
+    def _safe_to_markdown(self, table, **kwargs) -> str:
+        """Render table to markdown and gracefully degrade when tabulate is unavailable."""
+        try:
+            return table.to_markdown(**kwargs)
+        except ImportError as exc:
+            logger.warning("to_markdown 不可用，回退为纯文本表格: %s", exc)
+            if isinstance(table, pd.DataFrame):
+                if kwargs.get("index", True):
+                    plain_text = table.to_string()
+                else:
+                    plain_text = table.to_string(index=False)
+            elif isinstance(table, pd.Series):
+                plain_text = table.to_string()
+            else:
+                plain_text = str(table)
+            return f"```text\n{plain_text}\n```"
+
+    def _get_algo_style(self, algo_id: str) -> dict:
+        style = dict(self.ALGO_STYLE_MAP.get("unknown", {}))
+        style.update(self.ALGO_STYLE_MAP.get(algo_id, {}))
+        return style
+
+    @staticmethod
+    def _normalize_plot_series(df: pd.DataFrame, x_axis: str, metric: str) -> pd.DataFrame:
+        if x_axis not in df.columns or metric not in df.columns:
+            return pd.DataFrame(columns=[x_axis, metric])
+
+        x_series = pd.to_numeric(
+            df[x_axis].astype(str).str.replace("%", "", regex=False),
+            errors="coerce",
+        )
+        y_series = pd.to_numeric(
+            df[metric].astype(str).str.replace("%", "", regex=False),
+            errors="coerce",
+        )
+        numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
+        if numeric_data.empty:
+            return numeric_data
+
+        if x_axis in {"episode", "window_episode"}:
+            numeric_data[x_axis] = numeric_data[x_axis].round().astype(int)
+        elif x_axis in {"elapsed_time", "window_elapsed_time"}:
+            numeric_data[x_axis] = numeric_data[x_axis].round(1)
+
+        return numeric_data.sort_values(x_axis)
+
+    def _build_curve_with_band(
+        self,
+        frames: List[pd.DataFrame],
+        x_axis: str,
+        metric: str,
+    ) -> pd.DataFrame:
+        normalized_frames = []
+        for frame in frames:
+            normalized = self._normalize_plot_series(frame, x_axis, metric)
+            if not normalized.empty:
+                normalized_frames.append(normalized)
+
+        if not normalized_frames:
+            return pd.DataFrame(columns=[x_axis, "center", "band"])
+
+        combined = pd.concat(normalized_frames, ignore_index=True)
+        grouped = (
+            combined.groupby(x_axis)[metric]
+            .agg(["mean", "std", "count"])
+            .reset_index()
+            .sort_values(x_axis)
+        )
+        if grouped.empty:
+            return pd.DataFrame(columns=[x_axis, "center", "band"])
+
+        smooth_window = min(15, max(3, len(grouped) // 12))
+        grouped["center"] = (
+            grouped["mean"].rolling(window=smooth_window, min_periods=1).mean()
+        )
+        grouped["rolling_std"] = (
+            grouped["mean"].rolling(window=smooth_window, min_periods=2).std().fillna(0.0)
+        )
+        grouped["band"] = grouped["std"].fillna(0.0)
+
+        single_run = len(normalized_frames) == 1 or float(grouped["band"].max()) <= 1e-9
+        if single_run:
+            grouped["band"] = grouped["rolling_std"]
+        else:
+            grouped["band"] = grouped["band"].where(
+                grouped["band"] > 1e-9, grouped["rolling_std"]
+            )
+
+        return grouped[[x_axis, "center", "band"]]
+
+    def _plot_curve_with_band(
+        self,
+        ax,
+        curve_df: pd.DataFrame,
+        x_axis: str,
+        *,
+        label: str,
+        color: str,
+        linestyle: str,
+        linewidth: float = 2.3,
+        band_alpha: float = 0.18,
+    ) -> None:
+        if curve_df.empty:
+            return
+
+        x = curve_df[x_axis].to_numpy(dtype=float)
+        center = curve_df["center"].to_numpy(dtype=float)
+        band = curve_df["band"].fillna(0.0).to_numpy(dtype=float)
+
+        ax.plot(
+            x,
+            center,
+            label=label,
+            color=color,
+            linestyle=linestyle,
+            linewidth=linewidth,
+        )
+        ax.fill_between(
+            x,
+            center - band,
+            center + band,
+            color=color,
+            alpha=band_alpha,
+            linewidth=0,
+        )
+
     def plot_comparison(
         self,
         metric: str,
@@ -458,51 +603,29 @@ class UnifiedTrainingAnalyzer:
         metric_label = self.METRIC_NAME_MAP.get(metric, metric)
         x_axis_label = self.METRIC_NAME_MAP.get(x_axis, x_axis)
         unique_algos = sorted(set(run["algorithm"] for run in target_runs))
+        ax = plt.gca()
 
         for algo_id in unique_algos:
             algo_frames = [run["data"] for run in target_runs if run["algorithm"] == algo_id]
-            all_data = pd.concat(algo_frames)
             display_name = self.ALGO_NAME_MAP.get(algo_id, algo_id)
-
-            if x_axis not in all_data.columns or metric not in all_data.columns:
+            curve_df = self._build_curve_with_band(algo_frames, x_axis, metric)
+            if curve_df.empty:
                 continue
-
-            x_series = pd.to_numeric(
-                all_data[x_axis].astype(str).str.replace("%", "", regex=False),
-                errors="coerce",
+            style = self._get_algo_style(algo_id)
+            self._plot_curve_with_band(
+                ax,
+                curve_df,
+                x_axis,
+                label=display_name,
+                color=style["color"],
+                linestyle=style["linestyle"],
             )
-            y_series = pd.to_numeric(
-                all_data[metric].astype(str).str.replace("%", "", regex=False),
-                errors="coerce",
-            )
-            numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
-            if numeric_data.empty:
-                continue
-
-            if sns is not None:
-                sns.lineplot(
-                    data=numeric_data,
-                    x=x_axis,
-                    y=metric,
-                    label=display_name,
-                    errorbar="sd",
-                    linewidth=2.5,
-                )
-            else:
-                grouped = numeric_data.groupby(x_axis)[metric].agg(["mean", "std"]).reset_index()
-                plt.plot(grouped[x_axis], grouped["mean"], label=display_name, linewidth=2.5)
-                plt.fill_between(
-                    grouped[x_axis],
-                    grouped["mean"] - grouped["std"].fillna(0),
-                    grouped["mean"] + grouped["std"].fillna(0),
-                    alpha=0.15,
-                )
 
         title_prefix = "多算法最新一轮对比分析" if latest_only else "多算法对比分析"
-        plt.title(f"{title_prefix}: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
-        plt.xlabel(x_axis_label, fontsize=12)
-        plt.ylabel(metric_label, fontsize=12)
-        plt.legend(
+        ax.set_title(f"{title_prefix}: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
+        ax.set_xlabel(x_axis_label, fontsize=12)
+        ax.set_ylabel(metric_label, fontsize=12)
+        ax.legend(
             title="算法类型",
             title_fontsize=13,
             fontsize=11,
@@ -510,7 +633,7 @@ class UnifiedTrainingAnalyzer:
             loc="upper left",
             borderaxespad=0,
         )
-        plt.grid(True, which="both", linestyle="--", alpha=0.5)
+        ax.grid(True, which="both", linestyle="--", alpha=0.5)
         plt.tight_layout()
 
         filename = self.output_dir / f"{file_prefix}_{data_type}_{metric}.png"
@@ -540,6 +663,11 @@ class UnifiedTrainingAnalyzer:
                         "平均奖励": df["reward"].mean() if "reward" in df.columns else 0,
                         "最高奖励": df["reward"].max() if "reward" in df.columns else 0,
                         "训练轮次": len(df),
+                        "平均碰撞终止占比(%)": (
+                            pd.to_numeric(df["collision_rate"], errors="coerce").mean()
+                            if "collision_rate" in df.columns
+                            else 0
+                        ),
                         "最终效率": df["scan_efficiency"].iloc[-1] if "scan_efficiency" in df.columns else 0,
                     }
                 )
@@ -609,19 +737,19 @@ class UnifiedTrainingAnalyzer:
             "",
             "## 1. 汇总结果",
             "",
-            algo_comparison.to_markdown(),
+            self._safe_to_markdown(algo_comparison),
             "",
             "## 2. 过程对比指标",
             "",
-            process_report.to_markdown(index=False),
+            self._safe_to_markdown(process_report, index=False),
             "",
             "## 3. 结果对比指标",
             "",
-            outcome_report.to_markdown(index=False),
+            self._safe_to_markdown(outcome_report, index=False),
             "",
             "## 4. 全部指标分类",
             "",
-            comparability_df.to_markdown(index=False),
+            self._safe_to_markdown(comparability_df, index=False),
             "",
             "## 5. 解读建议",
             "",
@@ -671,6 +799,11 @@ class UnifiedTrainingAnalyzer:
                 "平均奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").mean(),
                 "最高奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").max(),
                 "训练轮次": len(training_df),
+                "平均碰撞终止占比(%)": (
+                    pd.to_numeric(training_df["collision_rate"], errors="coerce").mean()
+                    if "collision_rate" in training_df.columns
+                    else 0
+                ),
                 "最终效率": pd.to_numeric(training_df.get("scan_efficiency"), errors="coerce").iloc[-1],
             }
             if scan_df is not None and not scan_df.empty:
@@ -714,23 +847,23 @@ class UnifiedTrainingAnalyzer:
             "",
             "## 1. 样本选择",
             "",
-            selection_df.to_markdown(index=False),
+            self._safe_to_markdown(selection_df, index=False),
             "",
             "## 2. 汇总结果",
             "",
-            summary_df.to_markdown(),
+            self._safe_to_markdown(summary_df),
             "",
             "## 3. 过程对比指标",
             "",
-            process_report.to_markdown(index=False),
+            self._safe_to_markdown(process_report, index=False),
             "",
             "## 4. 结果对比指标",
             "",
-            outcome_report.to_markdown(index=False),
+            self._safe_to_markdown(outcome_report, index=False),
             "",
             "## 5. 全部指标分类",
             "",
-            comparability_df.to_markdown(index=False),
+            self._safe_to_markdown(comparability_df, index=False),
         ]
         markdown_file.write_text("\n".join(markdown_lines), encoding="utf-8")
         logger.info("最近窗口 Markdown 报告已导出: %s", markdown_file)
@@ -756,26 +889,33 @@ class UnifiedTrainingAnalyzer:
         x_axis = "window_episode" if data_type == "training" else "window_elapsed_time"
         metric_label = self.METRIC_NAME_MAP.get(metric, metric)
         x_axis_label = self.METRIC_NAME_MAP.get(x_axis, x_axis)
+        ax = plt.gca()
 
         labels = []
         for item in prepared_runs:
             df = item["training_data"] if data_type == "training" else item["scan_data"]
-            if df is None or df.empty or x_axis not in df.columns or metric not in df.columns:
+            if df is None or df.empty:
                 continue
 
             display_name = self.ALGO_NAME_MAP.get(item["algorithm"], item["algorithm"])
-            labels.append(display_name)
-            x_series = pd.to_numeric(df[x_axis], errors="coerce")
-            y_series = pd.to_numeric(df[metric].astype(str).str.replace("%", "", regex=False), errors="coerce")
-            numeric_data = pd.DataFrame({x_axis: x_series, metric: y_series}).dropna()
-            if numeric_data.empty:
+            curve_df = self._build_curve_with_band([df], x_axis, metric)
+            if curve_df.empty:
                 continue
-            plt.plot(numeric_data[x_axis], numeric_data[metric], label=display_name, linewidth=2.5)
+            labels.append(display_name)
+            style = self._get_algo_style(item["algorithm"])
+            self._plot_curve_with_band(
+                ax,
+                curve_df,
+                x_axis,
+                label=display_name,
+                color=style["color"],
+                linestyle=style["linestyle"],
+            )
 
-        plt.title(f"多算法最近窗口对比: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
-        plt.xlabel(x_axis_label, fontsize=12)
-        plt.ylabel(metric_label, fontsize=12)
-        plt.legend(
+        ax.set_title(f"多算法最近窗口对比: {metric_label} 随 {x_axis_label} 变化趋势", fontsize=16, pad=20)
+        ax.set_xlabel(x_axis_label, fontsize=12)
+        ax.set_ylabel(metric_label, fontsize=12)
+        ax.legend(
             title="算法类型",
             title_fontsize=13,
             fontsize=11,
@@ -783,7 +923,7 @@ class UnifiedTrainingAnalyzer:
             loc="upper left",
             borderaxespad=0,
         )
-        plt.grid(True, which="both", linestyle="--", alpha=0.5)
+        ax.grid(True, which="both", linestyle="--", alpha=0.5)
         plt.tight_layout()
 
         filename = self.output_dir / f"{file_prefix}_{data_type}_{metric}.png"
