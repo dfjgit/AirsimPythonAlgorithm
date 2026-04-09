@@ -13,7 +13,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from collision_analysis import collision_termination_rate_percent
+try:
+    from .collision_analysis import collision_termination_rate_percent
+except ImportError:  # script-mode fallback
+    from collision_analysis import collision_termination_rate_percent
 
 LOGGER = logging.getLogger("scan_csv_visualizer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

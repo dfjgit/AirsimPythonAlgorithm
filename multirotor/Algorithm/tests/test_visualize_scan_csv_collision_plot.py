@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import unittest
 import uuid
@@ -21,6 +22,24 @@ def _workspace_root_for_tmp() -> Path:
 
 
 class CollisionStabilityPlotTests(unittest.TestCase):
+    def test_visualize_scan_csv_importable_from_package_path(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(repo_root)
+        proc = subprocess.run(
+            [sys.executable, "-c", "import multirotor.Algorithm.visualize_scan_csv"],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            msg=f"stderr:\n{proc.stderr}\nstdout:\n{proc.stdout}",
+        )
+
     def test_plot_collision_stability_writes_png(self):
         root = _workspace_root_for_tmp() / ".tmp_collision_stability_tests" / uuid.uuid4().hex
         root.mkdir(parents=True, exist_ok=False)
