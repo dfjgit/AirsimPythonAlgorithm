@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -151,6 +152,31 @@ class SystemConfigTests(unittest.TestCase):
                         legacy_drones_file=str(drones_path),
                         legacy_apf_file=str(apf_path),
                     )
+
+    def test_rejects_malformed_legacy_root_payloads(self):
+        bad_drones_root = self._write_json("bad_legacy_drones_root.json", [])
+        good_apf = self._write_json("good_legacy_apf.json", {"env_config": {}})
+        with self.assertRaisesRegex(
+            ValueError,
+            re.escape(str(bad_drones_root)),
+        ):
+            SystemConfig(
+                config_file=str(self.root / "missing_system_config.json"),
+                legacy_drones_file=str(bad_drones_root),
+                legacy_apf_file=str(good_apf),
+            )
+
+        good_drones = self._write_json("good_legacy_drones.json", {"drones": {}})
+        bad_apf_root = self._write_json("bad_legacy_apf_root.json", "broken")
+        with self.assertRaisesRegex(
+            ValueError,
+            re.escape(str(bad_apf_root)),
+        ):
+            SystemConfig(
+                config_file=str(self.root / "missing_system_config.json"),
+                legacy_drones_file=str(good_drones),
+                legacy_apf_file=str(bad_apf_root),
+            )
 
 
 if __name__ == "__main__":

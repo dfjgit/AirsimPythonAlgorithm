@@ -22,44 +22,52 @@ class SystemConfig:
     def _load_json(self, path: Path) -> Dict[str, Any]:
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            raise self._invalid_config(path, "top-level JSON root must be a dict")
+        return payload
 
-    def _invalid_config(self, reason: str) -> ValueError:
-        return ValueError(f"Invalid system config structure: {self.config_file} ({reason})")
+    def _invalid_config(self, path: Path, reason: str) -> ValueError:
+        return ValueError(f"Invalid system config structure: {path} ({reason})")
 
     def _load_config(self) -> Dict[str, Any]:
         if self.config_file.exists():
             data = self._load_json(self.config_file)
             if "drones" not in data or "environment" not in data:
-                raise self._invalid_config("missing 'drones' or 'environment'")
+                raise self._invalid_config(self.config_file, "missing 'drones' or 'environment'")
 
             drones = data.get("drones")
             if not isinstance(drones, dict):
-                raise self._invalid_config("drones must be a dict")
+                raise self._invalid_config(self.config_file, "drones must be a dict")
 
             environment = data.get("environment")
             if not isinstance(environment, dict):
-                raise self._invalid_config("environment must be a dict")
+                raise self._invalid_config(self.config_file, "environment must be a dict")
 
             for drone_name, drone_info in drones.items():
                 if not isinstance(drone_info, dict):
-                    raise self._invalid_config(f"drone entry '{drone_name}' must be a dict")
+                    raise self._invalid_config(
+                        self.config_file,
+                        f"drone entry '{drone_name}' must be a dict",
+                    )
             return data
 
         drones = {}
         if self.legacy_drones_file.exists():
             drones = self._load_json(self.legacy_drones_file).get("drones", {})
             if not isinstance(drones, dict):
-                raise self._invalid_config("legacy drones must be a dict")
+                raise self._invalid_config(self.legacy_drones_file, "legacy drones must be a dict")
             for drone_name, drone_info in drones.items():
                 if not isinstance(drone_info, dict):
-                    raise self._invalid_config(f"legacy drone entry '{drone_name}' must be a dict")
+                    raise self._invalid_config(
+                        self.legacy_drones_file,
+                        f"legacy drone entry '{drone_name}' must be a dict",
+                    )
 
         environment = {}
         if self.legacy_apf_file.exists():
             environment = self._load_json(self.legacy_apf_file).get("env_config", {})
             if not isinstance(environment, dict):
-                raise self._invalid_config("legacy env_config must be a dict")
+                raise self._invalid_config(self.legacy_apf_file, "legacy env_config must be a dict")
 
         return {"drones": drones, "environment": environment}
 
