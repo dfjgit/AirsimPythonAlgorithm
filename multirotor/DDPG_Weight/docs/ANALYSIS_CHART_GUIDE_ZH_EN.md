@@ -174,10 +174,13 @@ Why:
 
 ## 4. Chart Index / 图表总览
 
+当前完整单算法图口径已由 13 类扩展为 14 类，新增 `collision_stability.png`（碰撞稳定性主图）。
+
 | File | 中文图名 | English Title | Level | Primary Use |
 |---|---|---|---|---|
 | `episode_performance_summary.png` | 回合综合表现总览图 | Episode Performance Summary | Episode | 收敛主判图 |
 | `reset_reason_rolling_ratio.png` | 重置原因滚动占比图 | Reset Reason Rolling Ratio | Episode | 训练健康度判图 |
+| `collision_stability.png` | 碰撞稳定性图 | Collision Stability | Episode | 训练稳定性主图 |
 | `collision_hotspots_xy.png` | 碰撞热点分布图（X-Z 顶视） | Collision Hotspots (Top-Down XZ) | Episode | 碰撞空间定位 |
 | `collision_object_breakdown.png` | 碰撞对象统计图 | Collision Object Breakdown | Episode | 高频失败源统计 |
 | `algorithm_weights_stability.png` | 权重稳定性分析图 | Algorithm Weights Stability | Step/Time | 动态权重稳定性诊断 |
@@ -495,6 +498,19 @@ English:
 - 仍需回到 reward、scan ratio 和 entropy 进行量化验证。
 
 ## 6. Supporting Charts / 辅助图表详解
+
+### `collision_stability.png` / 碰撞稳定性图 / Collision Stability
+
+**横轴 / X-axis**
+- `Episode`
+
+**纵轴 / Y-axis**
+- `Collision Termination Ratio (%)`
+- 表示最近窗口中因碰撞终止的 episode 占比。
+
+**价值 / Value**
+- 这是当前项目中最直接的碰撞稳定性主图。
+- 曲线下降说明训练过程中因碰撞失败的比例降低，稳定性改善。
 
 ### 6.1 `scan_progress.png` / 扫描进展趋势图 / Episode Scan Progress
 

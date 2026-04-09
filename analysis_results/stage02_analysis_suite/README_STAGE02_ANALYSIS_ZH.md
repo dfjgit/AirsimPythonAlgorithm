@@ -107,8 +107,10 @@
 
 - `episode_reward.png`
 - `episode_length.png`
+- `collision_stability.png`
 - `comparison_training_reward.png`
 - `comparison_training_scan_efficiency.png`
+- `comparison_training_collision_rate.png`
 
 它们主要用于分析：
 

@@ -13,18 +13,21 @@
 |---|---|---|---|---|---|---|---|---|
 | `ddpg_stage02/episode_reward.png` | 单算法过程图 | 训练轮次 | `episode` | 单轮累计奖励 | `reward` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `ddpg_stage02/episode_length.png` | 单算法过程图 | 训练轮次 | `episode` | 单轮步数长度 | `length` | `training csv` | 每个 episode 一行 | 单算法可用 |
+| `ddpg_stage02/collision_stability.png` | 单算法稳定性图 | 训练轮次 | `episode` | 碰撞终止占比(%) | `collision_rate` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `ddpg_stage02/global_scan_ratio.png` | 单算法结果图 | 训练轮次 | `episode` | 最终全局扫描率(%) | `final_global_scan_ratio` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `ddpg_stage02/global_avg_entropy.png` | 单算法结果图 | 训练轮次 | `episode` | 最终全局平均熵 | `final_global_avg_entropy` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `ddpg_stage02/scan_efficiency.png` | 单算法效率图 | 训练轮次 | `episode` | 扫描效率(Cell/Step) | `scan_efficiency` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `ddpg_stage02/trajectories_xz.png` | 单算法轨迹图 | X坐标 | `UAVx_x` | Z坐标 | `UAVx_z` | `scan_data csv` | 按时间连接 | 单算法可用 |
 | `dqn_stage02/episode_reward.png` | 单算法过程图 | 训练轮次 | `episode` | 单轮累计奖励 | `reward` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `dqn_stage02/episode_length.png` | 单算法过程图 | 训练轮次 | `episode` | 单轮步数长度 | `length` | `training csv` | 每个 episode 一行 | 单算法可用 |
+| `dqn_stage02/collision_stability.png` | 单算法稳定性图 | 训练轮次 | `episode` | 碰撞终止占比(%) | `collision_rate` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `dqn_stage02/global_scan_ratio.png` | 单算法结果图 | 训练轮次 | `episode` | 最终全局扫描率(%) | `final_global_scan_ratio` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `dqn_stage02/global_avg_entropy.png` | 单算法结果图 | 训练轮次 | `episode` | 最终全局平均熵 | `final_global_avg_entropy` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `dqn_stage02/scan_efficiency.png` | 单算法效率图 | 训练轮次 | `episode` | 扫描效率(Cell/Step) | `scan_efficiency` | `training csv` | 每个 episode 一行 | 单算法可用 |
 | `dqn_stage02/trajectories_xz.png` | 单算法轨迹图 | X坐标 | `UAVx_x` | Z坐标 | `UAVx_z` | `scan_data csv` | 按时间连接 | 单算法可用 |
 | `comparison/comparison_training_reward.png` | 横向过程图 | 训练轮次 | `episode` | 累计奖励 | `reward` | `training csv` | 同算法按 episode 统计 | 弱可比 |
 | `comparison/comparison_training_scan_efficiency.png` | 横向过程图 | 训练轮次 | `episode` | 扫描效率(Cell/Step) | `scan_efficiency` | `training csv` | 同算法按 episode 统计 | 弱可比 |
+| `comparison/comparison_training_collision_rate.png` | 横向过程图 | 训练轮次 | `episode` | 碰撞终止占比(%) | `collision_rate` | `training csv` | 同算法按 episode 统计 | 中等可比 |
 | `comparison/comparison_scan_scan_ratio.png` | 横向结果图 | 训练轮次 | `episode` | 最终全局扫描率(%) | `final_global_scan_ratio` | `training csv` | 同算法按 episode 统计 | 强可比 |
 | `comparison/comparison_scan_global_avg_entropy.png` | 横向结果图 | 训练轮次 | `episode` | 最终全局平均熵 | `final_global_avg_entropy` | `training csv` | 同算法按 episode 统计 | 强可比 |
 | `comparison/comparison_scan_per_second.png` | 横向归一化结果图 | 训练轮次 | `episode` | 按时间归一化扫描产出(Cell/s) | `avg_scan_cells_per_second` | `training csv` | 同算法按 episode 统计 | 中等可比 |
