@@ -24,11 +24,26 @@ class SystemConfig:
             payload = json.load(handle)
         return payload if isinstance(payload, dict) else {}
 
+    def _invalid_config(self, reason: str) -> ValueError:
+        return ValueError(f"Invalid system config structure: {self.config_file} ({reason})")
+
     def _load_config(self) -> Dict[str, Any]:
         if self.config_file.exists():
             data = self._load_json(self.config_file)
             if "drones" not in data or "environment" not in data:
-                raise ValueError(f"Invalid system config structure: {self.config_file}")
+                raise self._invalid_config("missing 'drones' or 'environment'")
+
+            drones = data.get("drones")
+            if not isinstance(drones, dict):
+                raise self._invalid_config("drones must be a dict")
+
+            environment = data.get("environment")
+            if not isinstance(environment, dict):
+                raise self._invalid_config("environment must be a dict")
+
+            for drone_name, drone_info in drones.items():
+                if not isinstance(drone_info, dict):
+                    raise self._invalid_config(f"drone entry '{drone_name}' must be a dict")
             return data
 
         drones = {}

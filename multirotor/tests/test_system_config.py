@@ -94,6 +94,31 @@ class SystemConfigTests(unittest.TestCase):
         self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.25)
         self.assertEqual(config.get_environment_rules()["battery"]["low_threshold"], 3.5)
 
+    def test_rejects_malformed_system_config_shapes(self):
+        cases = [
+            (
+                "drones_not_dict",
+                {"drones": [], "environment": {}},
+                "drones must be a dict",
+            ),
+            (
+                "environment_not_dict",
+                {"drones": {}, "environment": []},
+                "environment must be a dict",
+            ),
+            (
+                "drone_entry_not_dict",
+                {"drones": {"UAV1": 1}, "environment": {}},
+                "drone entry 'UAV1' must be a dict",
+            ),
+        ]
+
+        for relative_path, payload, expected_message in cases:
+            with self.subTest(case=relative_path):
+                config_path = self._write_json(f"{relative_path}.json", payload)
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    SystemConfig(config_file=str(config_path))
+
 
 if __name__ == "__main__":
     unittest.main()
