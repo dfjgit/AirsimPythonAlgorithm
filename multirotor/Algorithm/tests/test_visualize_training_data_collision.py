@@ -12,10 +12,6 @@ import visualize_training_data
 
 
 def _workspace_root_for_tmp() -> Path:
-    this_file = Path(__file__).resolve()
-    for parent in this_file.parents:
-        if parent.name == ".worktrees":
-            return parent.parent
     return Path.cwd()
 
 
