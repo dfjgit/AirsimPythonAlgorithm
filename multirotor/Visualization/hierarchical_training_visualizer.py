@@ -31,6 +31,7 @@ from multirotor.Visualization.panels.training_stats_panel import TrainingStatsPa
 from multirotor.Visualization.panels.reward_curve_panel import RewardCurvePanel
 from multirotor.Visualization.panels.hierarchical_grid_panel import HierarchicalGridPanel
 from multirotor.Visualization.panels.battery_panel import BatteryPanel
+from multirotor.training_stats_schema import normalize_training_stats
 
 
 class HierarchicalTrainingVisualizer(BaseVisualizer):
@@ -93,29 +94,38 @@ class HierarchicalTrainingVisualizer(BaseVisualizer):
     def get_visualization_data(self) -> Dict[str, Any]:
         """收集分层DQN训练可视化数据"""
         data = {}
-        
-        # 训练统计数据
-        data['episode_count'] = self.episode_count
-        data['total_steps'] = self.total_steps
-        data['current_episode_steps'] = getattr(self.env, 'step_count', 0) if self.env else 0
-        data['current_episode_reward'] = self.current_episode_reward
 
-        # Episode 时间信息
+        fallback_stats = {
+            'episode_count': self.episode_count,
+            'total_steps': self.total_steps,
+            'current_episode_steps': getattr(self.env, 'step_count', 0) if self.env else 0,
+            'current_episode_reward': self.current_episode_reward,
+            'reward_history': list(self.reward_history),
+        }
         if self.episode_start_time is not None:
-            data['current_episode_time'] = time.time() - self.episode_start_time
+            fallback_stats['current_episode_time'] = time.time() - self.episode_start_time
         elif self.last_episode_duration > 0:
-            data['last_episode_duration'] = self.last_episode_duration
+            fallback_stats['last_episode_duration'] = self.last_episode_duration
         if self.total_training_time > 0:
-            data['total_training_time'] = self.total_training_time
-        
-        # 奖励历史
-        data['reward_history'] = list(self.reward_history)
-        
-        # 统计数据
+            fallback_stats['total_training_time'] = self.total_training_time
         if self.reward_history:
-            data['avg_reward'] = sum(self.reward_history) / len(self.reward_history)
-            data['max_reward'] = max(self.reward_history)
-            data['min_reward'] = min(self.reward_history)
+            fallback_stats['avg_reward'] = sum(self.reward_history) / len(self.reward_history)
+            fallback_stats['max_reward'] = max(self.reward_history)
+            fallback_stats['min_reward'] = min(self.reward_history)
+
+        server_stats = None
+        try:
+            if self.server and hasattr(self.server, 'current_training_stats'):
+                server_stats = self.server.current_training_stats
+        except Exception:
+            server_stats = None
+
+        data.update(
+            normalize_training_stats(
+                stats=server_stats if isinstance(server_stats, dict) else None,
+                fallback=fallback_stats,
+            )
+        )
         
         # 高层动作历史
         data['hl_action_history'] = list(self.hl_action_history)

@@ -5,6 +5,10 @@ import threading
 import time as _time  # ⚠️ 修改：重命名time模块避免冲突
 import zlib
 from typing import Any, Dict, Optional, Callable
+from enum import Enum
+from pathlib import Path
+
+import numpy as np
 
 
 def _send_frame(conn: socket.socket, payload: bytes) -> None:
@@ -28,8 +32,25 @@ def recv_frame(conn: socket.socket) -> bytes:
     return _recv_exact(conn, length)
 
 
+def _json_default(value: Any):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
 def encode_snapshot(snapshot: Dict[str, Any], compress_level: int = 1) -> bytes:
-    raw = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=_json_default,
+    ).encode("utf-8")
     return zlib.compress(raw, level=compress_level)
 
 
@@ -103,7 +124,10 @@ class VisualizationIPCServer:
                 try:
                     conn, _addr = self._sock.accept()  # type: ignore[union-attr]
                     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    conn.settimeout(0.5)
+                    # 连接建立后只负责持续发送快照，不应因为瞬时发送阻塞就主动断开连接。
+                    # Windows 上大帧 payload + 调度抖动会让 0.5s timeout 过于敏感，表现为
+                    # “几秒后实时链路断开，可视化退回 CSV 回放”。
+                    conn.settimeout(None)
                     self._client = conn
                 except socket.timeout:
                     continue
@@ -128,7 +152,7 @@ class VisualizationIPCServer:
                     print(f"[IPC服务端] 📤 发送snapshot，字段数: {len(snap_keys)}，字段列表: {snap_keys}")
                 payload = encode_snapshot(snapshot, compress_level=self.compress_level)
                 _send_frame(self._client, payload)
-            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
                 # 客户端断开连接是正常情况（关闭可视化窗口时），不输出警告
                 # 清除客户端连接，等待重新连接
                 if self._client:
@@ -138,11 +162,6 @@ class VisualizationIPCServer:
                         pass
                     self._client = None
             except Exception as e:
-                # 其他异常也静默处理，不影响用户体验
-                # 清除客户端连接，等待重新连接
-                if self._client:
-                    try:
-                        self._client.close()
-                    except Exception:
-                        pass
-                    self._client = None
+                # 非 socket 异常通常来自快照构造/序列化，不应直接断开可视化连接。
+                print(f"[IPC服务端] ⚠️ 快照发送异常: {e}")
+                _time.sleep(min(0.05, period))

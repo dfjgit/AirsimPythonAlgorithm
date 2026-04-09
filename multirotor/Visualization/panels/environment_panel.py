@@ -22,6 +22,20 @@ class EnvironmentPanel(BasePanel):
         y_offset = self.draw_title(screen, '环境状态', accent)
 
         grid_stats = self._calculate_grid_stats(data.get('grid_data'))
+        if (
+            data.get('csv_global_total_count', 0)
+            and data.get('csv_global_scanned_count', 0) >= 0
+        ):
+            total = int(data.get('csv_global_total_count', 0) or 0)
+            scanned = int(data.get('csv_global_scanned_count', 0) or 0)
+            if total > 0:
+                csv_ratio = (scanned / total) * 100.0
+                if not grid_stats:
+                    grid_stats = {'total': total, 'avg': 0.0, 'scanned': scanned, 'scan_ratio': csv_ratio}
+                else:
+                    grid_stats['scanned'] = scanned
+                    grid_stats['total'] = total
+                    grid_stats['scan_ratio'] = csv_ratio
         if not grid_stats:
             hint = self._font.render('等待网格数据...', True, self.TEXT_SECONDARY)
             screen.blit(hint, (self.x + 15, self.y + y_offset + 8))

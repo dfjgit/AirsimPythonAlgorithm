@@ -61,7 +61,7 @@ class TrainingStatsPanel(BasePanel):
         screen.blit(time_text, (text_x, y))
         y += 24
 
-        current_ep_time = data.get('current_episode_time')
+        current_ep_time = data.get('current_episode_time', data.get('episode_elapsed_time'))
         last_ep_duration = data.get('last_episode_duration')
         total_training_time = data.get('total_training_time')
         if current_ep_time is not None:

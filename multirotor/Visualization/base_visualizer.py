@@ -45,20 +45,9 @@ class BaseVisualizer(ABC):
         self.server = server
         self.env = env
         self.window_title = window_title
-        
-        # 窗口设置（左右两侧面板 + 中间热力图）
-        self.SCREEN_WIDTH = 1920   # 扩大窗口宽度
-        self.SCREEN_HEIGHT = 1080  # 扩大窗口高度（1080p）
-        self.left_panel_width = 360   # 略微减小左侧面板
-        self.right_panel_width = 360  # 略微减小右侧面板
-        
-        # 坐标系参数（中间热力图区域）
-        self.view_width = self.SCREEN_WIDTH - self.left_panel_width - self.right_panel_width
-        self.view_height = self.SCREEN_HEIGHT
-        self.view_offset_x = self.left_panel_width  # 热力图区域起始 x
-        self.origin_x = self.view_offset_x + self.view_width // 2
-        self.origin_y = self.view_height // 2
-        self.scale = 20  # 像素/米
+
+        self._apply_responsive_layout()
+        self.render_fps = 30
         
         # 颜色定义
         self._init_colors()
@@ -85,6 +74,128 @@ class BaseVisualizer(ABC):
         self._cached_obstacles = []  # 障碍物数据缓存
         self._last_data_update = 0
         self._data_update_interval = 0.05  # 50ms更新一次
+
+    def _apply_responsive_layout(self):
+        """根据桌面可用空间自适应调整窗口布局。"""
+        base_width = 1920
+        base_height = 1080
+        base_side_panel = 360
+        min_center_width = 420
+
+        desktop_size = self._get_desktop_size()
+        if desktop_size is None:
+            target_width = base_width
+            target_height = base_height
+        else:
+            desktop_width, desktop_height = desktop_size
+            target_width = min(base_width, max(960, int(desktop_width * 0.92)))
+            target_height = min(base_height, max(540, int(desktop_height * 0.90)))
+
+        scale = min(target_width / base_width, target_height / base_height)
+        scale = max(scale, 0.5)
+
+        self.SCREEN_WIDTH = int(base_width * scale)
+        self.SCREEN_HEIGHT = int(base_height * scale)
+
+        scaled_panel_width = max(220, int(base_side_panel * scale))
+        max_panel_width = max(220, (self.SCREEN_WIDTH - min_center_width) // 2)
+        panel_width = min(scaled_panel_width, max_panel_width)
+        self.left_panel_width = panel_width
+        self.right_panel_width = panel_width
+
+        # 坐标系参数（中间热力图区域）
+        self.view_width = (
+            self.SCREEN_WIDTH - self.left_panel_width - self.right_panel_width
+        )
+        self.view_height = self.SCREEN_HEIGHT
+        self.view_offset_x = self.left_panel_width
+        self.origin_x = self.view_offset_x + self.view_width // 2
+        self.origin_y = self.view_height // 2
+        self.scale = max(10, int(20 * scale))
+
+    def _get_desktop_size(self) -> Optional[Tuple[int, int]]:
+        """获取桌面工作区大小，便于在不同分辨率和缩放环境中自适应。"""
+        override = os.environ.get("VIS_DESKTOP_SIZE", "").strip().lower()
+        if override:
+            normalized = override.replace("*", "x")
+            parts = normalized.split("x")
+            if len(parts) == 2:
+                try:
+                    return int(parts[0]), int(parts[1])
+                except ValueError:
+                    pass
+
+        if os.name != "nt":
+            return None
+
+        try:
+            import ctypes
+
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long),
+                    ("top", ctypes.c_long),
+                    ("right", ctypes.c_long),
+                    ("bottom", ctypes.c_long),
+                ]
+
+            rect = RECT()
+            spi_get_work_area = 0x0030
+            if ctypes.windll.user32.SystemParametersInfoW(
+                spi_get_work_area, 0, ctypes.byref(rect), 0
+            ):
+                width = int(rect.right - rect.left)
+                height = int(rect.bottom - rect.top)
+                if width > 0 and height > 0:
+                    return width, height
+        except Exception:
+            return None
+
+        return None
+
+    def _scale_panel_heights(
+        self,
+        requested_heights: List[int],
+        min_heights: Optional[List[int]] = None,
+        row_gap: int = 10,
+        outer_margin: int = 10,
+    ) -> List[int]:
+        """将固定面板高度按当前窗口高度压缩到可见范围内。"""
+        if not requested_heights:
+            return []
+
+        if min_heights is None:
+            min_heights = [110] * len(requested_heights)
+
+        usable_height = max(
+            0,
+            self.SCREEN_HEIGHT - outer_margin * 2 - row_gap * (len(requested_heights) - 1),
+        )
+        total_requested = sum(requested_heights)
+        if total_requested <= usable_height:
+            return list(requested_heights)
+
+        scale = usable_height / max(total_requested, 1)
+        scaled = [
+            max(min_heights[i], int(round(height * scale)))
+            for i, height in enumerate(requested_heights)
+        ]
+
+        hard_min = 80
+        overflow = sum(scaled) - usable_height
+        while overflow > 0:
+            reducible = [
+                idx for idx, height in enumerate(scaled) if height > hard_min
+            ]
+            if not reducible:
+                break
+            scaled[reducible[0 if len(reducible) == 1 else max(
+                range(len(reducible)),
+                key=lambda pos: scaled[reducible[pos]]
+            )]] -= 1
+            overflow -= 1
+
+        return scaled
     
     def _init_colors(self):
         """??????????"""
@@ -607,11 +718,12 @@ class BaseVisualizer(ABC):
                 battery_data = self.get_battery_data()
                 if battery_data:
                     vis_data['battery_data'] = battery_data
-                
+
+                self.panel_manager.update_all_panels(vis_data)
                 self.panel_manager.draw_all_panels(self.screen, vis_data)
                 
                 pygame.display.flip()
-                self.clock.tick(30)  # 30 FPS
+                self.clock.tick(max(1, int(getattr(self, "render_fps", 30))))  # render FPS
             except Exception as e:
                 print(f"渲染循环出错: {str(e)}")
                 time.sleep(0.05)

@@ -40,10 +40,17 @@ from Algorithm.Vector3 import Vector3
 from Algorithm.data_collector import DataCollector
 from AirsimServer.data_pack import PackType
 from diagnostic_logger import get_diagnostic_logger, DroneDiagnosticLogger
+from training_stats_schema import (
+    build_default_training_stats,
+    merge_training_stats,
+    normalize_training_stats,
+)
 
 # 尝试导入可视化模块
 try:
-    from Visualization import RuntimeVisualizer
+    from Visualization.external_runtime_visualizer import (
+        ExternalRuntimeVisualizerManager,
+    )
 
     HAS_VISUALIZATION = True
 except ImportError as e:
@@ -167,6 +174,8 @@ class MultiDroneAlgorithmServer:
         # 可视化快照缓存（供独立可视化进程读取）
         self._vis_snapshot_cache = None
         self._vis_snapshot_cache_time = 0.0
+        self._vis_runtime_snapshot: Dict[str, Any] = {}
+        self._vis_grid_snapshot: Dict[str, Any] = {"cells": []}
         self._last_reset_time = 0.0  # 记录最后一次重置时间，用于客户端清除缓存
         self._last_reset_reason = ""  # 记录最后一次重置原因
         self._last_collision_object_name = ""
@@ -272,19 +281,7 @@ class MultiDroneAlgorithmServer:
             logger.info("DQN控制模式下，use_learned_weights参数被忽略")
 
         # 训练统计（用于IPC可视化进程）
-        self.current_training_stats: Dict[str, Any] = {
-            "episode_count": 0,
-            "total_steps": 0,
-            "current_episode_steps": 0,
-            "current_step_reward": 0.0,
-            "current_episode_reward": 0.0,
-            "episode_elapsed_time": 0.0,
-            "avg_reward": 0.0,
-            "max_reward": 0.0,
-            "min_reward": 0.0,
-            "reward_history": [],
-            "steps_per_sec": 0.0,
-        }
+        self.current_training_stats: Dict[str, Any] = build_default_training_stats()
         self._training_stats_lock = threading.Lock()  # 训练统计锁
 
         # 初始化可视化组件（如果启用）
@@ -411,16 +408,16 @@ class MultiDroneAlgorithmServer:
         logger.info("🎨 初始化可视化组件...")
 
         if not HAS_VISUALIZATION:
-            logger.warning("❌ 可视化模块未导入（SimpleVisualizer导入失败）")
+            logger.warning("❌ 可视化模块未导入（独立可视化管理器导入失败）")
             logger.info("💡 请检查是否安装了pygame: pip install pygame")
             logger.info("=" * 60)
             self.visualizer = None
             return
 
         try:
-            self.visualizer = RuntimeVisualizer(self)
+            self.visualizer = ExternalRuntimeVisualizerManager(self)
             logger.info("✅ 可视化组件初始化成功")
-            logger.info("💡 可视化将在start()后启动")
+            logger.info("💡 可视化将在start()后以独立进程启动")
             logger.info("=" * 60)
         except Exception as e:
             logger.warning("=" * 60)
@@ -462,17 +459,29 @@ class MultiDroneAlgorithmServer:
         with self._training_stats_lock:
             now = _time.time()
             episode_elapsed_time = max(0.0, now - self._episode_start_time)
+            current_episode_steps = (
+                int(current_episode_steps)
+                if current_episode_steps is not None
+                else int(step)
+            )
+            total_training_time = max(
+                0.0, now - getattr(self, "_start_time", self._episode_start_time)
+            )
+            steps_per_sec = (
+                float(current_episode_steps) / episode_elapsed_time
+                if episode_elapsed_time > 0
+                else 0.0
+            )
 
             self.current_training_stats["episode_count"] = episode
             self.current_training_stats["total_steps"] = step
             self.current_training_stats["current_step_reward"] = reward
             self.current_training_stats["current_episode_reward"] = total_reward
-            self.current_training_stats["current_episode_steps"] = (
-                int(current_episode_steps)
-                if current_episode_steps is not None
-                else int(self.current_training_stats.get("current_episode_steps", 0))
-            )
+            self.current_training_stats["current_episode_steps"] = current_episode_steps
             self.current_training_stats["episode_elapsed_time"] = episode_elapsed_time
+            self.current_training_stats["current_episode_time"] = episode_elapsed_time
+            self.current_training_stats["total_training_time"] = total_training_time
+            self.current_training_stats["steps_per_sec"] = steps_per_sec
 
             if "reward_history" not in self.current_training_stats:
                 self.current_training_stats["reward_history"] = []
@@ -508,6 +517,10 @@ class MultiDroneAlgorithmServer:
                 self.current_training_stats["max_reward"] = 0.0
                 self.current_training_stats["min_reward"] = 0.0
 
+            self.current_training_stats = normalize_training_stats(
+                self.current_training_stats
+            )
+
         if self.data_collector:
             self.data_collector.set_external_data("episode", episode)
             self.data_collector.set_external_data("step", step)
@@ -522,9 +535,18 @@ class MultiDroneAlgorithmServer:
     def reset_episode_timer(self):
         """Reset per-episode timing stats without changing training behavior."""
         with self._training_stats_lock:
+            previous_elapsed = float(
+                self.current_training_stats.get("episode_elapsed_time", 0.0) or 0.0
+            )
+            if previous_elapsed > 0:
+                self.current_training_stats["last_episode_duration"] = previous_elapsed
             self._episode_start_time = _time.time()
             self.current_training_stats["episode_elapsed_time"] = 0.0
+            self.current_training_stats["current_episode_time"] = 0.0
             self.current_training_stats["current_episode_steps"] = 0
+            self.current_training_stats = normalize_training_stats(
+                self.current_training_stats
+            )
 
     def set_experiment_meta(
         self, algorithm_type: str, env_type: str, control_mode: str
@@ -648,6 +670,61 @@ class MultiDroneAlgorithmServer:
                 snapshot["airsim_positions"][drone_name] = {"error": str(exc)}
 
         return snapshot
+
+    def _build_runtime_snapshot_from_unity_runtime_data(self) -> Dict[str, Any]:
+        runtimes = {}
+        for name, rd in self.unity_runtime_data.items():
+            runtimes[name] = {
+                "position": {
+                    "x": rd.position.x,
+                    "y": rd.position.y,
+                    "z": rd.position.z,
+                }
+                if rd.position
+                else None,
+                "forward": {
+                    "x": rd.forward.x,
+                    "y": rd.forward.y,
+                    "z": rd.forward.z,
+                }
+                if rd.forward
+                else None,
+                "finalMoveDir": {
+                    "x": rd.finalMoveDir.x,
+                    "y": rd.finalMoveDir.y,
+                    "z": rd.finalMoveDir.z,
+                }
+                if rd.finalMoveDir
+                else None,
+                "leader_position": {
+                    "x": rd.leader_position.x,
+                    "y": rd.leader_position.y,
+                    "z": rd.leader_position.z,
+                }
+                if rd.leader_position
+                else None,
+                "leader_scan_radius": rd.leader_scan_radius,
+            }
+        return runtimes
+
+    def _build_grid_snapshot_from_grid_data(self) -> Dict[str, Any]:
+        if (
+            self.grid_data
+            and hasattr(self.grid_data, "cells")
+            and len(self.grid_data.cells) > 0
+        ):
+            return {
+                "cells": [
+                    {
+                        "x": c.center.x,
+                        "y": c.center.y,
+                        "z": c.center.z,
+                        "entropy": c.entropy,
+                    }
+                    for c in self.grid_data.cells
+                ]
+            }
+        return {"cells": []}
 
     def _write_reset_trace(self, event: str, payload: Optional[Dict[str, Any]] = None) -> None:
         """Append a dedicated reset diagnostic event to a separate JSONL file."""
@@ -774,12 +851,12 @@ class MultiDroneAlgorithmServer:
             # 4. 启动可视化（如果已初始化）
             if self.visualizer:
                 logger.info("=" * 60)
-                logger.info("🎨 启动可视化线程...")
+                logger.info("🎨 启动可视化进程...")
                 if self.visualizer.start_visualization():
-                    logger.info("✅ 可视化线程已启动")
+                    logger.info("✅ 可视化进程已启动")
                     logger.info("💡 可视化窗口应该会弹出")
                 else:
-                    logger.warning("❌ 可视化线程启动失败")
+                    logger.warning("❌ 可视化进程启动失败")
                 logger.info("=" * 60)
 
             logger.info("服务初始化成功")
@@ -1470,6 +1547,9 @@ class MultiDroneAlgorithmServer:
                                     ):
                                         self._reset_runtime_fresh = True
                                         self._try_set_reset_ack()
+                        self._vis_runtime_snapshot = (
+                            self._build_runtime_snapshot_from_unity_runtime_data()
+                        )
                         # ---------------------
 
                 # 检查是否包含grid_data字段
@@ -1511,6 +1591,9 @@ class MultiDroneAlgorithmServer:
 
                         with self.grid_lock:
                             self.grid_data.update_from_dict(grid_data)
+                            self._vis_grid_snapshot = (
+                                self._build_grid_snapshot_from_grid_data()
+                            )
 
                         # 重置期间：标记 reset 指令后的新 grid 数据
                         if self.resetting:
@@ -2340,6 +2423,7 @@ class MultiDroneAlgorithmServer:
 
             runtime_snapshot = runtime_data.copy()
             runtime_snapshot.uavname = drone_name
+            self._vis_runtime_snapshot = self._build_runtime_snapshot_from_unity_runtime_data()
 
         self._send_processed_data(drone_name, runtime_snapshot)
 
@@ -2485,12 +2569,10 @@ class MultiDroneAlgorithmServer:
             self._vis_snapshot_cache = None
             logger.info("[可视化] 检测到重置，清除快照缓存")
         
-        # 频率限制，避免过度消耗 CPU 序列化大数据
-        # 只有缓存存在且时间差小于阈值时才返回缓存
-        if self._vis_snapshot_cache is not None and (
-            now - self._vis_snapshot_cache_time < 0.1
-        ):
-            return self._vis_snapshot_cache
+        # NOTE:
+        # 旧实现会在 10Hz IPC 推送周期附近反复命中缓存，导致外部可视化看到
+        # “冻结”的训练统计 / Leader / 权重。这里直接关闭快照复用，优先保证
+        # 实时同步正确性；如果后续需要优化，再做更细粒度的分字段缓存。
 
         snapshot = {
             "timestamp": now,
@@ -2510,85 +2592,33 @@ class MultiDroneAlgorithmServer:
         except Exception:
             pass
 
-        # 1. 尝试提取网格数据 (带极短超时)
-        # 修复：重置期间不要返回空cells，否则客户端proxy会被清空且无法恢复
-        if self.grid_lock.acquire(timeout=0.01):
-            try:
-                if (
-                    self.grid_data
-                    and hasattr(self.grid_data, "cells")
-                    and len(self.grid_data.cells) > 0
-                ):
-                    snapshot["grid_data"] = {
-                        "cells": [
-                            {
-                                "x": c.center.x,
-                                "y": c.center.y,
-                                "z": c.center.z,
-                                "entropy": c.entropy,
-                            }
-                            for c in self.grid_data.cells
-                        ]
-                    }
-                else:
-                    # 网格数据为空时才返回空列表
-                    snapshot["grid_data"] = {"cells": []}
-            finally:
-                self.grid_lock.release()
-        # 获取锁失败时：
-        # - 如果正在重置，不添加grid_data字段，让客户端延用旧数据
-        # - 如果不在重置，可能是短暂的锁竞争，跳过本次更新
-        # 这样可以避免重置期间客户端收到空cells导致热力图消失
-        # else:
-        #     # 不添加grid_data字段，客户端会延用上一帧的数据
-
-        # 2. 尝试提取运行时数据
-        if self.data_lock.acquire(timeout=0.01):
-            try:
-                runtimes = {}
-                for name, rd in self.unity_runtime_data.items():
-                    runtimes[name] = {
-                        "position": {
-                            "x": rd.position.x,
-                            "y": rd.position.y,
-                            "z": rd.position.z,
-                        }
-                        if rd.position
-                        else None,
-                        "forward": {
-                            "x": rd.forward.x,
-                            "y": rd.forward.y,
-                            "z": rd.forward.z,
-                        }
-                        if rd.forward
-                        else None,
-                        "finalMoveDir": {
-                            "x": rd.finalMoveDir.x,
-                            "y": rd.finalMoveDir.y,
-                            "z": rd.finalMoveDir.z,
-                        }
-                        if rd.finalMoveDir
-                        else None,
-                        "leader_position": {
-                            "x": rd.leader_position.x,
-                            "y": rd.leader_position.y,
-                            "z": rd.leader_position.z,
-                        }
-                        if rd.leader_position
-                        else None,
-                        "leader_scan_radius": rd.leader_scan_radius,
-                    }
-                snapshot["unity_runtime_data"] = runtimes
-            finally:
-                self.data_lock.release()
+        # 1. 直接使用数据更新线程提前构造的可视化副本，避免快照线程和主数据锁竞争
+        snapshot["grid_data"] = dict(getattr(self, "_vis_grid_snapshot", {"cells": []}))
+        snapshot["unity_runtime_data"] = dict(
+            getattr(self, "_vis_runtime_snapshot", {})
+        )
 
         # 3. 提取训练统计 (如果有)
         if hasattr(self, "data_collector") and self.data_collector:
-            snapshot["training_stats"] = self.data_collector.external_data
+            external_training_stats = {}
+            try:
+                with self.data_collector.external_data_lock:
+                    external_training_stats = dict(self.data_collector.external_data)
+            except Exception:
+                external_training_stats = dict(
+                    getattr(self.data_collector, "external_data", {}) or {}
+                )
+            snapshot["training_stats"] = normalize_training_stats(
+                stats=external_training_stats,
+                fallback=self._get_training_data(),
+            )
 
         # 增加额外的训练实时统计（用于 DQN 面板）
         if hasattr(self, "current_training_stats"):
-            snapshot["current_training_stats"] = self.current_training_stats
+            snapshot["current_training_stats"] = normalize_training_stats(
+                stats=external_training_stats if 'external_training_stats' in locals() else None,
+                fallback=self.current_training_stats,
+            )
 
         # 5. 添加重置原因和历史记录
         snapshot["last_reset_reason"] = self._last_reset_reason

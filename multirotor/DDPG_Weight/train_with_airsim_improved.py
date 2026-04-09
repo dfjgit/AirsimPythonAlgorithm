@@ -95,6 +95,9 @@ except ImportError as e:
 # 导入训练环境：用于AirSim仿真的权重训练环境
 from envs.simple_weight_env import SimpleWeightEnv
 from Algorithm.experiment_stage_utils import build_stage_meta, write_stage_meta_for_model
+from multirotor.Visualization.visualization_refresh_settings import (
+    resolve_visualization_refresh_settings,
+)
 
 # 独立进程可视化 (pygame 不与训练进程共享)
 try:
@@ -650,6 +653,21 @@ def main():
         - KeyboardInterrupt: 用户中断（Ctrl+C），优雅停止
         - Exception: 其他错误，显示错误信息并清理资源
     """
+    print(
+        f"[启动信息] train_with_airsim_improved.py = {os.path.abspath(__file__)}"
+    )
+    print(f"[启动信息] cwd = {os.getcwd()}")
+    print(
+        "[启动信息] visualization_ipc.py = "
+        + os.path.abspath(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "Visualization",
+                "visualization_ipc.py",
+            )
+        )
+    )
+
     # ========== 命令行参数解析 ==========
     parser = argparse.ArgumentParser(description="AirSim权重训练（改进版）")
     parser.add_argument(
@@ -768,6 +786,9 @@ def main():
         config,
         "continue_model",
         None,
+    )
+    visualization_ipc_hz, visualization_render_fps = (
+        resolve_visualization_refresh_settings(config)
     )
     stage_meta = build_stage_meta(
         algorithm_tag="ddpg_apf",
@@ -896,7 +917,7 @@ def main():
                     snapshot_provider=server.get_visualization_snapshot,
                     host="127.0.0.1",
                     port=0,
-                    hz=10.0,
+                    hz=visualization_ipc_hz,
                     compress_level=1,
                 )
                 ipc_server.start()
@@ -923,6 +944,8 @@ def main():
                     "127.0.0.1",
                     "--port",
                     str(port),
+                    "--render-fps",
+                    str(visualization_render_fps),
                 ]
 
                 vis_env = os.environ.copy()
@@ -1035,6 +1058,9 @@ def main():
             f"  [Hand] 协同无人机: {', '.join(drone_names[1:]) if len(drone_names) > 1 else '无'}"
         )
         print(f"  [Clock]  每步时长: {step_duration}秒")
+        print(
+            f"  [Vis]  IPC推送: {visualization_ipc_hz:.1f}Hz | 渲染帧率: {visualization_render_fps} FPS"
+        )
         print(f"  [Scan]  扫描进度: {'累积模式 (Episode间保持已扫描区域)' if not env.reset_grid_entropy else '重置模式 (每个Episode重新扫描)'}")
         print(
             f"  [@] 每个episode: {env.reward_config.max_steps}步 = {env.reward_config.max_steps * step_duration / 60:.1f}分钟"

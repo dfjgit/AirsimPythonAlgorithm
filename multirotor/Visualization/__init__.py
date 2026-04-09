@@ -21,6 +21,7 @@
 from .base_visualizer import BaseVisualizer
 from .panel_system import BasePanel, PanelManager
 from .runtime_visualizer import RuntimeVisualizer
+from .external_runtime_visualizer import ExternalRuntimeVisualizerManager
 from .ddpg_training_visualizer import DDPGTrainingVisualizer
 from .hierarchical_training_visualizer import HierarchicalTrainingVisualizer
 from .dqn_movement_visualizer import DQNMovementTrainingVisualizer
@@ -31,6 +32,7 @@ __all__ = [
     'BasePanel',
     'PanelManager',
     'RuntimeVisualizer',
+    'ExternalRuntimeVisualizerManager',
     'DDPGTrainingVisualizer',
     'HierarchicalTrainingVisualizer',
     'DQNMovementTrainingVisualizer'

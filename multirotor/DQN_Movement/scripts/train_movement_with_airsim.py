@@ -63,6 +63,7 @@ from Algorithm.experiment_stage_utils import (
     build_stage_meta,
     write_stage_meta_for_model,
 )
+from multirotor.training_stats_schema import merge_training_stats
 
 # 独立进程可视化 (pygame 不与训练进程共享)
 try:
@@ -560,11 +561,15 @@ class DQNVisualizationCallback(BaseCallback):
             }
             try:
                 with self.server._training_stats_lock:
-                    merged_stats = dict(getattr(self.server, 'current_training_stats', {}) or {})
-                    merged_stats.update(current_stats_patch)
+                    merged_stats = merge_training_stats(
+                        getattr(self.server, 'current_training_stats', {}) or {},
+                        current_stats_patch,
+                    )
                     self.server.current_training_stats = merged_stats
             except Exception:
-                self.server.current_training_stats = current_stats_patch
+                self.server.current_training_stats = merge_training_stats(
+                    {}, current_stats_patch
+                )
             # 强制快照缓存失效
             try:
                 self.server._vis_snapshot_cache = None

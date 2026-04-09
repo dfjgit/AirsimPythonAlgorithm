@@ -482,6 +482,8 @@ class SimpleWeightEnv(gym.Env):
 
         # 通知服务器 Episode 切换 (用于数据采集及时记录上一个 Episode)
         if self.server:
+            if hasattr(self.server, "reset_episode_timer"):
+                self.server.reset_episode_timer()
             self.server.set_training_stats(
                 episode=self.episode_count, step=0, reward=0.0, total_reward=0.0
             )

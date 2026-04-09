@@ -189,10 +189,17 @@ class PanelManager:
         for name in self.panel_order:
             panel = self.panels.get(name)
             if panel and panel.visible:
+                previous_clip = screen.get_clip()
                 try:
+                    screen.set_clip(pygame.Rect(panel.x, panel.y, panel.width, panel.height))
                     panel.draw(screen, data)
                 except Exception as exc:
                     print(f"Failed to draw panel '{name}': {exc}")
+                finally:
+                    try:
+                        screen.set_clip(previous_clip)
+                    except Exception:
+                        pass
 
     def update_all_panels(self, data: Dict[str, Any]):
         for panel in self.panels.values():

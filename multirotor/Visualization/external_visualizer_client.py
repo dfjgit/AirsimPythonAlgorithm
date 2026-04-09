@@ -3,6 +3,7 @@ import sys
 import os
 import time
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, List
 
 # Ensure project root in path
@@ -10,6 +11,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from multirotor.Visualization.visualization_ipc import decode_snapshot, recv_frame
 from multirotor.Algorithm.Vector3 import Vector3
+from multirotor.Visualization.training_stats_csv_fallback import (
+    load_latest_ddpg_visualization_snapshot,
+    load_latest_ddpg_training_stats,
+)
+from multirotor.training_stats_schema import normalize_training_stats
+
+VIS_BUILD_TAG = "2026-04-09T09:00"
 
 
 class CellProxy:
@@ -86,6 +94,7 @@ class SnapshotServerProxy:
         self.control_mode = "dqn"
         self.use_learned_weights = False
         self.battery_data = {}
+        self.training_stats = {}
         self.current_training_stats = {}
         self.obstacles = []  # 障碍物数据
         self._last_applied_reset_time = 0.0
@@ -104,6 +113,13 @@ class SnapshotServerProxy:
 
 
 def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
+    if not hasattr(proxy, "_last_verbose_snapshot_log_time"):
+        proxy._last_verbose_snapshot_log_time = 0.0
+    now = time.time()
+    verbose_log = now - proxy._last_verbose_snapshot_log_time >= 5.0
+    if verbose_log:
+        proxy._last_verbose_snapshot_log_time = now
+
     # 检查重置时间戳，如果发生新重置，则清空可视化缓存
     server_reset_time = float(snap.get("last_reset_time", 0.0))
     if server_reset_time > proxy._last_applied_reset_time:
@@ -113,8 +129,9 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
 
     # 调试：输出快照的关键字段
     snap_keys = list(snap.keys())
-    print(f"[IPC客户端] 🔍 收到snapshot，字段数: {len(snap_keys)}")
-    print(f"[IPC客户端] 🔍 snapshot字段列表: {snap_keys}")
+    if verbose_log:
+        print(f"[IPC客户端] 🔍 收到snapshot，字段数: {len(snap_keys)}")
+        print(f"[IPC客户端] 🔍 snapshot字段列表: {snap_keys}")
 
     # 更新基础数据
     proxy.drone_names = snap.get("drone_names", proxy.drone_names)
@@ -127,20 +144,22 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     # grid data reconstruction
     if "grid_data" in snap:
         cells_count = len(snap["grid_data"].get("cells", []))
-        print(f"[IPC客户端] 🔍 grid_data存在，cells数: {cells_count}")
+        if verbose_log:
+            print(f"[IPC客户端] 🔍 grid_data存在，cells数: {cells_count}")
         # 只有当cells不为空时才更新，避免重置期间清空热力图
         if cells_count > 0:
             proxy.grid_data = GridProxy(snap["grid_data"])
-        else:
+        elif verbose_log:
             print(f"[IPC客户端] ⚠️ grid_data为空，保留旧数据避免热力图消失")
-    else:
+    elif verbose_log:
         print(f"[IPC客户端] 🔍 snapshot中没有grid_data字段，保留旧数据")
 
     # runtime data reconstruction
     if "unity_runtime_data" in snap:
-        print(
-            f"[IPC客户端] 🔍 unity_runtime_data存在，drone数: {len(snap['unity_runtime_data'])}"
-        )
+        if verbose_log:
+            print(
+                f"[IPC客户端] 🔍 unity_runtime_data存在，drone数: {len(snap['unity_runtime_data'])}"
+            )
         runtimes = {}
         for name, data in snap["unity_runtime_data"].items():
             runtimes[name] = RuntimeProxy(data)
@@ -152,16 +171,79 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
 
     # training stats mapping
     if "training_stats" in snap:
-        proxy.training_stats = snap["training_stats"]
+        proxy.training_stats = normalize_training_stats(snap["training_stats"])
 
     # DQN extra training stats mapping (for action panels)
     if "current_training_stats" in snap:
-        proxy.current_training_stats = snap.get("current_training_stats") or {}
+        previous_stats = dict(proxy.current_training_stats or {})
+        proxy.current_training_stats = normalize_training_stats(
+            snap.get("current_training_stats") or {}
+        )
+        if (
+            proxy.current_training_stats.get("total_steps", 0) == 0
+            and previous_stats.get("reward_history")
+            and not proxy.current_training_stats.get("reward_history")
+        ):
+            proxy.current_training_stats["reward_history"] = list(
+                previous_stats.get("reward_history", [])
+            )
+            proxy.current_training_stats["episode_reward_history"] = list(
+                previous_stats.get("episode_reward_history", [])
+            )
+
+    current_stats = proxy.current_training_stats or {}
+    fallback_stats = proxy.training_stats or {}
+    proxy.csv_fallback_active = False
+    if (
+        getattr(proxy, "visualizer_mode", "") == "ddpg"
+        and current_stats.get("total_steps", 0) == 0
+    ):
+        csv_snapshot = load_latest_ddpg_visualization_snapshot(
+            Path(__file__).resolve().parent.parent / "DDPG_Weight" / "airsim_training_logs",
+            now_ts=time.time(),
+        )
+        csv_stats = csv_snapshot.get("training_stats", {})
+        if csv_stats.get("total_steps", 0) > 0:
+            proxy.csv_fallback_active = True
+            proxy.training_stats = csv_stats
+            if csv_snapshot.get("battery_data"):
+                proxy.battery_data = csv_snapshot["battery_data"]
+            if csv_snapshot.get("current_weights"):
+                proxy.current_weights = csv_snapshot["current_weights"]
+                proxy.algorithm_proxy.current_weights = proxy.current_weights
+            if csv_snapshot.get("drone_positions") and proxy.unity_runtime_data:
+                leader_position = csv_snapshot.get("leader_position") or {}
+                for drone_name, position in csv_snapshot["drone_positions"].items():
+                    runtime = proxy.unity_runtime_data.get(drone_name)
+                    if runtime is not None:
+                        runtime.position = Vector3(
+                            position["x"], position["y"], position["z"]
+                        )
+                        if leader_position:
+                            runtime.leader_position = Vector3(
+                                leader_position["x"],
+                                leader_position["y"],
+                                leader_position["z"],
+                            )
+
+    if not hasattr(proxy, "_last_training_stats_log_time"):
+        proxy._last_training_stats_log_time = 0.0
+    if now - proxy._last_training_stats_log_time >= 5.0:
+        proxy._last_training_stats_log_time = now
+        cts = proxy.current_training_stats or {}
+        tts = getattr(proxy, "training_stats", {}) or {}
+        print(
+            "[IPC客户端] 📊 training stats "
+            + f"current(ep={cts.get('episode_count', 0)}, step={cts.get('total_steps', 0)}, reward={cts.get('current_episode_reward', 0.0)}) "
+            + f"fallback(ep={tts.get('episode_count', 0)}, step={tts.get('total_steps', 0)}, reward={tts.get('current_episode_reward', 0.0)}) "
+            + f"csv_active={getattr(proxy, 'csv_fallback_active', False)}"
+        )
 
     # obstacles data mapping (for visualization)
     if "obstacles" in snap:
         proxy.obstacles = snap.get("obstacles") or []
-        print(f"[IPC客户端] 🔍 收到障碍物数据: {len(proxy.obstacles)} 个")
+        if verbose_log:
+            print(f"[IPC客户端] 🔍 收到障碍物数据: {len(proxy.obstacles)} 个")
     else:
         # 只在第一次输出警告
         if not hasattr(proxy, "_obstacles_warned"):
@@ -171,7 +253,8 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     # current weights mapping (for DDPG training visualization)
     if "current_weights" in snap:
         proxy.current_weights = snap.get("current_weights") or {}
-        print(f"[IPC客户端] 🔍 收到权重数据: {len(proxy.current_weights)} 个")
+        if verbose_log:
+            print(f"[IPC客户端] 🔍 收到权重数据: {len(proxy.current_weights)} 个")
         # 同步更新算法代理的权重
         proxy.algorithm_proxy.current_weights = proxy.current_weights
         # 确保algorithms字典中有第一个无人机的算法代理
@@ -182,7 +265,8 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
                 or proxy.algorithms[first_drone] != proxy.algorithm_proxy
             ):
                 proxy.algorithms[first_drone] = proxy.algorithm_proxy
-                print(f"[IPC客户端] ✅ 算法代理已设置: first_drone={first_drone}")
+                if verbose_log:
+                    print(f"[IPC客户端] ✅ 算法代理已设置: first_drone={first_drone}")
 
     # reset info mapping (for training reset visualization)
     proxy.last_reset_reason = snap.get("last_reset_reason", "")
@@ -198,10 +282,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--render-fps", type=int, default=30)
     parser.add_argument(
         "--mode", choices=["runtime", "dqn", "hrl", "ddpg"], required=True
     )
     args = parser.parse_args()
+
+    print(
+        "[IPC客户端] 启动信息: "
+        + f"build={VIS_BUILD_TAG}, file={os.path.abspath(__file__)}, cwd={os.getcwd()}, mode={args.mode}, render_fps={args.render_fps}"
+    )
 
     import socket
 
@@ -232,9 +322,11 @@ def main():
 
     # Create proxy first (without visualizer reference)
     proxy = SnapshotServerProxy(visualizer=None)
+    proxy.visualizer_mode = args.mode
 
     # Initialize visualizer with proxy
     vis = _Vis(server=proxy, env=None)
+    vis.render_fps = max(1, int(args.render_fps))
 
     # Now update proxy with the visualizer instance for clear_cache callback
     proxy.visualizer = vis

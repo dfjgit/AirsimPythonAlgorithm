@@ -22,6 +22,7 @@ from multirotor.Visualization.panels.reward_curve_panel import RewardCurvePanel
 from multirotor.Visualization.panels.battery_panel import BatteryPanel
 from multirotor.Visualization.panels.action_output_panel import ActionOutputPanel
 from multirotor.Visualization.panel_system import BasePanel
+from multirotor.training_stats_schema import normalize_training_stats
 import pygame
 
 
@@ -185,87 +186,50 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
     def get_visualization_data(self) -> Dict[str, Any]:
         """收集DQN移动训练可视化数据"""
         data = {}
-        
-        # 外部进程模式：优先使用 server.current_training_stats 提供的训练统计
+
+        fallback_stats = {
+            'episode_count': self.episode_count,
+            'total_steps': self.total_steps,
+            'current_episode_steps': self.current_episode_steps,
+            'current_episode_reward': self.current_episode_reward,
+            'reward_history': list(self.reward_history),
+        }
+        if self.episode_start_time is not None:
+            import time as _time
+            fallback_stats['current_episode_time'] = _time.time() - self.episode_start_time
+        elif self.last_episode_duration > 0:
+            fallback_stats['last_episode_duration'] = self.last_episode_duration
+        if self.total_training_time > 0:
+            fallback_stats['total_training_time'] = self.total_training_time
+        if self.reward_history:
+            fallback_stats['avg_reward'] = sum(self.reward_history) / len(self.reward_history)
+            fallback_stats['max_reward'] = max(self.reward_history)
+            fallback_stats['min_reward'] = min(self.reward_history)
+
         cts = None
         try:
-            if self.server and hasattr(self.server, 'current_training_stats') and isinstance(self.server.current_training_stats, dict):
+            if self.server and hasattr(self.server, 'current_training_stats'):
                 cts = self.server.current_training_stats
         except Exception:
             cts = None
 
-        if cts:
-            data['episode_count'] = int(cts.get('episode_count', 0))
-            data['total_steps'] = int(cts.get('total_steps', 0))
-            if 'steps_per_sec' in cts:
-                try:
-                    data['steps_per_sec'] = float(cts.get('steps_per_sec', 0.0))
-                except Exception:
-                    data['steps_per_sec'] = 0.0
-            data['current_episode_steps'] = int(cts.get('current_episode_steps', 0))
-            data['current_episode_reward'] = float(cts.get('current_episode_reward', 0.0))
-            # 奖励历史：用于奖励曲线面板
-            rh = cts.get('reward_history', None)
-            if isinstance(rh, list):
-                data['reward_history'] = rh
-        else:
-            # 训练统计数据（本地模式兜底）
-            data['episode_count'] = self.episode_count
-            data['total_steps'] = self.total_steps
-            data['current_episode_steps'] = self.current_episode_steps
-            data['current_episode_reward'] = self.current_episode_reward
+        normalized_stats = normalize_training_stats(
+            stats=cts if isinstance(cts, dict) else None,
+            fallback=fallback_stats,
+        )
+        data.update(normalized_stats)
 
-        # Episode 时间信息
-        if self.episode_start_time is not None:
-            import time as _time
-            data['current_episode_time'] = _time.time() - self.episode_start_time
-        elif self.last_episode_duration > 0:
-            data['last_episode_duration'] = self.last_episode_duration
-        if self.total_training_time > 0:
-            data['total_training_time'] = self.total_training_time
-        
-        # 奖励历史 (外部进程模式优先从 cts 获取)
-        if cts and 'reward_history' in cts:
-            data['reward_history'] = cts['reward_history']
+        raw_counts = normalized_stats.get('action_counts') or {}
+        normalized_counts = {}
+        for action_id in range(6):
+            val = raw_counts.get(action_id, raw_counts.get(str(action_id), 0))
+            normalized_counts[action_id] = int(val)
+        if any(normalized_counts.values()):
+            data['action_counts'] = normalized_counts
         else:
-            data['reward_history'] = list(self.reward_history)
-        
-        # 统计数据
-        if self.reward_history:
-            data['avg_reward'] = sum(self.reward_history) / len(self.reward_history)
-            data['max_reward'] = max(self.reward_history)
-            data['min_reward'] = min(self.reward_history)
-        
-        # 外部进程模式：优先从 server.current_training_stats 注入动作数据
-        try:
-            if self.server and hasattr(self.server, 'current_training_stats') and self.server.current_training_stats:
-                cts = self.server.current_training_stats
-                if isinstance(cts, dict):
-                    if 'action_counts' in cts and cts['action_counts']:
-                        # 归一化 action_counts，处理字符串 key 和 整数 key
-                        raw_counts = cts['action_counts']
-                        normalized_counts = {}
-                        for action_id in range(6):
-                            # 同时尝试整数和字符串 key
-                            val = raw_counts.get(action_id, raw_counts.get(str(action_id), 0))
-                            normalized_counts[action_id] = int(val)
-                        data['action_counts'] = normalized_counts
-                    if 'last_action' in cts:
-                        data['current_training_stats'] = cts
-        except Exception:
-            pass
-
-        # 动作统计（本进程模式兜底）
-        if 'action_counts' not in data:
             data['action_counts'] = dict(self.action_counts)
 
-        # 当前动作输出面板使用 current_training_stats
-        if 'current_training_stats' not in data:
-            try:
-                if self.server and hasattr(self.server, 'current_training_stats'):
-                    data['current_training_stats'] = self.server.current_training_stats
-            except Exception:
-                pass
+        data['current_training_stats'] = normalized_stats
 
         # 获取电量数据 (通过父类方法获取 server 中的数据)
         battery_data = self.get_battery_data()

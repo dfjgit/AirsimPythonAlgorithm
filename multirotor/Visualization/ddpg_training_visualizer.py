@@ -4,10 +4,12 @@ import os
 import sys
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
+from multirotor.Algorithm.Vector3 import Vector3
 from multirotor.Visualization.base_visualizer import BaseVisualizer
 from multirotor.Visualization.panels.environment_panel import EnvironmentPanel
 from multirotor.Visualization.panels.training_stats_panel import TrainingStatsPanel
@@ -16,6 +18,10 @@ from multirotor.Visualization.panels.weight_panel import WeightPanel
 from multirotor.Visualization.panels.weight_history_panel import WeightHistoryPanel
 from multirotor.Visualization.panels.battery_panel import BatteryPanel
 from multirotor.Visualization.panels.reset_info_panel import ResetInfoPanel
+from multirotor.Visualization.training_stats_csv_fallback import (
+    load_latest_ddpg_visualization_snapshot,
+)
+from multirotor.training_stats_schema import normalize_training_stats
 
 
 class DDPGTrainingVisualizer(BaseVisualizer):
@@ -50,6 +56,9 @@ class DDPGTrainingVisualizer(BaseVisualizer):
         }
         self._last_weight_collection_time = 0.0
         self._weight_collection_interval = 0.1
+        self._latest_csv_snapshot: Dict[str, Any] = {}
+        self._csv_display_positions: Dict[str, Vector3] = {}
+        self._csv_display_leader_position: Optional[Vector3] = None
 
     def setup_panels(self):
         """Use a fixed dashboard layout so panel size matches content density."""
@@ -59,16 +68,29 @@ class DDPGTrainingVisualizer(BaseVisualizer):
         left_x = side_margin
         right_x = self.SCREEN_WIDTH - self.right_panel_width + side_margin
 
+        left_heights = self._scale_panel_heights(
+            [170, 250, 290, 310],
+            min_heights=[120, 160, 180, 150],
+            row_gap=row_gap,
+            outer_margin=10,
+        )
+        right_heights = self._scale_panel_heights(
+            [210, 260, 580],
+            min_heights=[150, 220, 240],
+            row_gap=row_gap,
+            outer_margin=10,
+        )
+
         left_panels = [
-            EnvironmentPanel(width=column_width, height=170),
-            TrainingStatsPanel(width=column_width, height=250),
-            ResetInfoPanel(width=column_width, height=290),
-            BatteryPanel(width=column_width, height=310),
+            EnvironmentPanel(width=column_width, height=left_heights[0]),
+            TrainingStatsPanel(width=column_width, height=left_heights[1]),
+            ResetInfoPanel(width=column_width, height=left_heights[2]),
+            BatteryPanel(width=column_width, height=left_heights[3]),
         ]
         right_panels = [
-            RewardCurvePanel(width=column_width, height=210),
-            WeightPanel(width=column_width, height=260),
-            WeightHistoryPanel(width=column_width, height=580),
+            RewardCurvePanel(width=column_width, height=right_heights[0]),
+            WeightPanel(width=column_width, height=right_heights[1]),
+            WeightHistoryPanel(width=column_width, height=right_heights[2]),
         ]
 
         self._register_fixed_column(left_panels, left_x, row_gap)
@@ -105,58 +127,153 @@ class DDPGTrainingVisualizer(BaseVisualizer):
         except Exception:
             return None
 
+    def _live_stats_are_empty(self) -> bool:
+        current = {}
+        try:
+            if self.server and hasattr(self.server, "current_training_stats"):
+                current = normalize_training_stats(self.server.current_training_stats)
+        except Exception:
+            return True
+        return current.get("total_steps", 0) == 0
+
+    def _load_csv_snapshot_if_needed(self) -> Dict[str, Any]:
+        if not self._live_stats_are_empty():
+            self._latest_csv_snapshot = {}
+            return {}
+        snapshot = load_latest_ddpg_visualization_snapshot(
+            Path(__file__).resolve().parent.parent / "DDPG_Weight" / "airsim_training_logs",
+            now_ts=time.time(),
+        )
+        self._latest_csv_snapshot = snapshot if snapshot else {}
+        return self._latest_csv_snapshot
+
+    def _smooth_csv_position(
+        self, key: str, target: Dict[str, float], alpha: float = 0.35
+    ) -> Vector3:
+        previous = self._csv_display_positions.get(key)
+        if previous is None:
+            smoothed = Vector3(target["x"], target["y"], target["z"])
+        else:
+            smoothed = Vector3(
+                previous.x + (target["x"] - previous.x) * alpha,
+                previous.y + (target["y"] - previous.y) * alpha,
+                previous.z + (target["z"] - previous.z) * alpha,
+            )
+        self._csv_display_positions[key] = smoothed
+        return smoothed
+
+    def _smooth_csv_leader_position(
+        self, target: Dict[str, float], alpha: float = 0.25
+    ) -> Vector3:
+        previous = self._csv_display_leader_position
+        if previous is None:
+            smoothed = Vector3(target["x"], target["y"], target["z"])
+        else:
+            smoothed = Vector3(
+                previous.x + (target["x"] - previous.x) * alpha,
+                previous.y + (target["y"] - previous.y) * alpha,
+                previous.z + (target["z"] - previous.z) * alpha,
+            )
+        self._csv_display_leader_position = smoothed
+        return smoothed
+
+    def update_data(self):
+        grid_data, runtime_data_dict = super().update_data()
+        csv_snapshot = self._load_csv_snapshot_if_needed()
+        csv_positions = csv_snapshot.get("drone_positions", {})
+        leader_position = csv_snapshot.get("leader_position", {})
+        if csv_positions and runtime_data_dict:
+            smoothed_leader = (
+                self._smooth_csv_leader_position(leader_position)
+                if leader_position
+                else None
+            )
+            for drone_name, pos in csv_positions.items():
+                drone_info = runtime_data_dict.setdefault(
+                    drone_name,
+                    {
+                        "position": None,
+                        "finalMoveDir": None,
+                        "leaderPosition": None,
+                        "leaderScanRadius": 0.0,
+                    },
+                )
+                drone_info["position"] = self._smooth_csv_position(drone_name, pos)
+                if smoothed_leader is not None:
+                    drone_info["leaderPosition"] = smoothed_leader
+        return grid_data, runtime_data_dict
+
     def get_visualization_data(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
 
-        cts = None
+        fallback_stats = {
+            "episode_count": self.episode_count,
+            "total_steps": self.total_steps,
+            "current_episode_steps": self.current_episode_steps,
+            "current_episode_reward": self.current_episode_reward,
+            "steps_per_sec": self._compute_steps_per_sec(),
+            "reward_history": list(self.reward_history),
+            "episode_reward_history": list(self.reward_history),
+            "total_training_time": time.time() - self.training_start_time,
+        }
+        if self.episode_rewards:
+            fallback_stats["avg_reward"] = sum(self.episode_rewards) / len(
+                self.episode_rewards
+            )
+            fallback_stats["max_reward"] = max(self.episode_rewards)
+            fallback_stats["min_reward"] = min(self.episode_rewards)
+
+        server_stats = None
+        training_stats = None
         try:
-            if (
-                self.server
-                and hasattr(self.server, "current_training_stats")
-                and isinstance(self.server.current_training_stats, dict)
-            ):
-                cts = self.server.current_training_stats
+            if self.server and hasattr(self.server, "current_training_stats"):
+                server_stats = self.server.current_training_stats
+            if self.server and hasattr(self.server, "training_stats"):
+                training_stats = self.server.training_stats
         except Exception:
-            cts = None
+            server_stats = None
+            training_stats = None
 
-        if cts:
-            data["episode_count"] = int(cts.get("episode_count", 0))
-            data["total_steps"] = int(cts.get("total_steps", 0))
-            data["current_episode_steps"] = int(cts.get("current_episode_steps", 0))
-            data["current_episode_reward"] = float(cts.get("current_episode_reward", 0.0))
-            data["steps_per_sec"] = float(cts.get("steps_per_sec", self._compute_steps_per_sec()) or 0.0)
-
-            reward_history = cts.get("reward_history")
-            if isinstance(reward_history, list):
-                data["reward_history"] = reward_history
-            episode_reward_history = cts.get("episode_reward_history")
-            if isinstance(episode_reward_history, list):
-                data["episode_reward_history"] = episode_reward_history
-
-            for key in (
-                "avg_reward",
-                "max_reward",
-                "min_reward",
-                "current_episode_time",
-                "last_episode_duration",
-                "total_training_time",
-            ):
-                if key in cts:
-                    data[key] = cts.get(key)
+        normalized_server_stats = normalize_training_stats(
+            stats=server_stats if isinstance(server_stats, dict) else None,
+            fallback=fallback_stats,
+        )
+        server_stats_looks_empty = (
+            normalized_server_stats.get("total_steps", 0) == 0
+            and normalized_server_stats.get("current_episode_steps", 0) == 0
+            and normalized_server_stats.get("current_episode_reward", 0.0) == 0.0
+            and normalized_server_stats.get("episode_count", 0) == 0
+        )
+        if server_stats_looks_empty and isinstance(training_stats, dict):
+            normalized_training_stats = normalize_training_stats(
+                stats=training_stats,
+                fallback=normalized_server_stats,
+            )
+            if normalized_training_stats.get("total_steps", 0) > 0 or normalized_training_stats.get(
+                "episode_count", 0
+            ) > 0:
+                data["stats_source"] = "training_stats_fallback"
+                data.update(normalized_training_stats)
+            else:
+                data["stats_source"] = "current_training_stats"
+                data.update(normalized_server_stats)
         else:
-            data["episode_count"] = self.episode_count
-            data["total_steps"] = self.total_steps
-            data["current_episode_steps"] = self.current_episode_steps
-            data["current_episode_reward"] = self.current_episode_reward
-            data["steps_per_sec"] = self._compute_steps_per_sec()
-            data["reward_history"] = list(self.reward_history)
-            data["episode_reward_history"] = list(self.reward_history)
-            data["total_training_time"] = time.time() - self.training_start_time
+            data["stats_source"] = "current_training_stats"
+            data.update(normalized_server_stats)
 
-            if self.episode_rewards:
-                data["avg_reward"] = sum(self.episode_rewards) / len(self.episode_rewards)
-                data["max_reward"] = max(self.episode_rewards)
-                data["min_reward"] = min(self.episode_rewards)
+        if data.get("total_steps", 0) == 0:
+            csv_snapshot = self._load_csv_snapshot_if_needed()
+            csv_stats = csv_snapshot.get("training_stats", {})
+            if csv_stats.get("total_steps", 0) > 0:
+                data["stats_source"] = "csv_fallback"
+                data.update(csv_stats)
+                if csv_snapshot.get("global_scanned_count", 0) > 0:
+                    data["csv_global_scanned_count"] = csv_snapshot["global_scanned_count"]
+                    data["csv_global_total_count"] = csv_snapshot.get(
+                        "global_total_count", 0
+                    )
+                if csv_snapshot.get("battery_data"):
+                    data["battery_data"] = csv_snapshot["battery_data"]
 
         current_time = time.time()
         if current_time - self._last_weight_collection_time >= self._weight_collection_interval:
@@ -165,10 +282,19 @@ class DDPGTrainingVisualizer(BaseVisualizer):
                 self.update_weight_history(weights)
                 self._last_weight_collection_time = current_time
 
-        weights = self._get_current_weights()
-        if weights:
-            data["weights"] = weights
+        csv_weights = self._latest_csv_snapshot.get("current_weights")
+        if csv_weights and self._live_stats_are_empty():
+            csv_weights = self._latest_csv_snapshot["current_weights"]
+            data["weights"] = csv_weights
             data["use_dqn"] = getattr(self.server, "use_learned_weights", True) if self.server else True
+            if current_time - self._last_weight_collection_time >= self._weight_collection_interval:
+                self.update_weight_history(csv_weights)
+                self._last_weight_collection_time = current_time
+        else:
+            weights = self._get_current_weights()
+            if weights:
+                data["weights"] = weights
+                data["use_dqn"] = getattr(self.server, "use_learned_weights", True) if self.server else True
 
         data["weight_history"] = {key: list(values) for key, values in self.weight_history.items()}
 
