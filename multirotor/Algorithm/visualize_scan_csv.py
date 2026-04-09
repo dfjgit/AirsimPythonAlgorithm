@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from collision_analysis import collision_termination_rate_percent
+
 LOGGER = logging.getLogger("scan_csv_visualizer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -239,6 +241,30 @@ def plot_reset_reason_rolling_ratio(run: RunData) -> None:
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "reset_reason_rolling_ratio.png", dpi=160)
+    plt.close(fig)
+
+
+def plot_collision_stability(run: RunData) -> None:
+    df = run.episode_df
+    if df.empty or "episode" not in df.columns:
+        return
+
+    collision_rate = collision_termination_rate_percent(df)
+    if collision_rate.empty:
+        return
+
+    x = pd.to_numeric(df["episode"], errors="coerce")
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(x, collision_rate, alpha=0.22, color="#e76f51", linewidth=1.0, label="raw")
+    ax.plot(x, moving_average(collision_rate), color="#e76f51", linewidth=2.4, label="MA20")
+    ax.set_title("Collision Stability")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Collision Termination Ratio (%)")
+    ax.set_ylim(-5, 105)
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(run.output_dir / "collision_stability.png", dpi=160)
     plt.close(fig)
 
 
@@ -556,6 +582,7 @@ def safe_plot(plot_fn, *args, **kwargs) -> None:
 PLOT_PIPELINE = [
     (plot_episode_performance_summary, "episode_performance_summary"),
     (plot_reset_reason_rolling_ratio, "reset_reason_rolling_ratio"),
+    (plot_collision_stability, "collision_stability"),
     (plot_collision_hotspots, "collision_hotspots_xy"),
     (plot_collision_object_breakdown, "collision_object_breakdown"),
     (plot_algorithm_weights_stability, "algorithm_weights_stability"),
