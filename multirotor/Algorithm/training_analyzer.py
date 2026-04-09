@@ -21,6 +21,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .collision_analysis import collision_termination_rate_percent
+except ImportError:
+    from collision_analysis import collision_termination_rate_percent
+
+try:
     import seaborn as sns
 except ImportError:
     sns = None
@@ -43,6 +48,7 @@ class UnifiedTrainingAnalyzer:
     METRIC_NAME_MAP = {
         "reward": "累计奖励",
         "scan_efficiency": "扫描效率 (Cell/Step)",
+        "collision_rate": "碰撞终止占比(%)",
         "scan_ratio": "扫描完成度(%)",
         "global_avg_entropy": "全局平均熵值",
         "episode": "训练轮次 (Episode)",
@@ -68,6 +74,10 @@ class UnifiedTrainingAnalyzer:
             "弱可比",
             "受实现效率、控制链路与仿真节奏影响，不是纯策略质量指标。",
         ),
+        "平均碰撞终止占比(%)": (
+            "中等可比",
+            "可用于比较训练稳定性，但仍受终止机制与重置口径影响，不替代最终结果指标。",
+        ),
         "最终效率": (
             "强可比",
             "统一换算为 Cell/Step 后，可直接比较单位决策步的扫描产出。",
@@ -87,6 +97,7 @@ class UnifiedTrainingAnalyzer:
         "最高奖励": ("过程对比", "用于观察训练过程中出现过的最佳回合表现。"),
         "训练轮次": ("过程对比", "用于描述训练规模和训练推进程度。"),
         "总耗时(s)": ("过程对比", "用于描述训练和仿真成本。"),
+        "平均碰撞终止占比(%)": ("过程对比", "用于比较训练过程中因碰撞终止的频繁程度和稳定性趋势。"),
         "最终效率": ("结果对比", "用于比较最终单位决策步的扫描产出。"),
         "最终扫描率(%)": ("结果对比", "用于比较最终任务覆盖效果。"),
         "最低熵值": ("结果对比", "用于比较最终不确定性消减效果。"),
@@ -300,27 +311,23 @@ class UnifiedTrainingAnalyzer:
         if data_type != "training":
             return normalized
 
-        if "length" not in normalized.columns:
-            return normalized
+        if "length" in normalized.columns:
+            lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)
+            efficiency_source = None
+            if "global_scanned_cells" in normalized.columns:
+                global_cells = pd.to_numeric(normalized["global_scanned_cells"], errors="coerce")
+                if not global_cells.isna().all():
+                    efficiency_source = global_cells
 
-        lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)
-        if lengths.isna().all():
-            return normalized
+            if efficiency_source is None and "scanned_cells" in normalized.columns:
+                scanned_cells = pd.to_numeric(normalized["scanned_cells"], errors="coerce")
+                if not scanned_cells.isna().all():
+                    efficiency_source = scanned_cells
 
-        efficiency_source = None
-        if "global_scanned_cells" in normalized.columns:
-            global_cells = pd.to_numeric(normalized["global_scanned_cells"], errors="coerce")
-            if not global_cells.isna().all():
-                efficiency_source = global_cells
+            if efficiency_source is not None and not lengths.isna().all():
+                normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
 
-        if efficiency_source is None and "scanned_cells" in normalized.columns:
-            scanned_cells = pd.to_numeric(normalized["scanned_cells"], errors="coerce")
-            if not scanned_cells.isna().all():
-                efficiency_source = scanned_cells
-
-        if efficiency_source is not None:
-            normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
-
+        normalized["collision_rate"] = collision_termination_rate_percent(normalized)
         return normalized
 
     def _find_matching_scan_run(self, training_run: dict):
@@ -440,6 +447,20 @@ class UnifiedTrainingAnalyzer:
             )
         return pd.DataFrame(rows)
 
+    def _safe_to_markdown(self, table, **kwargs) -> str:
+        """Render table to markdown and gracefully degrade when tabulate is unavailable."""
+        try:
+            return table.to_markdown(**kwargs)
+        except Exception as exc:
+            logger.warning("to_markdown 不可用，回退为纯文本表格: %s", exc)
+            if isinstance(table, pd.DataFrame):
+                if kwargs.get("index", True):
+                    return table.to_string()
+                return table.to_string(index=False)
+            if isinstance(table, pd.Series):
+                return table.to_string()
+            return str(table)
+
     def plot_comparison(
         self,
         metric: str,
@@ -540,6 +561,11 @@ class UnifiedTrainingAnalyzer:
                         "平均奖励": df["reward"].mean() if "reward" in df.columns else 0,
                         "最高奖励": df["reward"].max() if "reward" in df.columns else 0,
                         "训练轮次": len(df),
+                        "平均碰撞终止占比(%)": (
+                            pd.to_numeric(df["collision_rate"], errors="coerce").mean()
+                            if "collision_rate" in df.columns
+                            else 0
+                        ),
                         "最终效率": df["scan_efficiency"].iloc[-1] if "scan_efficiency" in df.columns else 0,
                     }
                 )
@@ -609,19 +635,19 @@ class UnifiedTrainingAnalyzer:
             "",
             "## 1. 汇总结果",
             "",
-            algo_comparison.to_markdown(),
+            self._safe_to_markdown(algo_comparison),
             "",
             "## 2. 过程对比指标",
             "",
-            process_report.to_markdown(index=False),
+            self._safe_to_markdown(process_report, index=False),
             "",
             "## 3. 结果对比指标",
             "",
-            outcome_report.to_markdown(index=False),
+            self._safe_to_markdown(outcome_report, index=False),
             "",
             "## 4. 全部指标分类",
             "",
-            comparability_df.to_markdown(index=False),
+            self._safe_to_markdown(comparability_df, index=False),
             "",
             "## 5. 解读建议",
             "",
@@ -671,6 +697,11 @@ class UnifiedTrainingAnalyzer:
                 "平均奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").mean(),
                 "最高奖励": pd.to_numeric(training_df.get("reward"), errors="coerce").max(),
                 "训练轮次": len(training_df),
+                "平均碰撞终止占比(%)": (
+                    pd.to_numeric(training_df["collision_rate"], errors="coerce").mean()
+                    if "collision_rate" in training_df.columns
+                    else 0
+                ),
                 "最终效率": pd.to_numeric(training_df.get("scan_efficiency"), errors="coerce").iloc[-1],
             }
             if scan_df is not None and not scan_df.empty:
@@ -714,23 +745,23 @@ class UnifiedTrainingAnalyzer:
             "",
             "## 1. 样本选择",
             "",
-            selection_df.to_markdown(index=False),
+            self._safe_to_markdown(selection_df, index=False),
             "",
             "## 2. 汇总结果",
             "",
-            summary_df.to_markdown(),
+            self._safe_to_markdown(summary_df),
             "",
             "## 3. 过程对比指标",
             "",
-            process_report.to_markdown(index=False),
+            self._safe_to_markdown(process_report, index=False),
             "",
             "## 4. 结果对比指标",
             "",
-            outcome_report.to_markdown(index=False),
+            self._safe_to_markdown(outcome_report, index=False),
             "",
             "## 5. 全部指标分类",
             "",
-            comparability_df.to_markdown(index=False),
+            self._safe_to_markdown(comparability_df, index=False),
         ]
         markdown_file.write_text("\n".join(markdown_lines), encoding="utf-8")
         logger.info("最近窗口 Markdown 报告已导出: %s", markdown_file)
