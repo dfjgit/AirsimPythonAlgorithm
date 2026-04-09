@@ -56,6 +56,7 @@ class UnifiedTrainingAnalyzer:
         "reward": "累计奖励",
         "scan_efficiency": "扫描效率 (Cell/Step)",
         "collision_rate": "碰撞终止占比(%)",
+        "collision_count": "碰撞次数",
         "scan_ratio": "扫描完成度(%)",
         "global_avg_entropy": "全局平均熵值",
         "episode": "训练轮次 (Episode)",
@@ -85,6 +86,10 @@ class UnifiedTrainingAnalyzer:
             "中等可比",
             "可用于比较训练稳定性，但仍受终止机制与重置口径影响，不替代最终结果指标。",
         ),
+        "平均碰撞次数": (
+            "中等可比",
+            "可用于比较每轮碰撞负担，但仍受终止机制与场景交互影响，不替代最终结果指标。",
+        ),
         "最终效率": (
             "强可比",
             "统一换算为 Cell/Step 后，可直接比较单位决策步的扫描产出。",
@@ -105,6 +110,7 @@ class UnifiedTrainingAnalyzer:
         "训练轮次": ("过程对比", "用于描述训练规模和训练推进程度。"),
         "总耗时(s)": ("过程对比", "用于描述训练和仿真成本。"),
         "平均碰撞终止占比(%)": ("过程对比", "用于比较训练过程中因碰撞终止的频繁程度和稳定性趋势。"),
+        "平均碰撞次数": ("过程对比", "用于比较训练过程中每轮碰撞事件的数量变化趋势。"),
         "最终效率": ("结果对比", "用于比较最终单位决策步的扫描产出。"),
         "最终扫描率(%)": ("结果对比", "用于比较最终任务覆盖效果。"),
         "最低熵值": ("结果对比", "用于比较最终不确定性消减效果。"),
@@ -340,6 +346,13 @@ class UnifiedTrainingAnalyzer:
             normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
 
         normalized["collision_rate"] = collision_termination_rate_percent(normalized)
+        collision_count_series = None
+        for column in ("collision_count_final", "collision_count"):
+            if column in normalized.columns:
+                collision_count_series = pd.to_numeric(normalized[column], errors="coerce")
+                break
+        if collision_count_series is not None:
+            normalized["collision_count"] = collision_count_series.fillna(0.0)
         return normalized
 
     def _find_matching_scan_run(self, training_run: dict):
@@ -668,6 +681,11 @@ class UnifiedTrainingAnalyzer:
                             if "collision_rate" in df.columns
                             else 0
                         ),
+                        "平均碰撞次数": (
+                            pd.to_numeric(df["collision_count"], errors="coerce").mean()
+                            if "collision_count" in df.columns
+                            else 0
+                        ),
                         "最终效率": df["scan_efficiency"].iloc[-1] if "scan_efficiency" in df.columns else 0,
                     }
                 )
@@ -802,6 +820,11 @@ class UnifiedTrainingAnalyzer:
                 "平均碰撞终止占比(%)": (
                     pd.to_numeric(training_df["collision_rate"], errors="coerce").mean()
                     if "collision_rate" in training_df.columns
+                    else 0
+                ),
+                "平均碰撞次数": (
+                    pd.to_numeric(training_df["collision_count"], errors="coerce").mean()
+                    if "collision_count" in training_df.columns
                     else 0
                 ),
                 "最终效率": pd.to_numeric(training_df.get("scan_efficiency"), errors="coerce").iloc[-1],

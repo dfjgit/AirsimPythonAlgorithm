@@ -324,6 +324,39 @@ def plot_collision_stability(run: RunData) -> None:
     plt.close(fig)
 
 
+def plot_collision_count_trend(run: RunData) -> None:
+    df = run.episode_df
+    if df.empty or "episode" not in df.columns:
+        return
+
+    collision_count = None
+    for column in ("collision_count_final", "collision_count"):
+        if column in df.columns:
+            collision_count = pd.to_numeric(df[column], errors="coerce")
+            break
+    if collision_count is None:
+        return
+
+    x = pd.to_numeric(df["episode"], errors="coerce")
+    fig, ax = plt.subplots(figsize=(14, 5))
+    plot_mean_with_band(
+        ax,
+        x,
+        collision_count.fillna(0.0),
+        color="#bc6c25",
+        label="Rolling Mean ± 1σ",
+        window=20,
+    )
+    ax.set_title("Collision Count Trend")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Collision Count")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(run.output_dir / "collision_count_trend.png", dpi=160)
+    plt.close(fig)
+
+
 def plot_collision_hotspots(run: RunData) -> None:
     df = run.episode_df
     if df.empty or "collision_position" not in df.columns:
@@ -385,7 +418,16 @@ def plot_algorithm_weights_stability(run: RunData) -> None:
             linewidth=2.0,
             band_alpha=0.15,
         )
-        axes[1].plot(df["elapsed_time"], numeric.rolling(50, min_periods=5).std(), linewidth=1.8, label=col)
+        rolling_std_series = numeric.rolling(50, min_periods=5).std()
+        plot_mean_with_band(
+            axes[1],
+            df["elapsed_time"],
+            rolling_std_series,
+            label=col,
+            window=50,
+            linewidth=1.8,
+            band_alpha=0.15,
+        )
     axes[0].set_title("Weight Rolling Mean (window=50)")
     axes[1].set_title("Weight Rolling Std (window=50)")
     axes[1].set_xlabel("Elapsed Time (s)")
@@ -818,6 +860,7 @@ PLOT_PIPELINE = [
     (plot_episode_performance_summary, "episode_performance_summary"),
     (plot_reset_reason_rolling_ratio, "reset_reason_rolling_ratio"),
     (plot_collision_stability, "collision_stability"),
+    (plot_collision_count_trend, "collision_count_trend"),
     (plot_collision_hotspots, "collision_hotspots_xy"),
     (plot_collision_object_breakdown, "collision_object_breakdown"),
     (plot_algorithm_weights_stability, "algorithm_weights_stability"),
