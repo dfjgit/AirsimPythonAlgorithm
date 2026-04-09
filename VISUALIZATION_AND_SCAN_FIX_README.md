@@ -102,7 +102,7 @@ python train_with_airsim_improved.py
 
 ```bash
 # 使用预设配置文件
-python train_with_airsim_improved.py --config configs/training_config_reset_scan.json
+python train_with_airsim_improved.py --config configs/legacy/training_config_reset_scan.json
 ```
 
 **配置文件内容**：

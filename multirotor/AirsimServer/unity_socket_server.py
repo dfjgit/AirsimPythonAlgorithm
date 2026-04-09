@@ -106,7 +106,7 @@ class UnitySocketServer:
             pack = DataPacks()
             pack.type = PackType.config_data
             pack.time_span = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime())
-            pack.pack_data_list = config.to_dict()  # 字典结构（匹配config.json）
+            pack.pack_data_list = config.to_dict()  # 字典结构（匹配配置载荷样例）
             logging.info("发送配置数据")
             with self.pending_lock:
                 self.pending_packs.append(pack)

@@ -1,11 +1,8 @@
 {
-  "description": "无人机移动DQN训练配置文件",
-  "version": "1.0.0",
   "movement": {
     "step_size": 0.8,
     "action_repeat": 3,
-    "max_steps": 2400,
-    "description": "移动参数：每步位移距离和最大步数"
+    "max_steps": 2400
   },
   "termination_config": {
     "target_scan_ratio": 0.25,
@@ -44,24 +41,7 @@
     "battery_low_penalty": 6.0,
     "battery_optimal_reward": 0.0,
     "height_penalty": -1.5,
-    "optimal_height_bonus": 0.2,
-    "description": {
-      "exploration": "发现新区域的奖励（每个新扫描单元格）",
-      "entropy_reduction": "降低环境熵值的奖励",
-      "high_entropy_exploration": "进入高熵区域的探索奖励",
-      "entropy_gradient_bonus": "向高熵方向移动的奖励系数",
-      "collision": "与其他无人机过近的惩罚",
-      "out_of_range": "超出Leader范围的惩罚(降低)",
-      "stability_penalty_weight": "稳定性惩罚权重(降低)",
-      "return_to_range_bonus": "脱离范围后返回的奖励系数(新增)",
-      "smooth_movement": "平滑移动的奖励",
-      "step_penalty": "每步的小惩罚，鼓励快速完成",
-      "success": "成功完成扫描的大奖励",
-      "battery_low_penalty": "电量过低的惩罚",
-      "battery_optimal_reward": "电量在最优范围内的奖励",
-      "height_penalty": "飞行高度超出合理范围的惩罚",
-      "optimal_height_bonus": "在最佳扫描高度的奖励"
-    }
+    "optimal_height_bonus": 0.2
   },
   "thresholds": {
     "collision_distance": 1.45,
@@ -81,25 +61,6 @@
     "idle_distance_threshold": 0.05,
     "scan_progress_grace_sec": 12.0,
     "low_altitude_recovery_height": 1.2,
-    "description": {
-      "collision_distance": "判定碰撞的距离阈值（米）",
-      "scanned_entropy": "单元格被认为已扫描的熵值阈值",
-      "nearby_entropy_distance": "局部熵值统计的范围（米）",
-      "success_scan_ratio": "认为任务成功的扫描完成比例",
-      "high_entropy_threshold": "高熵区域的阈值（超过该值给予探索奖励）",
-      "min_scan_height": "最低扫描高度（米）",
-      "max_scan_height": "最高扫描高度（米）",
-      "optimal_scan_height": "最佳扫描高度（米）",
-      "battery_low_threshold": "电量过低阈值（伏）",
-      "battery_optimal_min": "电量最优范围下限（伏）",
-      "battery_optimal_max": "电量最优范围上限（伏）",
-      "termination_config": {
-        "target_scan_ratio": "目标覆盖率阈值",
-        "max_collision_count": "允许的最大碰撞次数",
-        "max_elapsed_time_sec": "最大仿真物理时间(秒)",
-        "stagnation_timeout_sec": "停滞超时时间(秒)"
-      }
-    },
     "terminate_on_out_of_range": true,
     "max_out_of_range_steps": 8,
     "max_out_of_range_duration_sec": 24.0,
@@ -128,20 +89,7 @@
     "exploration_final_eps": 0.05,
     "resume_exploration_fraction": 0.02,
     "resume_exploration_initial_eps": 0.08,
-    "resume_exploration_final_eps": 0.01,
-    "description": {
-      "total_timesteps": "总训练步数",
-      "learning_rate": "学习率",
-      "buffer_size": "经验回放缓冲区大小",
-      "learning_starts": "开始学习前的随机探索步数",
-      "batch_size": "训练批次大小",
-      "tau": "目标网络软更新系数",
-      "gamma": "折扣因子",
-      "target_update_interval": "目标网络更新间隔",
-      "exploration_fraction": "探索衰减的时间比例",
-      "exploration_initial_eps": "初始探索率",
-      "exploration_final_eps": "最终探索率"
-    }
+    "resume_exploration_final_eps": 0.01
   },
   "model": {
     "policy": "MlpPolicy",
@@ -149,19 +97,10 @@
       256,
       256
     ],
-    "activation_fn": "relu",
-    "description": {
-      "policy": "策略网络类型",
-      "net_arch": "神经网络层结构",
-      "activation_fn": "激活函数"
-    }
+    "activation_fn": "relu"
   },
   "evaluation": {
     "eval_freq": 5000,
-    "n_eval_episodes": 5,
-    "description": {
-      "eval_freq": "评估频率（训练步数）",
-      "n_eval_episodes": "每次评估的episode数量"
-    }
+    "n_eval_episodes": 5
   }
 }

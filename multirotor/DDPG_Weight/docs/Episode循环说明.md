@@ -343,7 +343,7 @@ env = SimpleWeightEnv(
 
 **解决方法：**
 ```python
-# 检查dqn_reward_config.json
+# 检查当前环境配置中的 max_steps
 "episode": {
     "max_steps": 50  # 确保这个值合理
 }
@@ -478,7 +478,7 @@ total_time = episode_time * episode_count
 
 - **环境定义**: `simple_weight_env.py`
 - **训练脚本**: `train_with_airsim_improved.py`
-- **配置文件**: `dqn_reward_config.json`
+- **配置文件**: `multirotor/apf_algorithm_config.json`、`multirotor/DDPG_Weight/configs/crazyflie_reward_config.json`
 - **输出示例**: `训练输出示例.md`
 
 ---

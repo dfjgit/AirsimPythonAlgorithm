@@ -36,7 +36,7 @@ echo 运行配置
 echo ============================================================
 echo 模式: DDPG权重预测
 echo 模型: multirotor\DDPG_Weight\models\best_model.zip
-echo 奖励配置: multirotor\DDPG_Weight\dqn_reward_config.json
+echo 环境配置: multirotor\apf_algorithm_config.json
 echo 无人机数量: 3
 echo ============================================================
 echo.

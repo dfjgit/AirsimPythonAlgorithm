@@ -16,7 +16,7 @@ echo 重要提示:
 echo.
 echo 配置文件选项:
 echo   [推荐] 统一配置: unified_train_config.json
-echo   [兼容] 旧配置: airsim_train_config_template.json
+echo   [归档] 旧配置样例: configs\legacy\airsim_train_config_template.json
 echo.
 echo 你可以直接运行使用统一配置，或作为参数传入自定义配置:
 echo   使用统一配置: 训练权重DDPG-真实环境.bat

@@ -16,7 +16,7 @@ echo.
 echo 训练参数将从 JSON 配置文件读取
 echo 默认配置:
 echo   [推荐] 统一配置: unified_train_config.json
-echo   [兼容] 旧配置: crazyflie_logs_train_config.json
+echo   [归档] 旧配置样例: configs\legacy\crazyflie_logs_train_config.json
 echo.
 echo 示例:
 echo   训练权重DDPG-实体机日志.bat "path\to\custom_config.json" ^

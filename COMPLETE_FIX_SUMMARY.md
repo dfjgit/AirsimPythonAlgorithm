@@ -143,7 +143,7 @@ python train_with_airsim_improved.py
 
 ### 方式2：使用配置文件
 ```bash
-python train_with_airsim_improved.py --config configs/training_config_reset_scan.json
+python train_with_airsim_improved.py --config configs/legacy/training_config_reset_scan.json
 ```
 
 ### 方式3：累积扫描进度
@@ -231,7 +231,7 @@ Python更新本地数据 → 可视化显示
    - 修改默认配置为True
    - 更新注释
 
-4. ✅ `multirotor/DDPG_Weight/configs/training_config_reset_scan.json` (新建)
+4. ✅ `multirotor/DDPG_Weight/configs/legacy/training_config_reset_scan.json` (归档保留)
    - 配置文件示例
 
 ---

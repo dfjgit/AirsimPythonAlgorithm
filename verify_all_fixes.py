@@ -121,7 +121,7 @@ for name, result in checks:
 # ============================================================================
 print("\n[6] 配置文件")
 
-config_path = 'multirotor/DDPG_Weight/configs/training_config_reset_scan.json'
+config_path = 'multirotor/DDPG_Weight/configs/legacy/training_config_reset_scan.json'
 if os.path.exists(config_path):
     with open(config_path, 'r', encoding='utf-8') as f:
         config = f.read()

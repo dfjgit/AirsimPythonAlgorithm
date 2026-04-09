@@ -15,7 +15,8 @@ echo   3. Model will be saved to multirotor\DDPG_Weight\models\
 echo.
 echo Training parameters are loaded from a JSON config.
 echo Default config:
-echo   multirotor\DDPG_Weight\crazyflie_logs_train_config.json
+echo   [Recommended] multirotor\DDPG_Weight\configs\unified_train_config.json
+echo   [Legacy]      multirotor\DDPG_Weight\configs\legacy\crazyflie_logs_train_config.json
 echo.
 echo Example:
 echo   Train_DDPG_Weights_Crazyflie_Logs.bat "path\to\custom_config.json" ^
@@ -25,7 +26,7 @@ echo.
 echo ============================================================
 echo.
 
-set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\crazyflie_logs_train_config.json"
+set "CONFIG_PATH=%~dp0..\multirotor\DDPG_Weight\configs\unified_train_config.json"
 if not "%~1"=="" (
     set "CONFIG_PATH=%~1"
     shift

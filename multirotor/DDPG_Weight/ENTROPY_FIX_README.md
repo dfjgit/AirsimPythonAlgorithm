@@ -95,7 +95,7 @@ self.server.reset_environment(reason=reason, reset_grid=self.reset_grid_entropy)
 python train_with_airsim_improved.py
 
 # 使用配置文件
-python train_with_airsim_improved.py --config configs/training_config_with_entropy_fix.json
+python train_with_airsim_improved.py --config configs/legacy/training_config_with_entropy_fix.json
 ```
 
 ---
@@ -155,7 +155,7 @@ python verify_entropy_fix.py
 4. ✅ `verify_entropy_fix.py` (新增)
    - 自动化验证脚本
 
-5. ✅ `configs/training_config_with_entropy_fix.json` (新增)
+5. ✅ `configs/legacy/training_config_with_entropy_fix.json` (归档保留)
    - 配置文件示例
 
 ---

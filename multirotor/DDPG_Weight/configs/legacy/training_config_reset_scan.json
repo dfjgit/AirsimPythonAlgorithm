@@ -9,6 +9,8 @@
     "step_duration": 5.0,
     "checkpoint_freq": 1000,
     "enable_visualization": true,
+    "visualization_ipc_hz": 10.0,
+    "visualization_render_fps": 30,
     "safety_limit": true,
     "max_weight_delta": 0.5,
     "reset_grid_entropy": true,

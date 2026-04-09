@@ -17,7 +17,7 @@ echo   4. After training, the model will be saved to multirotor\DDPG_Weight\mode
 echo.
 echo Configuration Options:
 echo   [Recommended] Unified config: unified_train_config.json
-echo   [Compatible] Old config: airsim_train_config_template.json
+echo   [Legacy] Old config example: configs\legacy\airsim_train_config_template.json
 echo.
 echo You can run directly with unified config or pass custom config:
 echo   With unified config: Train_DDPG_Weights_Real_Environment.bat

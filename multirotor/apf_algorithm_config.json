@@ -1,4 +1,4 @@
-﻿{
+{
     "repulsionCoefficient": 2.0,
     "entropyCoefficient": 2.0,
     "distanceCoefficient": 2.0,
@@ -37,7 +37,5 @@
             "collision_penalty": -50.0,
             "step_penalty": -0.1
         }
-    },
-    "name": "ScannerConfigData",
-    "hideFlags": 0
+    }
 }

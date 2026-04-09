@@ -11,7 +11,7 @@
     - 自动保存最佳模型和检查点
 
 虚实融合训练原理：
-    - 将scanner_config.json中指定无人机的isCrazyflieMirror设置为true
+    - 将drones_config.json中指定无人机的isCrazyflieMirror设置为true
     - 这些无人机将使用实体Crazyflie的状态数据（通过_crazyflie_get_state_for_prediction）
     - 其他无人机仍使用虚拟AirSim环境数据
     - 实现虚拟环境与实体机的融合训练

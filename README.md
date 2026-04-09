@@ -87,13 +87,14 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 常用配置：
 - `multirotor/apf_algorithm_config.json`：APF 参数、统一环境参数
 - `multirotor/drones_config.json`：无人机配置
-- `multirotor/DDPG_Weight/configs/training_config_with_entropy_fix.json`：DDPG 训练配置示例
-- `multirotor/DDPG_Weight/configs/training_config_reset_scan.json`：强制完整重置的训练配置示例
+- `multirotor/DDPG_Weight/configs/unified_train_config.json`：DDPG 训练统一配置入口
+- `multirotor/DDPG_Weight/configs/legacy/`：旧版 DDPG 训练配置样例归档
+- `multirotor/DQN_Movement/configs/movement_dqn_config.json`：DQN Movement 配置
 
 当前版本建议：
-- 新一轮训练使用完整重置
+- 新一轮训练优先使用 `unified_train_config.json`
 - 算法对比时保持相同重置流程
-- 优先使用修复后的训练配置和验证脚本
+- 旧版单场景配置样例已归档到 `multirotor/DDPG_Weight/configs/legacy/`
 
 ## 训练与日志
 

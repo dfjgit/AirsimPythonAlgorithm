@@ -36,7 +36,7 @@ echo Running Configuration
 echo ============================================================
 echo Mode: DDPG Weight Prediction
 echo Model: multirotor\DDPG_Weight\models\best_model.zip
-echo Reward Config: multirotor\DDPG_Weight\dqn_reward_config.json
+echo Env Config: multirotor\apf_algorithm_config.json
 echo Number of Drones: 3
 echo ============================================================
 echo.

@@ -1,4 +1,4 @@
-﻿{
+{
   "_comment": "DDPG训练配置示例 - 包含熵值累积修复",
 
   "drone_names": ["UAV1", "UAV2", "UAV3"],
@@ -7,6 +7,8 @@
   "step_duration": 5.0,
   "checkpoint_freq": 1000,
   "enable_visualization": true,
+  "visualization_ipc_hz": 10.0,
+  "visualization_render_fps": 30,
 
   "_comment_reset_grid_entropy": "是否重置网格熵值（重要：影响扫描进度累积）",
   "_comment_false": "false = 保持扫描进度累积（推荐，适合长期训练）",
