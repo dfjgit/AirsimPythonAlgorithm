@@ -49,10 +49,17 @@ class SystemConfig:
         drones = {}
         if self.legacy_drones_file.exists():
             drones = self._load_json(self.legacy_drones_file).get("drones", {})
+            if not isinstance(drones, dict):
+                raise self._invalid_config("legacy drones must be a dict")
+            for drone_name, drone_info in drones.items():
+                if not isinstance(drone_info, dict):
+                    raise self._invalid_config(f"legacy drone entry '{drone_name}' must be a dict")
 
         environment = {}
         if self.legacy_apf_file.exists():
             environment = self._load_json(self.legacy_apf_file).get("env_config", {})
+            if not isinstance(environment, dict):
+                raise self._invalid_config("legacy env_config must be a dict")
 
         return {"drones": drones, "environment": environment}
 

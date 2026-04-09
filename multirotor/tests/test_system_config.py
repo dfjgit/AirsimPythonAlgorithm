@@ -119,6 +119,39 @@ class SystemConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected_message):
                     SystemConfig(config_file=str(config_path))
 
+    def test_rejects_malformed_legacy_fallback_shapes(self):
+        cases = [
+            (
+                "legacy_drones_not_dict",
+                {"drones": []},
+                {"env_config": {}},
+                "legacy drones must be a dict",
+            ),
+            (
+                "legacy_environment_not_dict",
+                {"drones": {"UAV1": {"enabled": True}}},
+                {"env_config": []},
+                "legacy env_config must be a dict",
+            ),
+            (
+                "legacy_drone_entry_not_dict",
+                {"drones": {"UAV1": 1}},
+                {"env_config": {}},
+                "legacy drone entry 'UAV1' must be a dict",
+            ),
+        ]
+
+        for case_name, drones_payload, apf_payload, expected_message in cases:
+            with self.subTest(case=case_name):
+                drones_path = self._write_json(f"{case_name}_drones.json", drones_payload)
+                apf_path = self._write_json(f"{case_name}_apf.json", apf_payload)
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    SystemConfig(
+                        config_file=str(self.root / "missing_system_config.json"),
+                        legacy_drones_file=str(drones_path),
+                        legacy_apf_file=str(apf_path),
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
