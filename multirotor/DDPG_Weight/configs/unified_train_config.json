@@ -1,5 +1,13 @@
-{
+﻿{
+  "_comment": "Unified training configuration for virtual, online, offline-log, and hybrid modes.",
+  "_usage": {
+    "airsim_virtual": "python train_with_airsim_improved.py --config unified_train_config.json",
+    "crazyflie_online": "python train_with_crazyflie_online.py --config unified_train_config.json",
+    "crazyflie_logs": "python train_with_crazyflie_logs.py --config unified_train_config.json",
+    "hybrid": "python train_with_hybrid.py --config unified_train_config.json"
+  },
   "common": {
+    "_comment": "Shared defaults for all training modes.",
     "total_timesteps": 14400,
     "enable_visualization": true,
     "visualization_ipc_hz": 10.0,
@@ -13,6 +21,7 @@
     "model_name": "weight_predictor"
   },
   "airsim_virtual": {
+    "_comment": "AirSim virtual training defaults. 21600 steps x 2.0s = about 12 hours.",
     "drone_names": ["UAV1", "UAV2", "UAV3"],
     "total_timesteps": 21600,
     "checkpoint_freq": 3000,
@@ -24,14 +33,25 @@
     "model_name": "weight_predictor_airsim"
   },
   "crazyflie_online": {
+    "_comment": "Crazyflie online training defaults.",
     "drone_name": "UAV1",
     "step_duration": 5.0,
     "reset_unity": false,
     "safety_max_delta": 0.5,
     "no_safety_limit": false,
-    "model_name": "weight_predictor_crazyflie_online"
+    "model_name": "weight_predictor_crazyflie_online",
+    "real_weighting": {
+      "update_timing": "episode_end",
+      "enable_real_weighting": true,
+      "real_update_multiplier": 4,
+      "min_real_samples_before_update": 32,
+      "max_real_updates_per_episode": 8,
+      "real_buffer_capacity": 5000,
+      "rollback_on_bad_update": true
+    }
   },
   "crazyflie_logs": {
+    "_comment": "Crazyflie offline log training defaults.",
     "log_path": "crazyflie_flight_log_simulated.json",
     "max_steps": null,
     "random_start": false,
@@ -39,6 +59,7 @@
     "model_name": "weight_predictor_crazyflie_logs"
   },
   "hybrid": {
+    "_comment": "Hybrid training defaults.",
     "drone_names": ["UAV1", "UAV2", "UAV3"],
     "mirror_drones": ["UAV1"],
     "step_duration": 5.0,

@@ -45,11 +45,50 @@ import numpy as np
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+MODULE_ROOT = os.path.dirname(os.path.abspath(__file__))
+if MODULE_ROOT not in sys.path:
+    sys.path.insert(0, MODULE_ROOT)
 
-# 导入训练环境和可视化模块
+# 训练回调基类（带fallback，便于测试环境导入）
+try:
+    from stable_baselines3.common.callbacks import BaseCallback
+except Exception:  # pragma: no cover - minimal fallback for tests without SB3
+    class BaseCallback:  # type: ignore[override]
+        def __init__(self, verbose: int = 0):
+            self.verbose = verbose
+            self.locals = {}
+            self.num_timesteps = 0
+            self.model = None
+
+        def init_callback(self, model) -> None:
+            self.model = model
+            if hasattr(self, "_init_callback"):
+                self._init_callback()
+
+        def update_locals(self, locals_) -> None:
+            self.locals = locals_
+
+        def _init_callback(self) -> None:
+            return None
+
+        def _on_training_start(self) -> None:
+            return None
+
+        def _on_training_end(self) -> None:
+            return None
+
+        def _on_step(self) -> bool:
+            return True
+
+# 导入训练环境和数据记录器模块（可视化模块改为延迟导入）
 from envs.crazyflie_weight_env import CrazyflieOnlineWeightEnv  # 实体无人机在线训练环境
-from Visualization import DDPGTrainingVisualizer  # 训练可视化模块
 from envs.crazyflie_data_logger import CrazyflieDataLogger  # 实体无人机数据记录器
+from online_training_callbacks import EpisodeAwareTrainingCallback
+from real_flight_priority import (
+    RealFlightPriorityTrainer,
+    normalize_real_flight_weighting_config,
+)
+from weighted_online_runner import run_weighted_online_training
 
 
 def _load_train_config(path: str) -> dict:
@@ -91,6 +130,327 @@ def _load_train_config(path: str) -> dict:
     else:
         # 传统配置格式：直接返回
         return data
+
+
+def _load_real_weighting_config(config: dict):
+    """
+    加载并规范化 real_weighting 配置块
+
+    规则：
+        - 若配置中不存在 real_weighting，则返回 None（保持旧训练路径）
+        - 若存在 real_weighting，则默认 enable_real_weighting=True（由规范化函数处理）
+    """
+    if not isinstance(config, dict):
+        return None
+    raw = config.get("real_weighting")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("real_weighting 配置必须为JSON对象")
+    normalized = normalize_real_flight_weighting_config(raw)
+    allowed_timings = {"episode_end"}
+    if normalized.update_timing not in allowed_timings:
+        raise ValueError(
+            f"real_weighting.update_timing 不支持: {normalized.update_timing!r}"
+        )
+    return normalized
+
+
+def _should_use_weighted_training(real_weighting_config) -> bool:
+    if real_weighting_config is None:
+        return False
+    return bool(getattr(real_weighting_config, "enable_real_weighting", True))
+
+
+def _compute_weighted_training_target(total_timesteps: int, current_steps: int) -> int:
+    return int(total_timesteps) + max(0, int(current_steps))
+
+
+class ProgressTimingState:
+    def __init__(self):
+        self.started = False
+        self.start_time = 0.0
+        self.last_print_time = 0.0
+        self.last_print_step = 0
+
+
+class TrainingProgressCallback(BaseCallback):
+    """
+    训练进度回调类
+
+    功能：
+        - 监控训练进度，定期打印进度信息（包含ETA）
+        - 更新训练可视化统计信息
+        - 支持按步数或时间间隔打印
+
+    继承自：
+        stable_baselines3.common.callbacks.BaseCallback
+    """
+
+    def __init__(
+        self,
+        total_timesteps: int,
+        print_interval_steps: int = 50,
+        print_interval_sec: int = 15,
+        training_visualizer=None,
+        data_logger=None,
+        timing_state: ProgressTimingState | None = None,
+        logger: logging.Logger | None = None,
+    ):
+        """
+        初始化训练进度回调
+
+        参数：
+            total_timesteps: 总训练步数
+            print_interval_steps: 按步数打印的间隔（每N步打印一次）
+            print_interval_sec: 按时间打印的间隔（每N秒打印一次）
+            training_visualizer: 训练可视化器实例（可选）
+        """
+        super().__init__()
+        self.total_timesteps = max(int(total_timesteps), 0)  # 总训练步数
+        self.print_interval_steps = max(int(print_interval_steps), 1)  # 步数打印间隔
+        self.print_interval_sec = max(int(print_interval_sec), 1)  # 时间打印间隔
+        self.training_visualizer = training_visualizer  # 可视化器引用
+        self.last_episode_count = 0  # 上次记录的Episode数量
+        self.data_logger = data_logger  # 数据记录器引用
+        self.timing_state = timing_state or ProgressTimingState()
+        self._progress_logger = logger or logging.getLogger("crazyflie_train_online")
+
+    def _on_training_start(self) -> None:
+        now = time.time()
+        if not self.timing_state.started:
+            self.timing_state.started = True
+            self.timing_state.start_time = now
+        self.timing_state.last_print_time = now
+        self.timing_state.last_print_step = int(self.num_timesteps)
+        self._print_progress(force=True)
+
+    def _on_step(self) -> bool:
+        """
+        每个训练步骤调用一次
+
+        功能：
+            - 检查是否需要打印进度（按步数或时间）
+            - 更新训练可视化统计信息
+            - 检测新完成的Episode并更新可视化
+
+        返回：
+            bool: True继续训练，False停止训练
+        """
+        num_timesteps = int(self.num_timesteps)
+        now = time.time()
+
+        # 检查是否需要打印进度（满足步数间隔或时间间隔）
+        need_by_steps = (
+            num_timesteps - self.timing_state.last_print_step
+        ) >= self.print_interval_steps
+        need_by_time = (
+            now - self.timing_state.last_print_time
+        ) >= self.print_interval_sec
+        if need_by_steps or need_by_time:
+            self._print_progress()
+
+        # ========== 更新可视化统计 ==========
+        if self.training_visualizer:
+            try:
+                # 检查是否有新的episode完成
+                if (
+                    hasattr(self.model, "ep_info_buffer")
+                    and len(self.model.ep_info_buffer) > 0
+                ):
+                    current_episode_count = len(self.model.ep_info_buffer)
+                    if current_episode_count > self.last_episode_count:
+                        # 新episode完成，更新统计
+                        ep_info = self.model.ep_info_buffer[-1]
+                        ep_reward = ep_info.get("r", 0.0)  # Episode总奖励
+                        ep_length = ep_info.get("l", 0)  # Episode步数
+                        self.training_visualizer.update_training_stats(
+                            episode_reward=ep_reward,
+                            episode_length=ep_length,
+                            is_episode_done=True,
+                        )
+                        self.last_episode_count = current_episode_count
+
+                        # 记录 Episode 统计信息
+                        if self.data_logger:
+                            self.data_logger.record_episode_stats(
+                                episode=current_episode_count,
+                                reward=ep_reward,
+                                length=ep_length,
+                            )
+
+                # 更新当前步的奖励（从locals获取）
+                if "rewards" in self.locals and len(self.locals["rewards"]) > 0:
+                    step_reward = float(self.locals["rewards"][0])
+                    self.training_visualizer.update_training_stats(
+                        current_step_reward=step_reward
+                    )
+
+                # 更新权重历史（定期更新，不只在episode结束时）
+                if hasattr(self.model, "env"):
+                    env = self.model.env
+                    # 处理VecEnv包装（stable-baselines3可能使用向量化环境）
+                    if hasattr(env, "envs") and len(env.envs) > 0:
+                        env = env.envs[0]  # 获取实际环境
+                    if hasattr(env, "server") and env.server:
+                        drone_name = getattr(env, "drone_name", None)
+                        if drone_name and drone_name in env.server.algorithms:
+                            # 获取当前权重并更新可视化
+                            weights = env.server.algorithms[
+                                drone_name
+                            ].get_current_coefficients()
+                            self.training_visualizer.update_weight_history(weights)
+
+                            # 记录权重到数据记录器
+                            if self.data_logger:
+                                self.data_logger.record_weights(
+                                    drone_name=drone_name,
+                                    weights=weights,
+                                    episode=current_episode_count,
+                                    step=self.num_timesteps,
+                                )
+            except Exception:
+                # 静默忽略可视化更新错误，避免影响训练
+                pass
+
+        # ========== 记录实体无人机飞行数据 ==========
+        if self.data_logger:
+            try:
+                # 从环境中获取当前的 logging_data
+                if hasattr(self.model, "env"):
+                    env = self.model.env
+                    # 处理VecEnv包装
+                    if hasattr(env, "envs") and len(env.envs) > 0:
+                        env = env.envs[0]
+                    if hasattr(env, "server") and env.server:
+                        drone_name = getattr(env, "drone_name", None)
+                        if drone_name:
+                            logging_data = (
+                                env.server.crazyswarm.get_loggingData_by_droneName(
+                                    drone_name
+                                )
+                            )
+                            if logging_data:
+                                self.data_logger.record_flight_data(
+                                    drone_name, logging_data
+                                )
+            except Exception:
+                # 静默忽略数据记录错误，避免影响训练
+                pass
+        # ===========================================
+        # ====================================
+
+        return True
+
+    def _print_progress(self, force: bool = False) -> None:
+        num_timesteps = int(self.num_timesteps)
+        now = time.time()
+        if (
+            not force
+            and num_timesteps == self.timing_state.last_print_step
+            and (now - self.timing_state.last_print_time) < 1.0
+        ):
+            return
+        self.timing_state.last_print_step = num_timesteps
+        self.timing_state.last_print_time = now
+
+        elapsed = now - self.timing_state.start_time
+        if self.total_timesteps > 0:
+            progress = min(num_timesteps / self.total_timesteps, 1.0)
+            eta = (elapsed / progress - elapsed) if progress > 0 else 0.0
+            percent = progress * 100.0
+            self._progress_logger.info(
+                "进度 %s/%s (%.1f%%) 已用%s 预计剩余%s",
+                num_timesteps,
+                self.total_timesteps,
+                percent,
+                _format_duration(elapsed),
+                _format_duration(eta),
+            )
+        else:
+            self._progress_logger.info(
+                "进度 %s 步 已用%s", num_timesteps, _format_duration(elapsed)
+            )
+
+
+class _WeightedCallbackWrapper(BaseCallback):
+    def __init__(self, progress_callback, episode_callback):
+        super().__init__()
+        self._progress_callback = progress_callback
+        self._episode_callback = episode_callback
+
+    @property
+    def episode_finished(self):
+        return bool(getattr(self._episode_callback, "episode_finished", False))
+
+    @property
+    def last_episode_index(self):
+        return getattr(self._episode_callback, "last_episode_index", None)
+
+    def _init_callback(self) -> None:
+        self._delegate_init(self._progress_callback)
+        self._delegate_init(self._episode_callback)
+
+    def update_locals(self, locals_) -> None:
+        super().update_locals(locals_)
+        self._delegate_locals(self._progress_callback, locals_)
+        self._delegate_locals(self._episode_callback, locals_)
+
+    def _on_training_start(self) -> None:
+        self._delegate_training_start(self._progress_callback)
+        self._delegate_training_start(self._episode_callback)
+
+    def _on_training_end(self) -> None:
+        self._delegate_training_end(self._progress_callback)
+        self._delegate_training_end(self._episode_callback)
+
+    def _on_step(self) -> bool:
+        self._sync_timesteps(self._progress_callback)
+        self._sync_timesteps(self._episode_callback)
+        progress_ok = self._delegate_step(self._progress_callback)
+        episode_ok = self._delegate_step(self._episode_callback)
+        return bool(progress_ok) and bool(episode_ok)
+
+    def _delegate_init(self, callback) -> None:
+        if hasattr(callback, "init_callback"):
+            callback.init_callback(self.model)
+        elif hasattr(callback, "_init_callback"):
+            callback._init_callback()
+        if hasattr(callback, "model"):
+            callback.model = self.model
+
+    @staticmethod
+    def _delegate_locals(callback, locals_) -> None:
+        if hasattr(callback, "update_locals"):
+            callback.update_locals(locals_)
+        else:
+            setattr(callback, "locals", locals_)
+
+    @staticmethod
+    def _delegate_training_start(callback) -> None:
+        if hasattr(callback, "_on_training_start"):
+            callback._on_training_start()
+
+    @staticmethod
+    def _delegate_training_end(callback) -> None:
+        if hasattr(callback, "_on_training_end"):
+            callback._on_training_end()
+
+    def _sync_timesteps(self, callback) -> None:
+        if hasattr(callback, "num_timesteps"):
+            callback.num_timesteps = getattr(self, "num_timesteps", 0)
+
+    @staticmethod
+    def _delegate_step(callback) -> bool:
+        if hasattr(callback, "_on_step"):
+            return bool(callback._on_step())
+        if hasattr(callback, "on_step"):
+            return bool(callback.on_step())
+        return True
+
+
+def _build_weighted_callback(progress_callback, episode_callback):
+    return _WeightedCallbackWrapper(progress_callback, episode_callback)
 
 
 def _get_config_value(cli_value, config: dict, key: str, default):
@@ -164,6 +524,26 @@ def _save_model(model, path: str, logger, note: str) -> bool:
     except Exception as exc:
         logger.error("保存模型失败: %s (%s)", path, exc)
         return False
+
+
+def _log_weighted_update_result(logger, episode_index: int, result) -> None:
+    if result is None:
+        return
+    status = getattr(result, "status", "unknown")
+    real_samples = getattr(result, "episode_real_samples", 0)
+    gradient_steps = getattr(result, "extra_gradient_steps", 0)
+    rollback = getattr(result, "rollback_triggered", False)
+    delta_norm = float(getattr(result, "policy_param_delta_norm", 0.0))
+    logger.info(
+        "[RealWeight] episode=%s status=%s real_samples=%s gradient_steps=%s "
+        "rollback=%s delta_norm=%.6f",
+        episode_index,
+        status,
+        real_samples,
+        gradient_steps,
+        rollback,
+        delta_norm,
+    )
 
 
 def _save_final_weights(server, path: str, logger) -> None:
@@ -408,6 +788,8 @@ def main():
 
     # 读取配置文件（若未提供则用空配置，后续会回退到默认值）
     config = _load_train_config(args.config)
+    real_weighting_config = _load_real_weighting_config(config)
+    raw_real_weighting = config.get("real_weighting") if isinstance(config, dict) else None
 
     # 从命令行/配置中解析训练超参数
     # 规则：命令行优先，其次配置文件，最后默认值
@@ -461,209 +843,16 @@ def main():
     try:
         from stable_baselines3 import DDPG
         from stable_baselines3.common.noise import NormalActionNoise
-        from stable_baselines3.common.callbacks import BaseCallback
     except ImportError:
         logger.error("缺少stable-baselines3，请先安装")
         sys.exit(1)
 
     # 算法服务器：负责与实体机/仿真系统通信
     from AlgorithmServer import MultiDroneAlgorithmServer
+    # 训练可视化模块（延迟导入以避免轻量环境依赖）
+    from Visualization import DDPGTrainingVisualizer
 
     # ========== 训练进度回调类 ==========
-    class TrainingProgressCallback(BaseCallback):
-        """
-        训练进度回调类
-
-        功能：
-            - 监控训练进度，定期打印进度信息（包含ETA）
-            - 更新训练可视化统计信息
-            - 支持按步数或时间间隔打印
-
-        继承自：
-            stable_baselines3.common.callbacks.BaseCallback
-        """
-
-        def __init__(
-            self,
-            total_timesteps: int,
-            print_interval_steps: int = 50,
-            print_interval_sec: int = 15,
-            training_visualizer=None,
-            data_logger=None,
-        ):
-            """
-            初始化训练进度回调
-
-            参数：
-                total_timesteps: 总训练步数
-                print_interval_steps: 按步数打印的间隔（每N步打印一次）
-                print_interval_sec: 按时间打印的间隔（每N秒打印一次）
-                training_visualizer: 训练可视化器实例（可选）
-            """
-            super().__init__()
-            self.total_timesteps = max(int(total_timesteps), 0)  # 总训练步数
-            self.print_interval_steps = max(
-                int(print_interval_steps), 1
-            )  # 步数打印间隔
-            self.print_interval_sec = max(int(print_interval_sec), 1)  # 时间打印间隔
-            self.start_time = 0.0  # 训练开始时间
-            self.last_print_time = 0.0  # 上次打印时间
-            self.last_print_step = 0  # 上次打印的步数
-            self.training_visualizer = training_visualizer  # 可视化器引用
-            self.last_episode_count = 0  # 上次记录的Episode数量
-            self.data_logger = data_logger  # 数据记录器引用
-
-        def _on_training_start(self) -> None:
-            now = time.time()
-            self.start_time = now
-            self.last_print_time = now
-            self.last_print_step = int(self.num_timesteps)
-            self._print_progress(force=True)
-
-        def _on_step(self) -> bool:
-            """
-            每个训练步骤调用一次
-
-            功能：
-                - 检查是否需要打印进度（按步数或时间）
-                - 更新训练可视化统计信息
-                - 检测新完成的Episode并更新可视化
-
-            返回：
-                bool: True继续训练，False停止训练
-            """
-            num_timesteps = int(self.num_timesteps)
-            now = time.time()
-
-            # 检查是否需要打印进度（满足步数间隔或时间间隔）
-            need_by_steps = (
-                num_timesteps - self.last_print_step
-            ) >= self.print_interval_steps
-            need_by_time = (now - self.last_print_time) >= self.print_interval_sec
-            if need_by_steps or need_by_time:
-                self._print_progress()
-
-            # ========== 更新可视化统计 ==========
-            if self.training_visualizer:
-                try:
-                    # 检查是否有新的episode完成
-                    if (
-                        hasattr(self.model, "ep_info_buffer")
-                        and len(self.model.ep_info_buffer) > 0
-                    ):
-                        current_episode_count = len(self.model.ep_info_buffer)
-                        if current_episode_count > self.last_episode_count:
-                            # 新episode完成，更新统计
-                            ep_info = self.model.ep_info_buffer[-1]
-                            ep_reward = ep_info.get("r", 0.0)  # Episode总奖励
-                            ep_length = ep_info.get("l", 0)  # Episode步数
-                            self.training_visualizer.update_training_stats(
-                                episode_reward=ep_reward,
-                                episode_length=ep_length,
-                                is_episode_done=True,
-                            )
-                            self.last_episode_count = current_episode_count
-
-                            # 记录 Episode 统计信息
-                            if self.data_logger:
-                                self.data_logger.record_episode_stats(
-                                    episode=current_episode_count,
-                                    reward=ep_reward,
-                                    length=ep_length,
-                                )
-
-                    # 更新当前步的奖励（从locals获取）
-                    if "rewards" in self.locals and len(self.locals["rewards"]) > 0:
-                        step_reward = float(self.locals["rewards"][0])
-                        self.training_visualizer.update_training_stats(
-                            current_step_reward=step_reward
-                        )
-
-                    # 更新权重历史（定期更新，不只在episode结束时）
-                    if hasattr(self.model, "env"):
-                        env = self.model.env
-                        # 处理VecEnv包装（stable-baselines3可能使用向量化环境）
-                        if hasattr(env, "envs") and len(env.envs) > 0:
-                            env = env.envs[0]  # 获取实际环境
-                        if hasattr(env, "server") and env.server:
-                            drone_name = getattr(env, "drone_name", None)
-                            if drone_name and drone_name in env.server.algorithms:
-                                # 获取当前权重并更新可视化
-                                weights = env.server.algorithms[
-                                    drone_name
-                                ].get_current_coefficients()
-                                self.training_visualizer.update_weight_history(weights)
-
-                                # 记录权重到数据记录器
-                                if self.data_logger:
-                                    self.data_logger.record_weights(
-                                        drone_name=drone_name,
-                                        weights=weights,
-                                        episode=current_episode_count,
-                                        step=self.num_timesteps,
-                                    )
-                except Exception as e:
-                    # 静默忽略可视化更新错误，避免影响训练
-                    pass
-
-            # ========== 记录实体无人机飞行数据 ==========
-            if self.data_logger:
-                try:
-                    # 从环境中获取当前的 logging_data
-                    if hasattr(self.model, "env"):
-                        env = self.model.env
-                        # 处理VecEnv包装
-                        if hasattr(env, "envs") and len(env.envs) > 0:
-                            env = env.envs[0]
-                        if hasattr(env, "server") and env.server:
-                            drone_name = getattr(env, "drone_name", None)
-                            if drone_name:
-                                logging_data = (
-                                    env.server.crazyswarm.get_loggingData_by_droneName(
-                                        drone_name
-                                    )
-                                )
-                                if logging_data:
-                                    self.data_logger.record_flight_data(
-                                        drone_name, logging_data
-                                    )
-                except Exception as e:
-                    # 静默忽略数据记录错误，避免影响训练
-                    pass
-            # ===========================================
-            # ====================================
-
-            return True
-
-        def _print_progress(self, force: bool = False) -> None:
-            num_timesteps = int(self.num_timesteps)
-            now = time.time()
-            if (
-                not force
-                and num_timesteps == self.last_print_step
-                and (now - self.last_print_time) < 1.0
-            ):
-                return
-            self.last_print_step = num_timesteps
-            self.last_print_time = now
-
-            elapsed = now - self.start_time
-            if self.total_timesteps > 0:
-                progress = min(num_timesteps / self.total_timesteps, 1.0)
-                eta = (elapsed / progress - elapsed) if progress > 0 else 0.0
-                percent = progress * 100.0
-                logger.info(
-                    "进度 %s/%s (%.1f%%) 已用%s 预计剩余%s",
-                    num_timesteps,
-                    self.total_timesteps,
-                    percent,
-                    _format_duration(elapsed),
-                    _format_duration(eta),
-                )
-            else:
-                logger.info(
-                    "进度 %s 步 已用%s", num_timesteps, _format_duration(elapsed)
-                )
 
     # 打印训练参数，便于复现实验
     logger.info(
@@ -842,19 +1031,81 @@ def main():
             reset_num_timesteps = True
 
         # 进度回调：定期打印训练进度
+        progress_timing_state = ProgressTimingState()
         progress_cb = TrainingProgressCallback(
             total_timesteps=total_timesteps,
             print_interval_steps=progress_interval,
             print_interval_sec=15,
             training_visualizer=training_visualizer,
             data_logger=data_logger,
+            timing_state=progress_timing_state,
+            logger=logger,
         )
-        # 训练主循环：达到 total_timesteps 视为训练完成
-        model.learn(
-            total_timesteps=total_timesteps,
-            reset_num_timesteps=reset_num_timesteps,
-            callback=progress_cb,
-        )
+        if not _should_use_weighted_training(real_weighting_config):
+            if real_weighting_config is None:
+                logger.info("[RealWeight] 未配置 real_weighting，使用默认在线训练路径")
+            else:
+                logger.info("[RealWeight] real_weighting 已禁用，使用默认在线训练路径")
+            # 训练主循环：达到 total_timesteps 视为训练完成
+            model.learn(
+                total_timesteps=total_timesteps,
+                reset_num_timesteps=reset_num_timesteps,
+                callback=progress_cb,
+            )
+        else:
+            logger.info(
+                "[RealWeight] 使用 real_weighting 配置: "
+                "timing=%s enable=%s multiplier=%s min_samples=%s max_updates=%s",
+                real_weighting_config.update_timing,
+                real_weighting_config.enable_real_weighting,
+                real_weighting_config.real_update_multiplier,
+                real_weighting_config.min_real_samples_before_update,
+                real_weighting_config.max_real_updates_per_episode,
+            )
+            if isinstance(raw_real_weighting, dict) and "real_batch_ratio" in raw_real_weighting:
+                logger.info(
+                    "[RealWeight] real_batch_ratio 当前版本仅保留兼容性，不参与实际训练采样"
+                )
+            priority_trainer = RealFlightPriorityTrainer(real_weighting_config)
+
+            def _callback_factory():
+                episode_callback = EpisodeAwareTrainingCallback(
+                    total_timesteps=total_timesteps,
+                    print_interval_steps=progress_interval,
+                    print_interval_sec=15,
+                    training_visualizer=training_visualizer,
+                    data_logger=data_logger,
+                    priority_trainer=priority_trainer,
+                )
+                return _build_weighted_callback(progress_cb, episode_callback)
+
+            def _on_episode_end(episode_index: int):
+                if real_weighting_config.update_timing != "episode_end":
+                    logger.info(
+                        "[RealWeight] update_timing=%s，跳过加权更新",
+                        real_weighting_config.update_timing,
+                    )
+                    return None
+                result = priority_trainer.apply_post_episode_update(
+                    model=model, episode_index=episode_index
+                )
+                _log_weighted_update_result(logger, episode_index, result)
+                return result
+
+            adjusted_total_timesteps = total_timesteps
+            if not reset_num_timesteps:
+                adjusted_total_timesteps = _compute_weighted_training_target(
+                    total_timesteps=total_timesteps,
+                    current_steps=getattr(model, "num_timesteps", 0),
+                )
+
+            run_weighted_online_training(
+                model=model,
+                total_timesteps=adjusted_total_timesteps,
+                reset_num_timesteps=reset_num_timesteps,
+                callback_factory=_callback_factory,
+                on_episode_end=_on_episode_end,
+            )
 
         # 正常结束后保存模型
         model_saved = _save_model(model, final_path, logger, "训练完成，模型已保存")
