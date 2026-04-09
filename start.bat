@@ -17,6 +17,7 @@ echo === DDPG权重APF训练 ===
 echo   [4] 训练权重DDPG (虚拟训练 - 新建模型) [可以使用]
 echo   [5] 训练权重DDPG (虚拟训练 - 继续训练) [可以使用]
 echo   [6] 训练权重DDPG (使用日志离线训练) [可以使用]
+echo   [E] 训练权重DDPG (实体无人机在线单轮次训练) [新功能]
 echo.
 echo === DQN移动控制训练 ===
 echo   [7] 训练移动DQN (真实AirSim环境 - 新建模型) [可以使用]
@@ -40,7 +41,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A-H,R):
+set /p choice=请输入选项 (0-9,A-H,R,E):
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_ddpg
@@ -48,6 +49,7 @@ if /i "%choice%"=="3" goto run_dqn_movement
 if /i "%choice%"=="4" goto train_weight_airsim_fresh
 if /i "%choice%"=="5" goto train_weight_airsim_resume
 if /i "%choice%"=="6" goto train_weight_crazyflie_logs
+if /i "%choice%"=="E" goto train_weight_crazyflie_online_single
 if /i "%choice%"=="7" goto train_movement_airsim_fresh
 if /i "%choice%"=="8" goto train_movement_airsim_resume
 if /i "%choice%"=="R" goto train_movement_airsim_rerun_stage02
@@ -127,6 +129,15 @@ echo DDPG权重APF训练 (使用日志离线训练)
 echo ============================================================
 echo.
 call scripts\Train_DDPG_Weights_Crazyflie_Logs.bat
+goto menu
+
+:train_weight_crazyflie_online_single
+cls
+echo ============================================================
+echo DDPG权重APF训练 (实体无人机在线单轮次训练)
+echo ============================================================
+echo.
+call scripts\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat
 goto menu
 
 :train_movement_airsim_fresh
