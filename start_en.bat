@@ -13,6 +13,7 @@ echo   [3] Run System (DQN Model) [Under Development]
 echo.
 echo === DDPG Weight APF Training ===
 echo   [4] Train DDPG Weights (Real AirSim Environment) [⭐Available!]
+echo   [E] Train DDPG Weights (Single-Episode Crazyflie Online) [⭐New!]
 echo.
 echo === DQN Movement Control Training ===
 echo   [5] Train DQN Movement (Real AirSim Environment)[⭐Available!]
@@ -34,12 +35,13 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=Please enter an option (0-6,A-C): 
+set /p choice=Please enter an option (0-6,A-F,C,H,E): 
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
 if /i "%choice%"=="3" goto run_dqn_movement
 if /i "%choice%"=="4" goto train_weight_airsim
+if /i "%choice%"=="E" goto train_weight_crazyflie_online_single
 if /i "%choice%"=="5" goto train_movement_airsim
 if /i "%choice%"=="H" goto train_hierarchical_dqn
 if /i "%choice%"=="F" goto train_hierarchical_airsim
@@ -91,6 +93,15 @@ echo DDPG Weight APF Training (Real AirSim Environment)
 echo ============================================================
 echo.
 call scripts\Train_DDPG_Weights_Real_Environment.bat
+goto menu
+
+:train_weight_crazyflie_online_single
+cls
+echo ============================================================
+echo DDPG Weight APF Training (Single-Episode Crazyflie Online)
+echo ============================================================
+echo.
+call scripts\Train_DDPG_Weights_Crazyflie_Online_Single_Episode_EN.bat
 goto menu
 
 :train_movement_airsim
