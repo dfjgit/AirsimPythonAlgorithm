@@ -451,15 +451,18 @@ class UnifiedTrainingAnalyzer:
         """Render table to markdown and gracefully degrade when tabulate is unavailable."""
         try:
             return table.to_markdown(**kwargs)
-        except Exception as exc:
+        except ImportError as exc:
             logger.warning("to_markdown 不可用，回退为纯文本表格: %s", exc)
             if isinstance(table, pd.DataFrame):
                 if kwargs.get("index", True):
-                    return table.to_string()
-                return table.to_string(index=False)
-            if isinstance(table, pd.Series):
-                return table.to_string()
-            return str(table)
+                    plain_text = table.to_string()
+                else:
+                    plain_text = table.to_string(index=False)
+            elif isinstance(table, pd.Series):
+                plain_text = table.to_string()
+            else:
+                plain_text = str(table)
+            return f"```text\n{plain_text}\n```"
 
     def plot_comparison(
         self,
