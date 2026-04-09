@@ -174,10 +174,17 @@ Why:
 
 ## 4. Chart Index / 图表总览
 
+当前完整单算法图口径已由 13 类扩展为 15 类，新增：
+
+- `collision_stability.png`
+- `collision_count_trend.png`
+
 | File | 中文图名 | English Title | Level | Primary Use |
 |---|---|---|---|---|
 | `episode_performance_summary.png` | 回合综合表现总览图 | Episode Performance Summary | Episode | 收敛主判图 |
 | `reset_reason_rolling_ratio.png` | 重置原因滚动占比图 | Reset Reason Rolling Ratio | Episode | 训练健康度判图 |
+| `collision_stability.png` | 碰撞稳定性图 | Collision Stability | Episode | 碰撞终止稳定性主图 |
+| `collision_count_trend.png` | 碰撞次数趋势图 | Collision Count Trend | Episode | 每轮碰撞负担趋势 |
 | `collision_hotspots_xy.png` | 碰撞热点分布图（X-Z 顶视） | Collision Hotspots (Top-Down XZ) | Episode | 碰撞空间定位 |
 | `collision_object_breakdown.png` | 碰撞对象统计图 | Collision Object Breakdown | Episode | 高频失败源统计 |
 | `algorithm_weights_stability.png` | 权重稳定性分析图 | Algorithm Weights Stability | Step/Time | 动态权重稳定性诊断 |
@@ -303,7 +310,73 @@ English:
 
 ---
 
-### 5.3 `collision_hotspots_xy.png` / 碰撞热点分布图（X-Y） / Collision Hotspots (XY)
+### 5.3 `collision_stability.png` / 碰撞稳定性图 / Collision Stability
+
+**数据源 / Data source**
+- 主要来自 `ddpg_training_*.csv`
+- 统计粒度：episode-level
+
+**横轴 / X-axis**
+- `Episode`
+
+**纵轴 / Y-axis**
+- `Collision Termination Ratio (%)`
+- 表示最近窗口中因碰撞终止的 episode 占比。
+
+**图表价值 / Value**
+
+中文：
+- 该图用于直接观察“训练是否越来越少因碰撞终止”。
+- 曲线下降通常表示碰撞导致的失败在减少，训练稳定性提升。
+
+English:
+- This chart directly shows whether collision-triggered termination is decreasing.
+- A falling curve usually indicates improved stability with fewer collision-driven failures.
+
+**能回答的问题 / Questions it can answer**
+- 因碰撞终止的比例是否在下降？
+- 策略是否从高碰撞阶段走向低碰撞阶段？
+
+**不能直接证明的内容 / What it cannot directly prove**
+- 不能说明碰撞发生的具体空间位置。
+- 不能说明撞到的是哪类对象。
+
+---
+
+### 5.4 `collision_count_trend.png` / 碰撞次数趋势图 / Collision Count Trend
+
+**数据源 / Data source**
+- 主要来自 `ddpg_training_*.csv`
+- 统计粒度：episode-level
+
+**横轴 / X-axis**
+- `Episode`
+
+**纵轴 / Y-axis**
+- `Collision Count`
+- 表示每个 episode 内记录到的最终碰撞次数。
+
+**图表价值 / Value**
+
+中文：
+- 该图用于观察每轮碰撞负担是否随训练推进而下降。
+- 它与 `collision_stability.png` 的区别在于：前者看“是否因碰撞终止”，本图看“每轮究竟撞了多少次”。
+
+English:
+- This chart tracks whether the collision burden per episode decreases during training.
+- Unlike `collision_stability.png`, which tracks collision-triggered termination ratio, this figure tracks how many collisions occur within each episode.
+
+**能回答的问题 / Questions it can answer**
+- 每轮碰撞次数是否整体下降？
+- 即使未因碰撞终止，碰撞负担是否仍然偏高？
+
+**不能直接证明的内容 / What it cannot directly prove**
+- 不能替代最终任务结果指标。
+- 不能说明碰撞的具体位置或对象。
+
+---
+
+### 5.5 `collision_hotspots_xy.png` / 碰撞热点分布图（X-Y） / Collision Hotspots (XY)
 
 **数据源 / Data source**
 - 主要来自 `ddpg_training_*.csv` 中的 `collision_position`
@@ -352,7 +425,7 @@ English:
 
 ---
 
-### 5.4 `collision_object_breakdown.png` / 碰撞对象统计图 / Collision Object Breakdown
+### 5.6 `collision_object_breakdown.png` / 碰撞对象统计图 / Collision Object Breakdown
 
 **数据源 / Data source**
 - 主要来自 `ddpg_training_*.csv` 中的 `collision_object_name`
@@ -395,7 +468,7 @@ English:
 
 ---
 
-### 5.5 `algorithm_weights_stability.png` / 权重稳定性分析图 / Algorithm Weights Stability
+### 5.7 `algorithm_weights_stability.png` / 权重稳定性分析图 / Algorithm Weights Stability
 
 **数据源 / Data source**
 - 主要来自 `scan_data_*.csv`
@@ -456,7 +529,7 @@ English:
 
 ---
 
-### 5.6 `best_vs_recent_trajectory_comparison.png` / 最优与最近轨迹对比图 / Best vs Recent Trajectory Comparison
+### 5.8 `best_vs_recent_trajectory_comparison.png` / 最优与最近轨迹对比图 / Best vs Recent Trajectory Comparison
 
 **数据源 / Data source**
 - 主要来自 `scan_data_*.csv`

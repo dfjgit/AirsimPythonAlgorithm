@@ -107,13 +107,18 @@
 
 - `episode_reward.png`
 - `episode_length.png`
+- `collision_stability.png`
+- `collision_count_trend.png`
 - `comparison_training_reward.png`
 - `comparison_training_scan_efficiency.png`
+- `comparison_training_collision_rate.png`
+- `comparison_training_collision_count.png`
 
 它们主要用于分析：
 
 - 收敛趋势
 - 训练稳定性
+- 碰撞负担是否下降
 - 平台期与回落
 - 单位动作层面的效率差异
 

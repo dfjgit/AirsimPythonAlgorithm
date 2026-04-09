@@ -8,6 +8,8 @@
 
 - [comparison_training_reward.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_training_reward.png)
 - [comparison_training_scan_efficiency.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_training_scan_efficiency.png)
+- [comparison_training_collision_rate.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_training_collision_rate.png)
+- [comparison_training_collision_count.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_training_collision_count.png)
 - [comparison_scan_scan_ratio.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_scan_scan_ratio.png)
 - [comparison_scan_global_avg_entropy.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_scan_global_avg_entropy.png)
 - [comparison_scan_per_second.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/comparison_scan_per_second.png)
@@ -43,7 +45,7 @@
 
 - [stage02_algorithm_comparison_report.csv](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/comparison/stage02_algorithm_comparison_report.csv)
 
-## 3. 六张图的横轴、纵轴与用途
+## 3. 八张图的横轴、纵轴与用途
 
 ### 3.1 `comparison_training_reward.png`
 
@@ -80,7 +82,31 @@
 - `DDPG+APF` 与 `纯 DQN` 的“单步”并不具有完全相同的物理时间含义
 - 因此 `Cell/Step` 更适合解释动作效率，不适合单独作为最终胜负指标
 
-### 3.3 `comparison_scan_scan_ratio.png`
+### 3.3 `comparison_training_collision_rate.png`
+
+- 横轴：训练轮次（Episode）
+- 纵轴：碰撞终止占比（%）
+- 数据来源：`training csv`
+- 可比性：中等可比
+
+用途：
+
+- 比较两种算法在训练过程中的碰撞稳定性
+- 观察谁更早进入低碰撞区间
+
+### 3.4 `comparison_training_collision_count.png`
+
+- 横轴：训练轮次（Episode）
+- 纵轴：碰撞次数
+- 数据来源：`training csv`
+- 可比性：中等可比
+
+用途：
+
+- 比较两种算法在训练过程中每轮的碰撞负担
+- 观察碰撞次数是否随训练推进而下降
+
+### 3.5 `comparison_scan_scan_ratio.png`
 
 - 横轴：训练轮次（Episode）
 - 纵轴：最终全局扫描率（%）
@@ -92,7 +118,7 @@
 - 反映最终覆盖能力
 - 是当前论文结果分析中的核心图之一
 
-### 3.4 `comparison_scan_global_avg_entropy.png`
+### 3.6 `comparison_scan_global_avg_entropy.png`
 
 - 横轴：训练轮次（Episode）
 - 纵轴：最终全局平均熵
@@ -104,7 +130,7 @@
 - 反映算法降低环境不确定性的能力
 - 熵值越低通常表示扫描结果越充分
 
-### 3.5 `comparison_scan_per_second.png`
+### 3.7 `comparison_scan_per_second.png`
 
 - 横轴：训练轮次（Episode）
 - 纵轴：按时间归一化扫描产出（Cell/s）
@@ -121,7 +147,7 @@
 - 当前按 `seconds_per_step * episode_length` 近似得到单轮物理时长
 - 因此它比 `Cell/Step` 更公平，但仍然是近似归一化
 
-### 3.6 `comparison_scan_per_volt_drop.png`
+### 3.8 `comparison_scan_per_volt_drop.png`
 
 - 横轴：训练轮次（Episode）
 - 纵轴：按电量下降归一化扫描产出（Cell/V）
@@ -153,6 +179,8 @@
 
 ### 4.2 中等可比指标
 
+- `comparison_training_collision_rate.png`
+- `comparison_training_collision_count.png`
 - `comparison_scan_per_second.png`
 - `comparison_scan_per_volt_drop.png`
 

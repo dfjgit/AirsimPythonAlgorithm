@@ -8,6 +8,8 @@
 
 - [episode_reward.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/episode_reward.png)
 - [episode_length.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/episode_length.png)
+- [collision_stability.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/collision_stability.png)
+- [collision_count_trend.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/collision_count_trend.png)
 - [global_scan_ratio.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/global_scan_ratio.png)
 - [global_avg_entropy.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/global_avg_entropy.png)
 - [scan_efficiency.png](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite/ddpg_stage02/scan_efficiency.png)
@@ -30,6 +32,8 @@
 |---|---|---|---|---|---|
 | `episode_reward.png` | 训练轮次 | `episode` | 单轮累计奖励 | `reward` | `training csv` |
 | `episode_length.png` | 训练轮次 | `episode` | 单轮步数长度 | `length` | `training csv` |
+| `collision_stability.png` | 训练轮次 | `episode` | 碰撞终止占比(%) | `collision_rate` | `training csv` |
+| `collision_count_trend.png` | 训练轮次 | `episode` | 碰撞次数 | `collision_count` | `training csv` |
 | `global_scan_ratio.png` | 训练轮次 | `episode` | 最终全局扫描率(%) | `final_global_scan_ratio` | `training csv` |
 | `global_avg_entropy.png` | 训练轮次 | `episode` | 最终全局平均熵 | `final_global_avg_entropy` | `training csv` |
 | `scan_efficiency.png` | 训练轮次 | `episode` | 扫描效率(Cell/Step) | `scan_efficiency` | `training csv` |
@@ -51,28 +55,42 @@
 - 是否仍存在大量早停
 - 是否大多数回合都能稳定运行到较长时长
 
-### 4.3 `global_scan_ratio.png`
+### 4.3 `collision_stability.png`
+
+用于观察：
+
+- 追训后是否越来越少因碰撞终止
+- 是否已从高碰撞不稳定阶段进入低碰撞稳定阶段
+
+### 4.4 `collision_count_trend.png`
+
+用于观察：
+
+- 每轮碰撞次数是否随训练推进而下降
+- 即使未因碰撞终止，碰撞负担是否仍然偏高
+
+### 4.5 `global_scan_ratio.png`
 
 用于观察：
 
 - `DDPG+APF` 追训后的最终覆盖率是否继续提升
 - 是否已经在固定口径下进入平台区
 
-### 4.4 `global_avg_entropy.png`
+### 4.6 `global_avg_entropy.png`
 
 用于观察：
 
 - 追训后环境不确定性是否继续下降
 - 覆盖提升是否伴随着真实信息增益
 
-### 4.5 `scan_efficiency.png`
+### 4.7 `scan_efficiency.png`
 
 用于观察：
 
 - 单位动作层面的扫描产出是否稳定
 - 是否出现“仍然很稳，但单位步增益不再增长”的平台期特征
 
-### 4.6 `trajectories_xz.png`
+### 4.8 `trajectories_xz.png`
 
 用于观察：
 
