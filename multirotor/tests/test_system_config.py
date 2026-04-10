@@ -1,0 +1,183 @@
+import json
+import re
+import tempfile
+import unittest
+from pathlib import Path
+
+from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
+
+
+class SystemConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def _write_json(self, relative_path: str, payload: dict) -> Path:
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def test_prefers_new_system_config_when_present(self):
+        system_path = self._write_json(
+            "system_config.json",
+            {
+                "drones": {
+                    "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False},
+                    "CF1": {"enabled": True, "type": "physical", "isCrazyflieMirror": True},
+                },
+                "environment": {
+                    "termination": {"target_scan_ratio": 0.25},
+                    "battery": {"low_threshold": 3.5, "optimal_min": 3.7, "optimal_max": 4.1},
+                },
+            },
+        )
+
+        config = SystemConfig(config_file=str(system_path))
+
+        self.assertEqual(config.get_all_drones(), ["UAV1", "CF1"])
+        self.assertEqual(config.get_enabled_drones(), ["UAV1", "CF1"])
+        self.assertTrue(config.is_crazyflie_mirror("CF1"))
+        self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.25)
+
+    def test_falls_back_to_legacy_files_when_system_config_is_missing(self):
+        drones_path = self._write_json(
+            "drones_config.json",
+            {
+                "drones": {
+                    "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False}
+                }
+            },
+        )
+        apf_path = self._write_json(
+            "apf_algorithm_config.json",
+            {
+                "repulsionCoefficient": 2.0,
+                "env_config": {
+                    "termination": {"target_scan_ratio": 0.4},
+                    "battery": {"low_threshold": 3.4, "optimal_min": 3.7, "optimal_max": 4.1},
+                },
+            },
+        )
+
+        config = SystemConfig(
+            config_file=str(self.root / "missing_system_config.json"),
+            legacy_drones_file=str(drones_path),
+            legacy_apf_file=str(apf_path),
+        )
+
+        self.assertEqual(config.get_all_drones(), ["UAV1"])
+        self.assertEqual(load_environment_rules(config), config.get_environment_rules())
+        self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.4)
+
+    def test_environment_rules_are_isolated_from_internal_state(self):
+        system_path = self._write_json(
+            "system_config.json",
+            {
+                "drones": {
+                    "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False},
+                },
+                "environment": {
+                    "termination": {"target_scan_ratio": 0.25},
+                    "battery": {"low_threshold": 3.5, "optimal_min": 3.7, "optimal_max": 4.1},
+                },
+            },
+        )
+
+        config = SystemConfig(config_file=str(system_path))
+        rules = config.get_environment_rules()
+        rules["termination"]["target_scan_ratio"] = 0.99
+        rules["battery"]["low_threshold"] = 3.2
+
+        self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.25)
+        self.assertEqual(config.get_environment_rules()["battery"]["low_threshold"], 3.5)
+
+    def test_rejects_malformed_system_config_shapes(self):
+        cases = [
+            (
+                "drones_not_dict",
+                {"drones": [], "environment": {}},
+                "drones must be a dict",
+            ),
+            (
+                "environment_not_dict",
+                {"drones": {}, "environment": []},
+                "environment must be a dict",
+            ),
+            (
+                "drone_entry_not_dict",
+                {"drones": {"UAV1": 1}, "environment": {}},
+                "drone entry 'UAV1' must be a dict",
+            ),
+        ]
+
+        for relative_path, payload, expected_message in cases:
+            with self.subTest(case=relative_path):
+                config_path = self._write_json(f"{relative_path}.json", payload)
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    SystemConfig(config_file=str(config_path))
+
+    def test_rejects_malformed_legacy_fallback_shapes(self):
+        cases = [
+            (
+                "legacy_drones_not_dict",
+                {"drones": []},
+                {"env_config": {}},
+                "legacy drones must be a dict",
+            ),
+            (
+                "legacy_environment_not_dict",
+                {"drones": {"UAV1": {"enabled": True}}},
+                {"env_config": []},
+                "legacy env_config must be a dict",
+            ),
+            (
+                "legacy_drone_entry_not_dict",
+                {"drones": {"UAV1": 1}},
+                {"env_config": {}},
+                "legacy drone entry 'UAV1' must be a dict",
+            ),
+        ]
+
+        for case_name, drones_payload, apf_payload, expected_message in cases:
+            with self.subTest(case=case_name):
+                drones_path = self._write_json(f"{case_name}_drones.json", drones_payload)
+                apf_path = self._write_json(f"{case_name}_apf.json", apf_payload)
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    SystemConfig(
+                        config_file=str(self.root / "missing_system_config.json"),
+                        legacy_drones_file=str(drones_path),
+                        legacy_apf_file=str(apf_path),
+                    )
+
+    def test_rejects_malformed_legacy_root_payloads(self):
+        bad_drones_root = self._write_json("bad_legacy_drones_root.json", [])
+        good_apf = self._write_json("good_legacy_apf.json", {"env_config": {}})
+        with self.assertRaisesRegex(
+            ValueError,
+            re.escape(str(bad_drones_root)),
+        ):
+            SystemConfig(
+                config_file=str(self.root / "missing_system_config.json"),
+                legacy_drones_file=str(bad_drones_root),
+                legacy_apf_file=str(good_apf),
+            )
+
+        good_drones = self._write_json("good_legacy_drones.json", {"drones": {}})
+        bad_apf_root = self._write_json("bad_legacy_apf_root.json", "broken")
+        with self.assertRaisesRegex(
+            ValueError,
+            re.escape(str(bad_apf_root)),
+        ):
+            SystemConfig(
+                config_file=str(self.root / "missing_system_config.json"),
+                legacy_drones_file=str(good_drones),
+                legacy_apf_file=str(bad_apf_root),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
