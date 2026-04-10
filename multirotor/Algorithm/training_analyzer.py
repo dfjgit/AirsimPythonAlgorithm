@@ -324,26 +324,21 @@ class UnifiedTrainingAnalyzer:
         if data_type != "training":
             return normalized
 
-        if "length" not in normalized.columns:
-            return normalized
+        if "length" in normalized.columns:
+            lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)
+            efficiency_source = None
+            if "global_scanned_cells" in normalized.columns:
+                global_cells = pd.to_numeric(normalized["global_scanned_cells"], errors="coerce")
+                if not global_cells.isna().all():
+                    efficiency_source = global_cells
 
-        lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)
-        if lengths.isna().all():
-            return normalized
+            if efficiency_source is None and "scanned_cells" in normalized.columns:
+                scanned_cells = pd.to_numeric(normalized["scanned_cells"], errors="coerce")
+                if not scanned_cells.isna().all():
+                    efficiency_source = scanned_cells
 
-        efficiency_source = None
-        if "global_scanned_cells" in normalized.columns:
-            global_cells = pd.to_numeric(normalized["global_scanned_cells"], errors="coerce")
-            if not global_cells.isna().all():
-                efficiency_source = global_cells
-
-        if efficiency_source is None and "scanned_cells" in normalized.columns:
-            scanned_cells = pd.to_numeric(normalized["scanned_cells"], errors="coerce")
-            if not scanned_cells.isna().all():
-                efficiency_source = scanned_cells
-
-        if efficiency_source is not None:
-            normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
+            if efficiency_source is not None and not lengths.isna().all():
+                normalized["scan_efficiency"] = (efficiency_source / lengths).fillna(0.0)
 
         normalized["collision_rate"] = collision_termination_rate_percent(normalized)
         collision_count_series = None
@@ -597,7 +592,6 @@ class UnifiedTrainingAnalyzer:
             alpha=band_alpha,
             linewidth=0,
         )
-
     def plot_comparison(
         self,
         metric: str,

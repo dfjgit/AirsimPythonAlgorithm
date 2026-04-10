@@ -569,6 +569,19 @@ English:
 
 ## 6. Supporting Charts / 辅助图表详解
 
+### `collision_stability.png` / 碰撞稳定性图 / Collision Stability
+
+**横轴 / X-axis**
+- `Episode`
+
+**纵轴 / Y-axis**
+- `Collision Termination Ratio (%)`
+- 表示最近窗口中因碰撞终止的 episode 占比。
+
+**价值 / Value**
+- 这是当前项目中最直接的碰撞稳定性主图。
+- 曲线下降说明训练过程中因碰撞失败的比例降低，稳定性改善。
+
 ### 6.1 `scan_progress.png` / 扫描进展趋势图 / Episode Scan Progress
 
 **横轴 / X-axis**

@@ -323,7 +323,6 @@ def plot_collision_stability(run: RunData) -> None:
     fig.savefig(run.output_dir / "collision_stability.png", dpi=160)
     plt.close(fig)
 
-
 def plot_collision_count_trend(run: RunData) -> None:
     df = run.episode_df
     if df.empty or "episode" not in df.columns:
@@ -355,8 +354,6 @@ def plot_collision_count_trend(run: RunData) -> None:
     fig.tight_layout()
     fig.savefig(run.output_dir / "collision_count_trend.png", dpi=160)
     plt.close(fig)
-
-
 def plot_collision_hotspots(run: RunData) -> None:
     df = run.episode_df
     if df.empty or "collision_position" not in df.columns:
