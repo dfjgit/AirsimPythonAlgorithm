@@ -68,6 +68,7 @@ class MultiDroneAlgorithmServer:
     def __init__(
         self,
         config_file: Optional[str] = None,
+        system_config_file: Optional[str] = None,
         drone_names: Optional[List[str]] = None,
         use_learned_weights: bool = False,
         model_path: Optional[str] = None,
@@ -84,6 +85,7 @@ class MultiDroneAlgorithmServer:
         """
         初始化服务器实例
         :param config_file: 算法配置文件路径（默认使用apf_algorithm_config.json）
+        :param system_config_file: 系统级共享配置文件路径（默认使用system_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
         :param use_learned_weights: 是否使用学习的权重（DDPG模型预测，仅在control_mode='apf'时有效）
         :param model_path: DDPG模型路径（不含.zip后缀），如果为None则使用默认模型
@@ -92,6 +94,8 @@ class MultiDroneAlgorithmServer:
         :param control_mode: 控制模式，'apf'=APF算法控制（默认），'dqn'=DQN外部控制
         """
         # 配置文件路径处理
+        self.system_config_path = system_config_file
+        self._config_file_provided = config_file is not None
         self.config_path = self._resolve_config_path(config_file)
         # 无人机名称初始化
         self.drone_names = drone_names if drone_names else ["UAV1"]
@@ -321,7 +325,17 @@ class MultiDroneAlgorithmServer:
         try:
             logger.info(f"加载配置文件: {self.config_path}")
             config_data = ScannerConfigData(self.config_path)
-            self.system_config = SystemConfig(legacy_apf_file=self.config_path)
+            if self.system_config_path:
+                self.system_config = SystemConfig(
+                    config_file=self.system_config_path,
+                    legacy_apf_file=self.config_path,
+                )
+            elif self._config_file_provided:
+                self.system_config = SystemConfig.from_legacy_sources(
+                    legacy_apf_file=self.config_path,
+                )
+            else:
+                self.system_config = SystemConfig(legacy_apf_file=self.config_path)
             overlay_environment_rules(
                 config_data,
                 self.system_config.get_environment_rules(),

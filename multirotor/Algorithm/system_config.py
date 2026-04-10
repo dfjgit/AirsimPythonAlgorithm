@@ -71,6 +71,20 @@ class SystemConfig:
 
         return {"drones": drones, "environment": environment}
 
+    @classmethod
+    def from_legacy_sources(
+        cls,
+        legacy_drones_file: Optional[str] = None,
+        legacy_apf_file: Optional[str] = None,
+    ) -> "SystemConfig":
+        instance = cls.__new__(cls)
+        base_dir = Path(__file__).resolve().parent.parent
+        instance.config_file = base_dir / "__legacy_only_system_config__.json"
+        instance.legacy_drones_file = Path(legacy_drones_file) if legacy_drones_file else base_dir / "drones_config.json"
+        instance.legacy_apf_file = Path(legacy_apf_file) if legacy_apf_file else base_dir / "apf_algorithm_config.json"
+        instance.config = instance._load_config()
+        return instance
+
     def get_all_drones(self):
         return list(self.config.get("drones", {}).keys())
 
