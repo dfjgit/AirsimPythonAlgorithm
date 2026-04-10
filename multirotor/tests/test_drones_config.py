@@ -140,7 +140,7 @@ class DronesConfigFacadeTests(unittest.TestCase):
             output.getvalue(),
         )
 
-    def test_config_file_override_without_system_config_uses_mixed_legacy_inventory(self):
+    def test_config_file_override_without_system_config_uses_mixed_legacy_inventory_and_persistence(self):
         legacy_path = self.root / "legacy_override.json"
         legacy_path.write_text(
             json.dumps(
@@ -165,6 +165,14 @@ class DronesConfigFacadeTests(unittest.TestCase):
         self.assertEqual(config.get_enabled_drones(), ["LEGACY_ONLY_1"])
         self.assertEqual(config.get_training_drones("dqn"), ["LEGACY_ONLY_1"])
         self.assertEqual(config.get_drone_info("LEGACY_ONLY_1")["type"], "real")
+        self.assertEqual(config.system_config.config_file, legacy_path)
+
+        config.get_drone_info("LEGACY_ONLY_1")["isCrazyflieMirror"] = True
+        config.save_config()
+
+        saved_override = json.loads(legacy_path.read_text(encoding="utf-8"))
+        self.assertTrue(saved_override["drones"]["LEGACY_ONLY_1"]["isCrazyflieMirror"])
+        self.assertEqual(saved_override["training"]["dqn"]["drone_list"], ["LEGACY_ONLY_1"])
 
 
 if __name__ == "__main__":

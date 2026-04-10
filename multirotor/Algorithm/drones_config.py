@@ -13,6 +13,8 @@ class DronesConfig:
         base_dir = Path(__file__).resolve().parent.parent
         self.config_file = Path(config_file) if config_file else base_dir / "drones_config.json"
         payload = self._load_config_payload()
+        self._source_payload = deepcopy(payload)
+        self._legacy_override_mode = False
         self.system_config = self._load_system_config(payload, system_config_file)
         self.config = self._load_training_config(payload)
 
@@ -28,6 +30,8 @@ class DronesConfig:
         if system_config_file is None:
             legacy_drones = payload.get("drones")
             if isinstance(legacy_drones, dict):
+                self._legacy_override_mode = True
+                system_config.config_file = self.config_file
                 system_config.config["drones"] = deepcopy(legacy_drones)
         return system_config
 
@@ -76,7 +80,21 @@ class DronesConfig:
         return {"drones": self.system_config.config.get("drones", {})}
 
     def save_config(self) -> None:
+        training_payload = {"training": self.config.get("training", {})}
+        if self._legacy_override_mode:
+            merged_payload = {
+                key: value
+                for key, value in self._source_payload.items()
+                if key not in {"drones", "training"}
+            }
+            merged_payload["drones"] = self.system_config.config.get("drones", {})
+            merged_payload["training"] = training_payload["training"]
+            with self.config_file.open("w", encoding="utf-8") as handle:
+                json.dump(merged_payload, handle, indent=2, ensure_ascii=False)
+            self._source_payload = deepcopy(merged_payload)
+            return
+
         with self.config_file.open("w", encoding="utf-8") as handle:
-            json.dump({"training": self.config.get("training", {})}, handle, indent=2, ensure_ascii=False)
+            json.dump(training_payload, handle, indent=2, ensure_ascii=False)
         with self.system_config.config_file.open("w", encoding="utf-8") as handle:
             json.dump(self.system_config.config, handle, indent=2, ensure_ascii=False)
