@@ -23,17 +23,28 @@ class DronesConfig:
             raise FileNotFoundError(f"Drone training config file not found: {self.config_file}")
         with self.config_file.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Invalid drone training config structure: {self.config_file} "
+                "(top-level JSON root must be a dict)"
+            )
+        return payload
 
     def _load_system_config(self, payload: dict, system_config_file: Optional[str]) -> SystemConfig:
-        system_config = SystemConfig(config_file=system_config_file)
         if system_config_file is None:
             legacy_drones = payload.get("drones")
             if isinstance(legacy_drones, dict):
                 self._legacy_override_mode = True
+                bootstrap_system_path = self.config_file.parent / f".{self.config_file.stem}.bootstrap_system.json"
+                bootstrap_apf_path = self.config_file.parent / f".{self.config_file.stem}.bootstrap_apf.json"
+                system_config = SystemConfig(
+                    config_file=str(bootstrap_system_path),
+                    legacy_drones_file=str(self.config_file),
+                    legacy_apf_file=str(bootstrap_apf_path),
+                )
                 system_config.config_file = self.config_file
-                system_config.config["drones"] = deepcopy(legacy_drones)
-        return system_config
+                return system_config
+        return SystemConfig(config_file=system_config_file)
 
     def _load_training_config(self, payload: dict) -> dict:
         training = payload.get("training", {}) if isinstance(payload, dict) else {}

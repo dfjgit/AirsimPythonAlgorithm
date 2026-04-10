@@ -4,8 +4,10 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from multirotor.Algorithm.drones_config import DronesConfig
+from multirotor.Algorithm.system_config import SystemConfig as RealSystemConfig
 
 
 class DronesConfigFacadeTests(unittest.TestCase):
@@ -184,6 +186,48 @@ class DronesConfigFacadeTests(unittest.TestCase):
         saved_override = json.loads(legacy_path.read_text(encoding="utf-8"))
         self.assertTrue(saved_override["drones"]["LEGACY_ONLY_1"]["isCrazyflieMirror"])
         self.assertEqual(saved_override["training"]["dqn"]["drone_list"], ["LEGACY_ONLY_1"])
+
+    def test_override_only_mode_does_not_depend_on_repo_default_system_config(self):
+        legacy_path = self.root / "legacy_override.json"
+        legacy_path.write_text(
+            json.dumps(
+                {
+                    "drones": {
+                        "LEGACY_ONLY_1": {"enabled": True, "type": "real"},
+                    },
+                    "training": {
+                        "dqn": {"use_all_drones": False, "drone_list": ["LEGACY_ONLY_1"]},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        def strict_system_config(*args, **kwargs):
+            if kwargs.get("config_file") is None:
+                raise RuntimeError("repo default system_config unavailable")
+            return RealSystemConfig(*args, **kwargs)
+
+        with patch("multirotor.Algorithm.drones_config.SystemConfig", side_effect=strict_system_config):
+            config = DronesConfig(config_file=str(legacy_path))
+
+        self.assertEqual(config.get_all_drones(), ["LEGACY_ONLY_1"])
+        self.assertEqual(config.get_training_drones("dqn"), ["LEGACY_ONLY_1"])
+
+    def test_non_dict_training_config_root_raises_clear_error(self):
+        malformed_path = self.root / "malformed_training.json"
+        malformed_path.write_text(json.dumps(["not", "a", "dict"], ensure_ascii=False), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Invalid drone training config structure: .*top-level JSON root must be a dict",
+        ):
+            DronesConfig(
+                config_file=str(malformed_path),
+                system_config_file=str(self.root / "system_config.json"),
+            )
 
 
 if __name__ == "__main__":
