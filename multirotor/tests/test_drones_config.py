@@ -1,6 +1,8 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from multirotor.Algorithm.drones_config import DronesConfig
@@ -66,6 +68,77 @@ class DronesConfigFacadeTests(unittest.TestCase):
         saved_system = json.loads((self.root / "system_config.json").read_text(encoding="utf-8"))
         self.assertTrue(saved_training["training"]["dqn"]["use_all_drones"])
         self.assertTrue(saved_system["drones"]["UAV1"]["isCrazyflieMirror"])
+
+    def test_mixed_legacy_shape_only_persists_training_block_to_drones_config_file(self):
+        (self.root / "drones_config.json").write_text(
+            json.dumps(
+                {
+                    "drones": {
+                        "STALE_DRONE": {"enabled": False, "type": "real"},
+                    },
+                    "training": {
+                        "dqn": {"use_all_drones": False, "drone_list": ["UAV1"]},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        config = DronesConfig(
+            config_file=str(self.root / "drones_config.json"),
+            system_config_file=str(self.root / "system_config.json"),
+        )
+        config.get_drone_info("UAV1")["isCrazyflieMirror"] = True
+        config.save_config()
+
+        saved_training = json.loads((self.root / "drones_config.json").read_text(encoding="utf-8"))
+        saved_system = json.loads((self.root / "system_config.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(saved_training.keys()), {"training"})
+        self.assertEqual(saved_training["training"]["dqn"]["drone_list"], ["UAV1"])
+        self.assertTrue(saved_system["drones"]["UAV1"]["isCrazyflieMirror"])
+
+    def test_get_drone_type_defaults_to_virtual_when_type_is_missing(self):
+        config = DronesConfig(
+            config_file=str(self.root / "drones_config.json"),
+            system_config_file=str(self.root / "system_config.json"),
+        )
+        config.system_config.config["drones"]["UAV_NO_TYPE"] = {"enabled": True}
+
+        self.assertEqual(config.get_drone_type("UAV_NO_TYPE"), "virtual")
+
+    def test_get_training_drones_prints_warnings_for_missing_and_disabled(self):
+        (self.root / "drones_config.json").write_text(
+            json.dumps(
+                {
+                    "training": {
+                        "dqn": {
+                            "use_all_drones": False,
+                            "drone_list": ["UAV1", "UAV2", "UAV_MISSING"],
+                        }
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        config = DronesConfig(
+            config_file=str(self.root / "drones_config.json"),
+            system_config_file=str(self.root / "system_config.json"),
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            training_drones = config.get_training_drones("dqn")
+
+        self.assertEqual(training_drones, ["UAV1"])
+        self.assertIn("Warning: drone UAV2 is disabled and will be skipped", output.getvalue())
+        self.assertIn(
+            "Warning: drone UAV_MISSING is not present in drones_config.json",
+            output.getvalue(),
+        )
 
 
 if __name__ == "__main__":

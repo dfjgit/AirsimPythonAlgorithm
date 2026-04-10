@@ -19,9 +19,8 @@ class DronesConfig:
             raise FileNotFoundError(f"Drone training config file not found: {self.config_file}")
         with self.config_file.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        if "training" in payload:
-            return payload
-        return {"training": payload.get("training", {})}
+        training = payload.get("training", {}) if isinstance(payload, dict) else {}
+        return {"training": training if isinstance(training, dict) else {}}
 
     def get_all_drones(self) -> List[str]:
         return self.system_config.get_all_drones()
@@ -37,7 +36,7 @@ class DronesConfig:
 
     def get_drone_type(self, drone_name: str) -> str:
         info = self.get_drone_info(drone_name)
-        return info.get("type", "unknown") if info else "unknown"
+        return info.get("type", "virtual") if info else "unknown"
 
     def is_enabled(self, drone_name: str) -> bool:
         info = self.get_drone_info(drone_name)
@@ -48,10 +47,16 @@ class DronesConfig:
         use_all = training_config.get("use_all_drones", False)
         if use_all:
             return self.get_enabled_drones()
+        all_drones = set(self.get_all_drones())
         result: List[str] = []
         for drone in training_config.get("drone_list", []):
-            if drone in self.get_all_drones() and self.is_enabled(drone):
-                result.append(drone)
+            if drone in all_drones:
+                if self.is_enabled(drone):
+                    result.append(drone)
+                else:
+                    print(f"Warning: drone {drone} is disabled and will be skipped")
+            else:
+                print(f"Warning: drone {drone} is not present in drones_config.json")
         return result
 
     def get_drones_dict(self) -> dict:
@@ -59,6 +64,6 @@ class DronesConfig:
 
     def save_config(self) -> None:
         with self.config_file.open("w", encoding="utf-8") as handle:
-            json.dump(self.config, handle, indent=2, ensure_ascii=False)
+            json.dump({"training": self.config.get("training", {})}, handle, indent=2, ensure_ascii=False)
         with self.system_config.config_file.open("w", encoding="utf-8") as handle:
             json.dump(self.system_config.config, handle, indent=2, ensure_ascii=False)
