@@ -57,7 +57,9 @@ class DronesConfig:
 
     def is_enabled(self, drone_name: str) -> bool:
         info = self.get_drone_info(drone_name)
-        return bool(info and info.get("enabled", True))
+        if info is None:
+            return False
+        return bool(info.get("enabled", True))
 
     def get_training_drones(self, algorithm: str = "dqn") -> List[str]:
         training_config = self.config.get("training", {}).get(algorithm, {})

@@ -140,6 +140,17 @@ class DronesConfigFacadeTests(unittest.TestCase):
             output.getvalue(),
         )
 
+    def test_empty_drone_entry_defaults_to_enabled_and_is_selected(self):
+        config = DronesConfig(
+            config_file=str(self.root / "drones_config.json"),
+            system_config_file=str(self.root / "system_config.json"),
+        )
+        config.system_config.config["drones"]["UAV_EMPTY"] = {}
+        config.config["training"]["dqn"] = {"use_all_drones": False, "drone_list": ["UAV_EMPTY"]}
+
+        self.assertTrue(config.is_enabled("UAV_EMPTY"))
+        self.assertEqual(config.get_training_drones("dqn"), ["UAV_EMPTY"])
+
     def test_config_file_override_without_system_config_uses_mixed_legacy_inventory_and_persistence(self):
         legacy_path = self.root / "legacy_override.json"
         legacy_path.write_text(
