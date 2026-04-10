@@ -136,9 +136,35 @@ class DronesConfigFacadeTests(unittest.TestCase):
         self.assertEqual(training_drones, ["UAV1"])
         self.assertIn("Warning: drone UAV2 is disabled and will be skipped", output.getvalue())
         self.assertIn(
-            "Warning: drone UAV_MISSING is not present in drones_config.json",
+            "Warning: drone UAV_MISSING is not present in shared system inventory config",
             output.getvalue(),
         )
+
+    def test_config_file_override_without_system_config_uses_mixed_legacy_inventory(self):
+        legacy_path = self.root / "legacy_override.json"
+        legacy_path.write_text(
+            json.dumps(
+                {
+                    "drones": {
+                        "LEGACY_ONLY_1": {"enabled": True, "type": "real", "isCrazyflieMirror": False},
+                        "LEGACY_ONLY_2": {"enabled": False, "type": "virtual", "isCrazyflieMirror": False},
+                    },
+                    "training": {
+                        "dqn": {"use_all_drones": False, "drone_list": ["LEGACY_ONLY_1"]},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        config = DronesConfig(config_file=str(legacy_path))
+
+        self.assertEqual(config.get_all_drones(), ["LEGACY_ONLY_1", "LEGACY_ONLY_2"])
+        self.assertEqual(config.get_enabled_drones(), ["LEGACY_ONLY_1"])
+        self.assertEqual(config.get_training_drones("dqn"), ["LEGACY_ONLY_1"])
+        self.assertEqual(config.get_drone_info("LEGACY_ONLY_1")["type"], "real")
 
 
 if __name__ == "__main__":

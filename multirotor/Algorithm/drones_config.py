@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,14 +12,26 @@ class DronesConfig:
     def __init__(self, config_file: Optional[str] = None, system_config_file: Optional[str] = None):
         base_dir = Path(__file__).resolve().parent.parent
         self.config_file = Path(config_file) if config_file else base_dir / "drones_config.json"
-        self.system_config = SystemConfig(config_file=system_config_file)
-        self.config = self._load_training_config()
+        payload = self._load_config_payload()
+        self.system_config = self._load_system_config(payload, system_config_file)
+        self.config = self._load_training_config(payload)
 
-    def _load_training_config(self) -> dict:
+    def _load_config_payload(self) -> dict:
         if not self.config_file.exists():
             raise FileNotFoundError(f"Drone training config file not found: {self.config_file}")
         with self.config_file.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+
+    def _load_system_config(self, payload: dict, system_config_file: Optional[str]) -> SystemConfig:
+        system_config = SystemConfig(config_file=system_config_file)
+        if system_config_file is None:
+            legacy_drones = payload.get("drones")
+            if isinstance(legacy_drones, dict):
+                system_config.config["drones"] = deepcopy(legacy_drones)
+        return system_config
+
+    def _load_training_config(self, payload: dict) -> dict:
         training = payload.get("training", {}) if isinstance(payload, dict) else {}
         return {"training": training if isinstance(training, dict) else {}}
 
@@ -56,7 +69,7 @@ class DronesConfig:
                 else:
                     print(f"Warning: drone {drone} is disabled and will be skipped")
             else:
-                print(f"Warning: drone {drone} is not present in drones_config.json")
+                print(f"Warning: drone {drone} is not present in shared system inventory config")
         return result
 
     def get_drones_dict(self) -> dict:
