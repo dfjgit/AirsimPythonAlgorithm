@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 from typing import Dict, Any, Optional
 from .Vector3 import Vector3
@@ -123,7 +124,19 @@ class ScannerConfigData:
         self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 60.0)
 
         # 解析统一环境配置
-        self.env_config = json_data.get('env_config', self.env_config)
+        env_config = json_data.get('env_config')
+        if isinstance(env_config, dict):
+            self._merge_env_config(env_config)
+
+    def _merge_env_config(self, env_config: Dict[str, Any]) -> None:
+        """合并环境规则，保留未显式覆盖的默认奖励与阈值。"""
+        merged_env_config = deepcopy(self.env_config)
+        for key, value in env_config.items():
+            if isinstance(value, dict) and isinstance(merged_env_config.get(key), dict):
+                merged_env_config[key].update(deepcopy(value))
+            else:
+                merged_env_config[key] = deepcopy(value)
+        self.env_config = merged_env_config
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:

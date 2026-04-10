@@ -28,6 +28,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from configs.crazyflie_reward_config import CrazyflieRewardConfig
+from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
 from multirotor.Algorithm.Vector3 import Vector3
 from multirotor.Crazyswarm.crazyflie_logging_data import CrazyflieLoggingData
 
@@ -372,22 +373,10 @@ class CrazyflieLogEnv(gym.Env):
     def _apply_unified_config(self):
         """应用统一环境配置，确保奖励系数一致性（方案 B）"""
         unified_env_cfg = None
-        # 离线环境通常没有 server，直接读本地 apf_algorithm_config.json
         try:
-            config_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..",
-                "..",
-                "apf_algorithm_config.json",
-            )
-            if os.path.exists(config_path):
-                import json
-
-                with open(config_path, "r", encoding="utf-8") as f:
-                    full_cfg = json.load(f)
-                    unified_env_cfg = full_cfg.get("env_config")
+            unified_env_cfg = load_environment_rules(SystemConfig())
         except Exception as e:
-            print(f"[Warning] 离线环境加载本地统一配置失败: {e}")
+            print(f"[Warning] 离线环境加载共享环境配置失败: {e}")
 
         if unified_env_cfg:
             print(
@@ -691,23 +680,11 @@ class CrazyflieOnlineWeightEnv(gym.Env):
         ):
             unified_env_cfg = self.server.config_data.env_config
 
-        # 2. 如果没有 server，尝试从本地 apf_algorithm_config.json 加载
         if unified_env_cfg is None:
             try:
-                config_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..",
-                    "..",
-                    "apf_algorithm_config.json",
-                )
-                if os.path.exists(config_path):
-                    import json
-
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        full_cfg = json.load(f)
-                        unified_env_cfg = full_cfg.get("env_config")
+                unified_env_cfg = load_environment_rules(SystemConfig())
             except Exception as e:
-                print(f"[Warning] 加载本地统一配置失败: {e}")
+                print(f"[Warning] 加载共享环境配置失败: {e}")
 
         if unified_env_cfg:
             print(

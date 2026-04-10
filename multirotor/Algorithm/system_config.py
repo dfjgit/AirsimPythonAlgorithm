@@ -89,5 +89,35 @@ class SystemConfig:
         return deepcopy(self.config.get("environment", {}))
 
 
+def overlay_environment_rules(scanner_config: Any, environment_rules: Optional[Dict[str, Any]]) -> Any:
+    """Overlay shared termination/battery rules without replacing scanner reward defaults."""
+    if not environment_rules:
+        return scanner_config
+
+    current_env_config = getattr(scanner_config, "env_config", {})
+    if not isinstance(current_env_config, dict):
+        current_env_config = {}
+
+    merged_env_config = deepcopy(current_env_config)
+    base_rewards = deepcopy(merged_env_config.get("base_rewards"))
+
+    for section_name in ("termination", "battery"):
+        section_rules = environment_rules.get(section_name)
+        if not isinstance(section_rules, dict):
+            continue
+        section_config = merged_env_config.get(section_name, {})
+        if not isinstance(section_config, dict):
+            section_config = {}
+        merged_section = deepcopy(section_config)
+        merged_section.update(deepcopy(section_rules))
+        merged_env_config[section_name] = merged_section
+
+    if base_rewards is not None:
+        merged_env_config["base_rewards"] = base_rewards
+
+    scanner_config.env_config = merged_env_config
+    return scanner_config
+
+
 def load_environment_rules(source: SystemConfig) -> Dict[str, Any]:
     return source.get_environment_rules()

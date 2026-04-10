@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from Algorithm.battery_data import BatteryStatus
+from Algorithm.system_config import SystemConfig, load_environment_rules
 
 # 配置日志
 logger = logging.getLogger("MovementEnv")
@@ -133,12 +134,7 @@ def _apply_shared_unified_config(server, config, fallback_term_cfg):
         unified_env_cfg = server.config_data.env_config
     else:
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
-            if os.path.exists(scanner_cfg_path):
-                with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    unified_env_cfg = data.get('env_config')
+            unified_env_cfg = load_environment_rules(SystemConfig())
         except Exception as e:
             logger.warning(f"无法加载统一环境配置: {e}")
 

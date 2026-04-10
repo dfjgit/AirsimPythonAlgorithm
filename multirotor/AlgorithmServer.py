@@ -26,6 +26,7 @@ from AirsimServer.unity_socket_server import UnitySocketServer
 from Algorithm.scanner_algorithm import ScannerAlgorithm
 from Algorithm.scanner_config_data import ScannerConfigData
 from Algorithm.scanner_runtime_data import ScannerRuntimeData
+from Algorithm.system_config import SystemConfig, overlay_environment_rules
 from Algorithm.HexGridDataModel import HexGridDataModel
 from Algorithm.battery_data import (
     BatteryManager,
@@ -319,7 +320,13 @@ class MultiDroneAlgorithmServer:
         """加载并解析配置文件"""
         try:
             logger.info(f"加载配置文件: {self.config_path}")
-            return ScannerConfigData(self.config_path)
+            config_data = ScannerConfigData(self.config_path)
+            self.system_config = SystemConfig(legacy_apf_file=self.config_path)
+            overlay_environment_rules(
+                config_data,
+                self.system_config.get_environment_rules(),
+            )
+            return config_data
         except Exception as e:
             logger.error(f"配置文件加载失败: {str(e)}")
             raise

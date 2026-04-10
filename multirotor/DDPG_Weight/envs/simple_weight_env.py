@@ -13,14 +13,17 @@ from collections import deque
 
 try:
     from multirotor.Algorithm.battery_data import BatteryStatus
+    from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
 except ImportError:
     try:
         from Algorithm.battery_data import BatteryStatus
+        from Algorithm.system_config import SystemConfig, load_environment_rules
     except ImportError:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from multirotor.Algorithm.battery_data import BatteryStatus
+        from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
 
 try:
     from configs.crazyflie_reward_config import CrazyflieRewardConfig
@@ -269,33 +272,17 @@ class SimpleWeightEnv(gym.Env):
         """应用统一环境配置，确保物理规则一致性（方案 B）"""
         unified_env_cfg = None
 
-        # 1. 优先从 server 获取 (AlgorithmServer 持有最新的 ScannerConfigData)
         if (
             self.server
             and hasattr(self.server, "config_data")
             and hasattr(self.server.config_data, "env_config")
         ):
             unified_env_cfg = self.server.config_data.env_config
-
-        # 2. 如果没有 server，尝试从本地 apf_algorithm_config.json 加载
-        if unified_env_cfg is None:
+        else:
             try:
-                # 寻找根目录下的 apf_algorithm_config.json
-                # 当前文件在 multirotor/DDPG_Weight/envs/，根目录在 multirotor/
-                config_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "..",
-                    "..",
-                    "apf_algorithm_config.json",
-                )
-                if os.path.exists(config_path):
-                    import json
-
-                    with open(config_path, "r", encoding="utf-8-sig") as f:
-                        full_cfg = json.load(f)
-                        unified_env_cfg = full_cfg.get("env_config")
+                unified_env_cfg = load_environment_rules(SystemConfig())
             except Exception as e:
-                print(f"[Warning] 加载本地统一配置失败: {e}")
+                print(f"[Warning] 加载共享环境配置失败: {e}")
 
         if unified_env_cfg:
             print(
