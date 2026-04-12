@@ -54,15 +54,15 @@ class UnifiedTrainingAnalyzer:
 
     METRIC_NAME_MAP = {
         "reward": "累计奖励",
-        "scan_efficiency": "扫描效率 (Cell/Step)",
+        "scan_efficiency": "扫描效率（格/步）",
         "collision_rate": "碰撞终止占比(%)",
         "collision_count": "碰撞次数",
         "scan_ratio": "扫描完成度(%)",
         "global_avg_entropy": "全局平均熵值",
-        "episode": "训练轮次 (Episode)",
-        "elapsed_time": "运行时间 (秒)",
+        "episode": "训练轮次",
+        "elapsed_time": "运行时间（秒）",
         "window_episode": "窗口内训练轮次",
-        "window_elapsed_time": "窗口内运行时间(秒)",
+        "window_elapsed_time": "窗口内运行时间（秒）",
     }
 
     COMPARABILITY_MAP = {

@@ -16,11 +16,16 @@
 - `multirotor/DQN_Movement/`：DQN 位移控制训练
 - `multirotor/Visualization/`：统一可视化模块
 
-## 当前版本重点修复
+## 当前版本重点
 
-本版本重点处理了训练稳定性问题，尤其是“重置后状态不完整”和“训练统计失真”两类问题。
+本版本重点完成了配置体系整合与训练稳定性修复。
 
-已完成的关键修复：
+配置整合：
+- 将 15 个配置文件精简为 5 个，统一入口为 `system_config.json`
+- 修正 ScannerConfigData 11 处默认值不一致问题
+- 消除电池阈值、终止条件、无人机列表等参数的重复定义
+
+已完成的训练稳定性修复：
 - 修复多次重置后无人机能移动但不再采集网格熵值的问题
 - 修复重置后仅无人机回原位、Leader 或网格状态残留的问题
 - 统一 DDPG、DQN、HRL 环境的完整重置逻辑，保证不同算法之间对比公平
@@ -84,17 +89,20 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 
 ## 关键配置文件
 
-常用配置：
-- `multirotor/apf_algorithm_config.json`：APF 参数、统一环境参数
-- `multirotor/drones_config.json`：无人机配置
-- `multirotor/DDPG_Weight/configs/unified_train_config.json`：DDPG 训练统一配置入口
-- `multirotor/DDPG_Weight/configs/legacy/`：旧版 DDPG 训练配置样例归档
-- `multirotor/DQN_Movement/configs/movement_dqn_config.json`：DQN Movement 配置
+采用统一配置架构，所有系统级配置集中在一个文件：
+
+| 配置文件 | 职责 |
+|---|---|
+| `multirotor/system_config.json` | 统一入口：无人机定义、APF 算法参数、环境规则、训练选择 |
+| `multirotor/DDPG_Weight/configs/unified_train_config.json` | DDPG 训练：4 种模式（虚拟/在线/离线日志/混合） |
+| `multirotor/DDPG_Weight/configs/crazyflie_reward_config.json` | Crazyflie 奖励配置 |
+| `multirotor/DQN_Movement/configs/movement_dqn_config.json` | DQN Movement 专属参数 |
+| `multirotor/DQN_Movement/configs/hierarchical_dqn_config.json` | 分层 DQN 专属参数 |
 
 当前版本建议：
-- 新一轮训练优先使用 `unified_train_config.json`
-- 算法对比时保持相同重置流程
-- 旧版单场景配置样例已归档到 `multirotor/DDPG_Weight/configs/legacy/`
+- 系统级参数修改只编辑 `system_config.json`
+- DQN 配置中的 termination/battery 运行时自动从 `system_config.json` 继承
+- 新一轮 DDPG 训练使用 `unified_train_config.json`
 
 ## 训练与日志
 
@@ -144,8 +152,7 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 ```text
 multirotor/
   AlgorithmServer.py                 主服务入口
-  apf_algorithm_config.json          APF 与统一环境配置
-  drones_config.json                 无人机配置
+  system_config.json                 统一系统配置
   AirsimServer/                      AirSim 与 Unity 通信层
   Algorithm/                         APF、网格、数据采集等算法模块
   DDPG_Weight/                       DDPG 权重训练模块
@@ -155,7 +162,8 @@ multirotor/
 
 ## 说明
 
-当前仓库中的核心修复已经覆盖：
+当前仓库已完成配置整合，核心模块覆盖：
+- 统一配置体系（system_config.json 单一入口）
 - 重置流程
 - 熵值采集
 - 网格更新
@@ -164,6 +172,7 @@ multirotor/
 - 训练诊断
 
 如果后续继续扩展算法或做实验对比，建议优先保证：
+- 系统参数统一在 `system_config.json` 中管理
 - 重置流程统一
 - 统计口径统一
 - 日志输出稳定
