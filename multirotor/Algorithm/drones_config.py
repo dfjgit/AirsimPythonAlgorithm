@@ -8,20 +8,12 @@ from .system_config import SystemConfig
 
 
 class DronesConfig:
-    def __init__(self, config_file: Optional[str] = None, system_config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None):
         base_dir = Path(__file__).resolve().parent.parent
-        self.config_file = Path(config_file) if config_file else base_dir / "drones_config.json"
-        self.system_config = SystemConfig(config_file=system_config_file)
-        self.config = self._load_training_config()
-
-    def _load_training_config(self) -> dict:
-        if not self.config_file.exists():
-            raise FileNotFoundError(f"Drone training config file not found: {self.config_file}")
-        with self.config_file.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        if "training" in payload:
-            return payload
-        return {"training": payload.get("training", {})}
+        self.config_file = Path(config_file) if config_file else base_dir / "system_config.json"
+        self.system_config = SystemConfig(config_file=str(self.config_file))
+        # 直接使用 system_config.config 作为内部数据，避免两个独立副本不同步
+        self.config = self.system_config.config
 
     def get_all_drones(self) -> List[str]:
         return self.system_config.get_all_drones()
@@ -55,10 +47,9 @@ class DronesConfig:
         return result
 
     def get_drones_dict(self) -> dict:
-        return {"drones": self.system_config.config.get("drones", {})}
+        return {"drones": self.config.get("drones", {})}
 
     def save_config(self) -> None:
+        """保存配置到 system_config.json（统一单文件）"""
         with self.config_file.open("w", encoding="utf-8") as handle:
             json.dump(self.config, handle, indent=2, ensure_ascii=False)
-        with self.system_config.config_file.open("w", encoding="utf-8") as handle:
-            json.dump(self.system_config.config, handle, indent=2, ensure_ascii=False)

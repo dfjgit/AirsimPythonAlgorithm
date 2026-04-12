@@ -82,7 +82,7 @@ class MultiDroneAlgorithmServer:
     ):
         """
         初始化服务器实例
-        :param config_file: 算法配置文件路径（默认使用apf_algorithm_config.json）
+        :param config_file: 算法配置文件路径（默认使用system_config.json）
         :param drone_names: 无人机名称列表（默认使用["UAV1", "UAV2", "UAV3"]）
         :param use_learned_weights: 是否使用学习的权重（DDPG模型预测，仅在control_mode='apf'时有效）
         :param model_path: DDPG模型路径（不含.zip后缀），如果为None则使用默认模型
@@ -304,13 +304,13 @@ class MultiDroneAlgorithmServer:
         self._init_reset_trace_logger()
 
     def _resolve_config_path(self, config_file: Optional[str]) -> str:
-        """解析配置文件路径，默认使用项目根目录下的apf_algorithm_config.json"""
+        """解析配置文件路径，默认使用项目根目录下的system_config.json"""
         if config_file:
             if os.path.exists(config_file):
                 return config_file
             logger.warning(f"指定的配置文件不存在: {config_file}，将使用默认配置")
 
-        default_path = Path(__file__).parent / "apf_algorithm_config.json"
+        default_path = Path(__file__).parent / "system_config.json"
         if not default_path.exists():
             raise FileNotFoundError(f"默认配置文件不存在: {default_path}")
         return str(default_path)

@@ -79,7 +79,7 @@ print("=" * 80)
 
 # 加载无人机配置
 drones_config = DronesConfig()
-print(f"  ✓ 加载 drones_config.json")
+print(f"  ✓ 加载 system_config.json")
 print(f"    - 所有无人机: {drones_config.get_all_drones()}")
 print(f"    - 启用的无人机: {drones_config.get_enabled_drones()}")
 
@@ -88,7 +88,7 @@ drone_names = drones_config.get_training_drones('dqn')
 print(f"  ✓ DQN训练使用的无人机: {drone_names}")
 
 if not drone_names:
-    print(f"  ✗ 错误: 没有可用的训练无人机，请检查 drones_config.json")
+    print(f"  ✗ 错误: 没有可用的训练无人机，请检查 system_config.json")
     sys.exit(1)
 
 # 显示无人机类型（虚拟/实体）
@@ -141,10 +141,10 @@ print(
     f"stage={stage_meta['stage_name']}, resume={stage_meta['is_resume']}"
 )
 
-# apf_algorithm_config.json 路径（AlgorithmServer需要）
-config_file = os.path.join(os.path.dirname(__file__), "..", "..", "apf_algorithm_config.json")
+# system_config.json 路径（AlgorithmServer需要）
+config_file = os.path.join(os.path.dirname(__file__), "..", "..", "system_config.json")
 if not os.path.exists(config_file):
-    print(f"  ✗ apf_algorithm_config.json 不存在: {config_file}")
+    print(f"  ✗ system_config.json 不存在: {config_file}")
     sys.exit(1)
 
 print("\n" + "=" * 80)

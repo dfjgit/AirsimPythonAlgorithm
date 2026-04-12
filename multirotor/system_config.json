@@ -4,6 +4,29 @@
     "UAV2": { "enabled": true, "type": "virtual", "isCrazyflieMirror": false },
     "UAV3": { "enabled": true, "type": "virtual", "isCrazyflieMirror": false }
   },
+  "training": {
+    "dqn": { "use_all_drones": true },
+    "ddpg": { "use_all_drones": true },
+    "hierarchical": { "use_all_drones": true }
+  },
+  "algorithm": {
+    "repulsionCoefficient": 2.0,
+    "entropyCoefficient": 2.0,
+    "distanceCoefficient": 2.0,
+    "leaderRangeCoefficient": 1.5,
+    "directionRetentionCoefficient": 0.5,
+    "groundRepulsionCoefficient": 2.0,
+    "updateInterval": 0.5,
+    "moveSpeed": 1.0,
+    "rotationSpeed": 120.0,
+    "scanRadius": 2,
+    "maxRepulsionDistance": 3.0,
+    "minSafeDistance": 1.0,
+    "avoidRevisits": true,
+    "targetSearchRange": 20.0,
+    "revisitCooldown": 10.0,
+    "altitude": 2.0
+  },
   "environment": {
     "termination": {
       "target_scan_ratio": 0.25,
@@ -17,6 +40,14 @@
       "low_threshold": 3.5,
       "optimal_min": 3.7,
       "optimal_max": 4.1
+    },
+    "base_rewards": {
+      "scan_reward": 10.0,
+      "out_of_range_penalty": -30.0,
+      "battery_low_penalty": -10.0,
+      "battery_optimal_reward": 2.0,
+      "collision_penalty": -50.0,
+      "step_penalty": -0.1
     }
   }
 }

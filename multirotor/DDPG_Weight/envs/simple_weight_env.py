@@ -277,23 +277,23 @@ class SimpleWeightEnv(gym.Env):
         ):
             unified_env_cfg = self.server.config_data.env_config
 
-        # 2. 如果没有 server，尝试从本地 apf_algorithm_config.json 加载
+        # 2. 如果没有 server，尝试从本地 system_config.json 加载
         if unified_env_cfg is None:
             try:
-                # 寻找根目录下的 apf_algorithm_config.json
+                # 寻找根目录下的 system_config.json
                 # 当前文件在 multirotor/DDPG_Weight/envs/，根目录在 multirotor/
                 config_path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "..",
                     "..",
-                    "apf_algorithm_config.json",
+                    "system_config.json",
                 )
                 if os.path.exists(config_path):
                     import json
 
                     with open(config_path, "r", encoding="utf-8-sig") as f:
                         full_cfg = json.load(f)
-                        unified_env_cfg = full_cfg.get("env_config")
+                        unified_env_cfg = full_cfg.get("environment")
             except Exception as e:
                 print(f"[Warning] 加载本地统一配置失败: {e}")
 

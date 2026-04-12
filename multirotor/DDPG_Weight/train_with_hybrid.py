@@ -11,7 +11,7 @@
     - 自动保存最佳模型和检查点
 
 虚实融合训练原理：
-    - 将drones_config.json中指定无人机的isCrazyflieMirror设置为true
+    - 将system_config.json中指定无人机的isCrazyflieMirror设置为true
     - 这些无人机将使用实体Crazyflie的状态数据（通过_crazyflie_get_state_for_prediction）
     - 其他无人机仍使用虚拟AirSim环境数据
     - 实现虚拟环境与实体机的融合训练
@@ -179,7 +179,7 @@ def _setup_hybrid_config(config_file: str, mirror_drones: list) -> str:
 
     drones_config = DronesConfig()
 
-    # 更新drones_config.json中的镜像设置
+    # 更新system_config.json中的镜像设置
     for drone_name in drones_config.get_all_drones():
         is_mirror = drone_name in mirror_drones
         drone_info = drones_config.get_drone_info(drone_name)
@@ -189,7 +189,7 @@ def _setup_hybrid_config(config_file: str, mirror_drones: list) -> str:
 
     # 保存更新后的配置
     drones_config.save_config()
-    print(f"   [S] 无人机配置已更新: drones_config.json")
+    print(f"   [S] 无人机配置已更新: system_config.json")
 
     # 创建临时配置文件
     temp_config_dir = os.path.join(os.path.dirname(__file__), "temp_configs")
@@ -614,7 +614,7 @@ def main():
         # 使用统一的算法配置文件
         original_config_file = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "apf_algorithm_config.json",
+            "system_config.json",
         )
         temp_config_file = _setup_hybrid_config(original_config_file, mirror_drones)
 

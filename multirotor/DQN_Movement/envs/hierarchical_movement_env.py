@@ -117,14 +117,14 @@ class HierarchicalMovementEnv(gym.Env):
         if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
             unified_env_cfg = self.server.config_data.env_config
         else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
+            # 2. 尝试从本地 system_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "system_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
+                        unified_env_cfg = data.get('environment')
             except Exception as e:
                 logger.warning(f"无法加载统一环境配置: {e}")
 
@@ -809,14 +809,14 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
         if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
             unified_env_cfg = self.server.config_data.env_config
         else:
-            # 2. 尝试从本地 apf_algorithm_config.json 加载
+            # 2. 尝试从本地 system_config.json 加载
             try:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
-                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "system_config.json")
                 if os.path.exists(scanner_cfg_path):
                     with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                        unified_env_cfg = data.get('env_config')
+                        unified_env_cfg = data.get('environment')
             except Exception as e:
                 logger.warning(f"无法加载统一环境配置: {e}")
 

@@ -134,11 +134,11 @@ def _apply_shared_unified_config(server, config, fallback_term_cfg):
     else:
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "apf_algorithm_config.json")
+            scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "system_config.json")
             if os.path.exists(scanner_cfg_path):
                 with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    unified_env_cfg = data.get('env_config')
+                    unified_env_cfg = data.get('environment')
         except Exception as e:
             logger.warning(f"无法加载统一环境配置: {e}")
 
