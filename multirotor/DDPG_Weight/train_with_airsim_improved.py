@@ -27,6 +27,7 @@ import time
 import signal
 import argparse
 import json
+import random
 import numpy as np
 import subprocess
 
@@ -183,6 +184,19 @@ def _get_config_value(cli_value, config: dict, key: str, default):
     if key in config:
         return config[key]
     return default
+
+
+def _apply_global_seed(seed: int | None) -> None:
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        torch.manual_seed(seed)
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
 
 
 def _save_final_weights(server, path: str) -> None:
@@ -715,11 +729,28 @@ def main():
         default=None,
         help="继续训练模型路径（不含.zip）；未指定时默认从头创建新模型",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="可选随机种子；未指定时保持当前随机行为。",
+    )
     args = parser.parse_args()
 
     # ========== 加载配置并解析参数 ==========
     # 优先级：命令行参数 > 配置文件 > 默认值
     config = _load_train_config(args.config)  # 加载JSON配置文件
+    env_seed = os.environ.get("TRAIN_SEED", "").strip()
+    config_seed = config.get("seed") if isinstance(config, dict) else None
+    if args.seed is not None:
+        train_seed = int(args.seed)
+    elif env_seed:
+        train_seed = int(env_seed)
+    elif config_seed not in (None, ""):
+        train_seed = int(config_seed)
+    else:
+        train_seed = None
+    _apply_global_seed(train_seed)
 
     # 解析训练参数
     drone_names = _get_config_value(None, config, "drone_names", DEFAULT_DRONE_NAMES)
@@ -840,6 +871,7 @@ def main():
         f"[Stage] 训练阶段: experiment={stage_meta['experiment_id']}, "
         f"stage={stage_meta['stage_name']}, resume={stage_meta['is_resume']}"
     )
+    print(f"[Seed] 随机种子: {train_seed if train_seed is not None else '未指定'}")
     print(f"[^] 预计episode数: ~{total_timesteps // 50}")
     print("=" * 60)
     print(f"\n[Light] 说明: 使用{len(drone_names)}台无人机协同训练")
@@ -871,6 +903,7 @@ def main():
             model_path=None,  # 训练模式：不加载模型
             enable_visualization=False,  # 使用训练专用可视化，禁用服务器自带可视化
             enable_data_collection_print=True,  # 训练模式：启用数据采集DEBUG打印
+            seed=train_seed,
             experiment_id=stage_meta["experiment_id"],
             stage_name=stage_meta["stage_name"],
             stage_index=stage_meta["stage_index"],
@@ -1099,6 +1132,8 @@ def main():
             print(f"[R] 显式指定继续训练模型: {zip_path}")
             try:
                 model = DDPG.load(continue_model_path, env=env)
+                if train_seed is not None and hasattr(model, "set_random_seed"):
+                    model.set_random_seed(train_seed)
                 reset_num_timesteps = False
                 print("[OK] 旧模型加载成功，将继续训练")
             except Exception as e:
@@ -1136,6 +1171,7 @@ def main():
                 gradient_steps=-1,  # 梯度步数（-1表示使用所有可用数据）
                 verbose=0,  # 详细程度（0=静默）
                 device="cpu",  # 使用CPU（可改为'cuda'使用GPU）
+                seed=train_seed,
             )
             print("[OK] DDPG模型初始化成功")
 

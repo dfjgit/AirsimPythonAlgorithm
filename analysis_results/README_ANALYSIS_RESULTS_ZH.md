@@ -17,6 +17,7 @@
 
 - [stage01_analysis_suite](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage01_analysis_suite)
 - [stage02_analysis_suite](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/stage02_analysis_suite)
+- [two_stage_analysis_suite](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/two_stage_analysis_suite)
 - [algorithm_comparison](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/algorithm_comparison)
 
 其中：
@@ -25,6 +26,8 @@
   用于保存从头训练阶段的单算法分析与横向对比分析。
 - `stage02_analysis_suite`  
   用于保存追训阶段的单算法分析与横向对比分析。
+- `two_stage_analysis_suite`  
+  用于将 `stage01` 与 `stage02` 串成统一的二阶段论文级分析证据链。
 - `algorithm_comparison`  
   主要保留历史生成的通用对比图、阶段性比较图和若干实验报告。
 
@@ -85,6 +88,32 @@
 
 - `DDPG+APF stage02` 更稳，更早进入平台
 - `纯 DQN stage02` 在最终扫描率、最终全局平均熵、按时间归一化扫描产出、按电量归一化扫描产出方面更优
+
+### 3.3 Two-Stage：二阶段总分析
+
+对应目录：
+
+- [two_stage_analysis_suite](/D:/Work/Python%20Project/airsim-python-algorithm/analysis_results/two_stage_analysis_suite)
+
+这一套新分析已经完成：
+
+- `DDPG+APF` 二阶段单算法分析
+- `纯 DQN` 二阶段单算法分析
+- 二阶段横向对比分析
+- 二阶段方法学说明
+- 二阶段论文图注模板
+- 二阶段统一指标汇总表
+
+这一套分析主要回答：
+
+- 两种算法在 `stage01 -> stage02` 中分别发生了什么
+- 哪种算法更像“平台维持”，哪种算法更像“阶段跃迁”
+- 哪些结论适合写进论文主结果，哪些只能作为过程解释
+
+当前较稳的二阶段结论是：
+
+- `DDPG+APF` 的优势更多体现在稳定性、动作组织性与步级效率
+- `纯 DQN` 的优势更多体现在最终覆盖率、更低熵值以及更高的归一化任务产出
 
 ## 4. 当前已经能支撑的论文内容
 
@@ -217,3 +246,36 @@
 ## 9. 一句话总结
 
 当前 `analysis_results` 目录已经足以支撑一篇“阶段性结果充分、方法学说明较完整”的论文实验章节；若要补足到更严谨的最终论文级结论，下一步最关键的是：**冻结模型统一评测 + 多随机种子重复实验**。
+
+## 四组论文实验新增目录
+
+本仓库现已支持新的四组论文实验分析目录：
+
+- `analysis_results/four_group_benchmark`
+- `analysis_results/family_comparisons/<family_id>`
+- `analysis_results/algorithm_specific/<algorithm_type>`
+
+推荐使用顺序：
+
+1. 先运行四组冻结评测，生成 `four_group_eval_episodes.csv`
+2. 再运行四组 benchmark 主分析
+3. 最后运行 family 分析
+
+对应入口：
+
+```bat
+scripts\Run_Four_Group_Benchmark.bat
+scripts\Analyze_Four_Group_Benchmark.bat
+scripts\Analyze_Family_Comparisons.bat
+```
+
+四组 benchmark 主结果固定产物：
+
+- `four_group_eval_episodes.csv`
+- `four_group_eval_seed_summary.csv`
+- `four_group_summary.csv`
+- `scan_ratio_boxplot.png`
+- `entropy_boxplot.png`
+- `efficiency_bar.png`
+- `safety_bar.png`
+- `reset_reason_stacked_bar.png`

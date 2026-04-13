@@ -177,3 +177,55 @@ multirotor/
 - 统计口径统一
 - 日志输出稳定
 - 验证脚本可重复执行
+## Four-Group Benchmark Workflow
+
+The repository now includes a four-group benchmark workflow plus a registry-driven family comparison system.
+
+Key files:
+
+- `multirotor/system_config.json`
+- `multirotor/benchmark_registry.json`
+- `multirotor/Algorithm/four_group_benchmark_runner.py`
+- `multirotor/Algorithm/four_group_benchmark_analyzer.py`
+- `multirotor/Algorithm/family_analysis.py`
+- `multirotor/Algorithm/benchmark_registry_helper.py`
+
+Recommended workflow:
+
+1. Run seeded DDPG and DQN training.
+2. Run the four-group frozen benchmark.
+3. Generate the four-group benchmark report.
+4. Generate family comparison reports.
+
+Seeded training examples:
+
+```powershell
+powershell -File .\scripts\Run_Paper_Training_Seeds.ps1 -Algorithm ddpg_apf -Seeds 20260413,20260414,20260415 -StageName stage01 -StageIndex 1
+powershell -File .\scripts\Run_Paper_Training_Seeds.ps1 -Algorithm pure_dqn -Seeds 20260413,20260414,20260415 -StageName stage01 -StageIndex 1
+```
+
+Four-group frozen benchmark:
+
+```bat
+scripts\Run_Four_Group_Benchmark.bat
+```
+
+Generate four-group report:
+
+```bat
+scripts\Analyze_Four_Group_Benchmark.bat
+```
+
+Generate family reports:
+
+```bat
+scripts\Analyze_Family_Comparisons.bat
+```
+
+Registry helper examples:
+
+```bash
+python multirotor/Algorithm/benchmark_registry_helper.py validate
+python multirotor/Algorithm/benchmark_registry_helper.py recommend --algorithm-type ppo_scan --control-mode dqn --trainable
+python multirotor/Algorithm/benchmark_registry_helper.py scaffold --algorithm-type ppo_scan --control-mode dqn --trainable
+```

@@ -2,7 +2,9 @@
 DQN训练脚本 - 与AirSim集成
 使用真实的AirSim环境训练无人机移动策略
 """
+import argparse
 import os
+import random
 import sys
 import numpy as np
 import json
@@ -35,6 +37,11 @@ os.makedirs(dqn_logs_root, exist_ok=True)
 os.makedirs(dqn_runtime_log_dir, exist_ok=True)
 os.makedirs(dqn_scan_log_dir, exist_ok=True)
 os.makedirs(dqn_model_dir, exist_ok=True)
+
+cli_parser = argparse.ArgumentParser(add_help=False)
+cli_parser.add_argument("--seed", type=int, default=None)
+cli_args, remaining_args = cli_parser.parse_known_args()
+sys.argv = [sys.argv[0]] + remaining_args
 
 print("=" * 80)
 print("DQN训练 - 无人机移动控制 (AirSim集成)")
@@ -116,6 +123,37 @@ def _env_int(name, default=None):
         return default
 
 
+def _apply_global_seed(seed):
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
+
+
+config_seed = dqn_config.get("training", {}).get("seed")
+if cli_args.seed is not None:
+    train_seed = int(cli_args.seed)
+else:
+    env_seed = _env_int("TRAIN_SEED")
+    train_seed = (
+        int(env_seed)
+        if env_seed is not None
+        else int(config_seed)
+        if config_seed not in (None, "")
+        else None
+    )
+_apply_global_seed(train_seed)
+print(f"  ✓ 随机种子: {train_seed if train_seed is not None else '未指定'}")
+
+
 pretrained_candidates = [
     os.path.join(dqn_model_dir, 'movement_dqn_airsim_final.zip'),
     os.path.join(dqn_model_dir, 'movement_dqn_final.zip'),
@@ -158,6 +196,7 @@ server = MultiDroneAlgorithmServer(
     drone_names=drone_names,
     use_learned_weights=False,
     control_mode='dqn',
+    seed=train_seed,
     enable_visualization=False,
     experiment_id=stage_meta['experiment_id'],
     stage_name=stage_meta['stage_name'],
@@ -319,6 +358,8 @@ if use_pretrained:
     print(f"  ✓ 找到预训练模型: {pretrained_model}")
     print(f"  加载预训练模型继续训练...")
     model = DQN.load(pretrained_model, env=env)
+    if train_seed is not None and hasattr(model, "set_random_seed"):
+        model.set_random_seed(train_seed)
     model.tensorboard_log = log_dir
     apply_resume_training_settings(model, dqn_config['training'])
     print(f"  ✓ 预训练模型加载成功")
@@ -345,7 +386,8 @@ else:
         exploration_final_eps=dqn_config['training']['exploration_final_eps'],
         policy_kwargs=dict(net_arch=dqn_config['model']['net_arch']),
         verbose=1,
-        tensorboard_log=log_dir
+        tensorboard_log=log_dir,
+        seed=train_seed,
     )
     print(f"  ✓ 新模型创建成功")
     print(f"  ✓ TensorBoard 日志: {log_dir}")

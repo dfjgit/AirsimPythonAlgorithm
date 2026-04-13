@@ -35,6 +35,7 @@ class ScannerConfigData:
 
     # 新增字段：统一环境配置（物理规则与RL解耦）
     env_config: Dict[str, Any]
+    paper_benchmark: Dict[str, Any]
 
     def __init__(self, config_file: str = None):
         # 设置默认值
@@ -97,6 +98,23 @@ class ScannerConfigData:
                 "step_penalty": -0.1
             }
         }
+        self.paper_benchmark = {
+            "seeds": [20260413, 20260414, 20260415],
+            "eval_episodes_per_seed": 10,
+            "termination": {
+                "target_scan_ratio": 0.25,
+                "max_collision_count": 6,
+                "max_elapsed_time_sec": 300.0,
+                "stagnation_timeout_sec": 30.0,
+                "out_of_range_reset_enabled": True,
+                "out_of_range_continuous_count": 12,
+            },
+            "random_apf": {
+                "weight_min": 0.5,
+                "weight_max": 5.0,
+                "sampling_mode": "uniform",
+            },
+        }
 
     def parse_json_data(self, json_data: Dict[str, Any]) -> None:
         """从JSON字典解析数据到对象属性"""
@@ -124,6 +142,7 @@ class ScannerConfigData:
 
         # 解析统一环境配置
         self.env_config = json_data.get('env_config', self.env_config)
+        self.paper_benchmark = json_data.get('paper_benchmark', self.paper_benchmark)
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:
@@ -173,7 +192,8 @@ class ScannerConfigData:
             # 新增字段
             'name': self.name,
             'hideFlags': self.hideFlags,
-            'env_config': self.env_config
+            'env_config': self.env_config,
+            'paper_benchmark': self.paper_benchmark
         }
 
     def to_json(self) -> str:
@@ -213,9 +233,13 @@ class ScannerConfigData:
         new_data = ScannerConfigData()
         # 深拷贝env_config（避免浅拷贝导致的引用问题）
         new_data.env_config = {k: v.copy() if isinstance(v, dict) else v for k, v in self.env_config.items()}
+        new_data.paper_benchmark = {
+            k: v.copy() if isinstance(v, dict) else list(v) if isinstance(v, list) else v
+            for k, v in self.paper_benchmark.items()
+        }
         # 拷贝其他属性
         new_data.__dict__.update({
-            k: v for k, v in self.__dict__.items() if k != 'env_config'
+            k: v for k, v in self.__dict__.items() if k not in {'env_config', 'paper_benchmark'}
         })
         return new_data
     
@@ -245,6 +269,7 @@ class ScannerConfigData:
             if 'algorithm' in data and 'environment' in data:
                 self.parse_json_data(data['algorithm'])
                 self.env_config = data.get('environment', self.env_config)
+                self.paper_benchmark = data.get('paper_benchmark', self.paper_benchmark)
             # 旧格式：apf_algorithm_config.json 直接包含 APF 参数和 env_config
             elif 'repulsionCoefficient' in data or 'env_config' in data:
                 self.parse_json_data(data)

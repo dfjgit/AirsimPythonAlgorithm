@@ -349,10 +349,13 @@ class SimpleWeightEnv(gym.Env):
                         setattr(self.reward_config, local_attr, val)
                 print(f"  • 奖励系数已对齐: Scan={self.reward_config.scan_reward}")
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """重置环境"""
         import time
         import sys
+
+        if seed is not None:
+            np.random.seed(int(seed))
 
         # Episode计数
         self.episode_count += 1

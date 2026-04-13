@@ -58,6 +58,13 @@ class DataCollector:
         self.stage_index = max(int(stage_index or 1), 1)
         self.is_resume = bool(is_resume)
         self.source_model = str(source_model or "").strip()
+        self.seed = ""
+        self.run_kind = "train"
+        self.primary_family = ""
+        self.family_memberships = ""
+        self.comparison_profiles = ""
+        self.is_trainable = ""
+        self.registry_version = ""
         
         # 外部数据记录
         self.external_data = {}
@@ -123,6 +130,33 @@ class DataCollector:
                 self.external_data.get("source_model", self.source_model)
             ).strip()
         return experiment_id, stage_name, stage_index, is_resume, source_model
+
+    def _get_benchmark_meta(self):
+        with self.external_data_lock:
+            seed = self.external_data.get("seed", self.seed)
+            run_kind = self.external_data.get("run_kind", self.run_kind)
+            primary_family = self.external_data.get(
+                "primary_family", self.primary_family
+            )
+            family_memberships = self.external_data.get(
+                "family_memberships", self.family_memberships
+            )
+            comparison_profiles = self.external_data.get(
+                "comparison_profiles", self.comparison_profiles
+            )
+            is_trainable = self.external_data.get("is_trainable", self.is_trainable)
+            registry_version = self.external_data.get(
+                "registry_version", self.registry_version
+            )
+        return (
+            seed,
+            run_kind,
+            primary_family,
+            family_memberships,
+            comparison_profiles,
+            is_trainable,
+            registry_version,
+        )
     
     def _init_csv_file(self, data_dir: Optional[str] = None):
         """初始化CSV文件并写入表头"""
@@ -164,7 +198,8 @@ class DataCollector:
                       'reset_reason', 'collision_count', 'collision_count_final', 'out_of_range_count', 'out_of_range_count_final', 'max_out_of_range_duration_sec', 'terminal_battery_voltage', 'success_flag', 'final_global_scan_ratio', 'max_global_scan_ratio', 'final_global_avg_entropy', 'min_global_avg_entropy',
                       'collision_object_name', 'collision_penetration_depth', 'collision_position', 'recent_trajectory',
                       'algorithm_type', 'env_type', 'control_mode',
-                      'experiment_id', 'stage_name', 'stage_index', 'is_resume', 'source_model']
+                      'experiment_id', 'stage_name', 'stage_index', 'is_resume', 'source_model',
+                      'seed', 'run_kind', 'primary_family', 'family_memberships', 'comparison_profiles', 'is_trainable', 'registry_version']
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
             self.training_header_written = True
@@ -320,6 +355,15 @@ class DataCollector:
                     env_type = self.external_data.get('env_type', '')
                     ctrl_mode = self.external_data.get('control_mode', '')
                 experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+                (
+                    seed,
+                    run_kind,
+                    primary_family,
+                    family_memberships,
+                    comparison_profiles,
+                    is_trainable,
+                    registry_version,
+                ) = self._get_benchmark_meta()
                 terminal_meta = self._consume_terminal_meta(self.last_episode)
                 scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
                 final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
@@ -432,6 +476,13 @@ class DataCollector:
                     int(stage_index),
                     int(bool(is_resume)),
                     source_model,
+                    seed,
+                    run_kind,
+                    primary_family,
+                    family_memberships,
+                    comparison_profiles,
+                    is_trainable,
+                    registry_version,
                 ]
                 self.training_csv_writer.writerow(training_row)
                 self.training_csv_file.flush()
@@ -706,6 +757,13 @@ class DataCollector:
                         'stage_index',
                         'is_resume',
                         'source_model',
+                        'seed',
+                        'run_kind',
+                        'primary_family',
+                        'family_memberships',
+                        'comparison_profiles',
+                        'is_trainable',
+                        'registry_version',
                     ]
                     for drone_name in self.drone_names_list:
                         header.append(f'{drone_name}_action')
@@ -771,6 +829,15 @@ class DataCollector:
                         recent_trajectory = self.external_data.get('recent_trajectory', '')
 
                     experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+                    (
+                        seed,
+                        run_kind,
+                        primary_family,
+                        family_memberships,
+                        comparison_profiles,
+                        is_trainable,
+                        registry_version,
+                    ) = self._get_benchmark_meta()
 
                     # 获取当前episode（从training_data或external_data）
                     current_episode = training_data.get('episode', self.external_data.get('episode', -1))
@@ -880,6 +947,13 @@ class DataCollector:
                             int(stage_index),
                             int(bool(is_resume)),
                             source_model,
+                            seed,
+                            run_kind,
+                            primary_family,
+                            family_memberships,
+                            comparison_profiles,
+                            is_trainable,
+                            registry_version,
                         ]
 
                         for drone_name in self.drone_names_list:
@@ -1001,6 +1075,15 @@ class DataCollector:
                                 collision_position = self.external_data.get('collision_position', '')
                                 recent_trajectory = self.external_data.get('recent_trajectory', '')
                             experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+                            (
+                                seed,
+                                run_kind,
+                                primary_family,
+                                family_memberships,
+                                comparison_profiles,
+                                is_trainable,
+                                registry_version,
+                            ) = self._get_benchmark_meta()
                             terminal_meta = self._consume_terminal_meta(self.last_episode)
                             scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
                             elapsed_time = time.time() - self.global_start_time
@@ -1109,7 +1192,14 @@ class DataCollector:
                                 stage_name,
                                 int(stage_index),
                                 int(bool(is_resume)),
-                                source_model
+                                source_model,
+                                seed,
+                                run_kind,
+                                primary_family,
+                                family_memberships,
+                                comparison_profiles,
+                                is_trainable,
+                                registry_version,
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()

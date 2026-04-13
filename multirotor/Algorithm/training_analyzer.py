@@ -21,6 +21,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .benchmark_registry import load_benchmark_registry, resolve_algorithm_registration
+except ImportError:
+    from benchmark_registry import load_benchmark_registry, resolve_algorithm_registration
+
+try:
     from .collision_analysis import collision_termination_rate_percent
 except ImportError:
     from collision_analysis import collision_termination_rate_percent
@@ -116,10 +121,19 @@ class UnifiedTrainingAnalyzer:
         "最低熵值": ("结果对比", "用于比较最终不确定性消减效果。"),
     }
 
-    def __init__(self, output_dir: str = "multirotor/DQN_Movement/logs/analysis_results"):
+    def __init__(
+        self,
+        output_dir: str = "multirotor/DQN_Movement/logs/analysis_results",
+        registry_path: str | None = None,
+    ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.runs = []
+        self.registry = None
+        try:
+            self.registry = load_benchmark_registry(registry_path) if registry_path else load_benchmark_registry()
+        except Exception as exc:
+            logger.warning("无法加载 benchmark registry，分析将不回填 family 元数据: %s", exc)
         self._setup_plotting_style()
 
     def _setup_plotting_style(self) -> None:
@@ -151,6 +165,7 @@ class UnifiedTrainingAnalyzer:
                     env = df["env_type"].iloc[0] if "env_type" in df.columns else "unknown"
                     data_type = "training" if "training" in csv_file.name else "scan"
                     normalized = self._normalize_metrics(df, data_type)
+                    resolved_meta = self._resolve_registry_meta(algo, env)
 
                     self.runs.append(
                         {
@@ -160,6 +175,7 @@ class UnifiedTrainingAnalyzer:
                             "env": env,
                             "data": normalized,
                             "type": data_type,
+                            **resolved_meta,
                             **self._extract_stage_meta(normalized, csv_file),
                         }
                     )
@@ -212,6 +228,31 @@ class UnifiedTrainingAnalyzer:
             "stage_index": stage_index,
             "is_resume": is_resume,
             "source_model": source_model,
+        }
+
+    def _resolve_registry_meta(self, algorithm_type: str, env_type: str) -> dict:
+        if self.registry is None:
+            return {
+                "primary_family": "",
+                "family_memberships": [],
+                "comparison_profiles": [],
+                "is_trainable": False,
+                "registry_version": "",
+            }
+        control_mode = "dqn" if str(env_type).strip().lower() == "movement" or "dqn" in str(algorithm_type).lower() else "apf"
+        resolved = resolve_algorithm_registration(
+            algorithm_type,
+            self.registry,
+            control_mode=control_mode,
+            apf_weight_mode="learned" if algorithm_type == "ddpg_apf" else "fixed",
+            is_trainable=algorithm_type in {"ddpg_apf", "pure_dqn", "hrl_dqn_apf"},
+        )
+        return {
+            "primary_family": resolved.primary_family,
+            "family_memberships": list(resolved.family_memberships),
+            "comparison_profiles": list(resolved.comparison_profiles),
+            "is_trainable": bool(resolved.is_trainable),
+            "registry_version": resolved.registry_version,
         }
 
     def _combine_stage_runs(self, runs: List[dict], data_type: str) -> dict:

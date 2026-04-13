@@ -40,6 +40,15 @@ from Algorithm.Vector3 import Vector3
 from Algorithm.data_collector import DataCollector
 from AirsimServer.data_pack import PackType
 from diagnostic_logger import get_diagnostic_logger, DroneDiagnosticLogger
+from Algorithm.apf_weight_mode import (
+    APF_WEIGHT_KEYS,
+    resolve_apf_weight_mode,
+    sample_random_episode_weights,
+)
+from Algorithm.benchmark_registry import (
+    load_benchmark_registry,
+    resolve_algorithm_registration,
+)
 from training_stats_schema import (
     build_default_training_stats,
     merge_training_stats,
@@ -73,6 +82,10 @@ class MultiDroneAlgorithmServer:
         enable_visualization: bool = True,
         enable_data_collection_print: bool = False,
         control_mode: str = "apf",
+        apf_weight_mode: Optional[str] = None,
+        seed: Optional[int] = None,
+        run_kind: str = "train",
+        registry_path: Optional[str] = None,
         max_episode_seconds: int = 300,
         experiment_id: str = "",
         stage_name: str = "",
@@ -95,12 +108,32 @@ class MultiDroneAlgorithmServer:
         # 无人机名称初始化
         self.drone_names = drone_names if drone_names else ["UAV1"]
         logger.info(f"初始化多无人机算法服务，控制无人机: {self.drone_names}")
+        resolved_control_mode = str(control_mode or "apf").strip().lower()
+        if resolved_control_mode not in ["apf", "dqn"]:
+            logger.warning(f"未知的控制模式: {control_mode}，使用默认APF模式")
+            resolved_control_mode = "apf"
+        self.control_mode = resolved_control_mode
 
         # 核心组件初始化
         self.drone_controller = DroneController()  # 无人机控制器
         self.unity_socket = UnitySocketServer()  # Unity通信Socket服务
         self.config_data = self._load_config()  # 算法配置数据
         logger.info(f"配置文件加载完成 {self.drone_names}")
+        self.seed = int(seed) if seed not in (None, "") else None
+        self.run_kind = str(run_kind or "train").strip() or "train"
+        self.registry_path = (
+            Path(registry_path)
+            if registry_path
+            else Path(__file__).resolve().parent / "benchmark_registry.json"
+        )
+        self._benchmark_registry = None
+        self._benchmark_registry_load_attempted = False
+        self.apf_weight_mode = resolve_apf_weight_mode(
+            self.control_mode,
+            use_learned_weights=use_learned_weights,
+            explicit_mode=apf_weight_mode,
+        )
+        self._apf_episode_index = -1
 
         # 数据存储结构（按无人机名称区分）
         self.unity_runtime_data: Dict[str, ScannerRuntimeData] = {
@@ -114,6 +147,12 @@ class MultiDroneAlgorithmServer:
         for name in self.drone_names:
             algo = ScannerAlgorithm(self.config_data)
             self.algorithms[name] = algo
+        self._fixed_apf_coefficients = (
+            self.algorithms[self.drone_names[0]].get_current_coefficients().copy()
+            if self.drone_names
+            else {}
+        )
+        self._current_random_apf_weights: Dict[str, float] = {}
         self.last_positions: Dict[str, Dict[str, float]] = {
             name: {} for name in self.drone_names
         }
@@ -189,7 +228,7 @@ class MultiDroneAlgorithmServer:
         self.verbose_runtime_logs = False
 
         # 数据采集系统（根据控制模式选择不同的数据目录）
-        if control_mode.lower() == "dqn":
+        if self.control_mode == "dqn":
             # DQN 模式：保存到 DQN_Movement/logs/dqn_scan_data
             dqn_data_dir = os.path.join(
                 os.path.dirname(__file__), "DQN_Movement", "logs", "dqn_scan_data"
@@ -224,6 +263,7 @@ class MultiDroneAlgorithmServer:
             is_resume=is_resume,
             source_model=source_model,
         )
+        self._set_benchmark_metadata_defaults()
 
         # 注册Unity数据接收回调
         timeout_env = os.environ.get("UNITY_CONNECT_TIMEOUT_SEC", "").strip()
@@ -249,12 +289,8 @@ class MultiDroneAlgorithmServer:
         else:
             logger.warning("[初始化] ⚠️ unity_socket为None")
 
-        # 控制模式：'apf' 或 'dqn'
-        self.control_mode = control_mode.lower()
-        if self.control_mode not in ["apf", "dqn"]:
-            logger.warning(f"未知的控制模式: {control_mode}，使用默认APF模式")
-            self.control_mode = "apf"
         logger.info(f"控制模式: {self.control_mode.upper()}")
+        logger.info(f"APF权重模式: {self.apf_weight_mode}")
 
         # DQN控制模式相关
         self.dqn_commands: Dict[str, Vector3] = {
@@ -272,7 +308,9 @@ class MultiDroneAlgorithmServer:
         self.dqn_command_lock = threading.Lock()  # DQN指令锁
 
         # DDPG权重预测（仅在APF模式下使用）
-        self.use_learned_weights = use_learned_weights and (self.control_mode == "apf")
+        self.use_learned_weights = self.apf_weight_mode == "learned" and (
+            self.control_mode == "apf"
+        )
         self.model_path = model_path  # 保存模型路径参数
         self.weight_model = None
         if self.use_learned_weights:
@@ -294,10 +332,11 @@ class MultiDroneAlgorithmServer:
         try:
             self.diagnostic_logger = get_diagnostic_logger()
             logger.info(
-                f"✅ 诊断日志已启用: {self.diagnostic_logger.get_log_file_path()}"
+                "Diagnostic log enabled: %s",
+                self.diagnostic_logger.get_log_file_path(),
             )
         except Exception as e:
-            logger.warning(f"⚠️ 诊断日志初始化失败: {e}")
+            logger.warning("Diagnostic logger init failed: %s", e)
             self.diagnostic_logger = None
 
         self._last_obstacle_log_time = 0
@@ -323,6 +362,72 @@ class MultiDroneAlgorithmServer:
         except Exception as e:
             logger.error(f"配置文件加载失败: {str(e)}")
             raise
+
+    def _load_benchmark_registry(self):
+        if self._benchmark_registry_load_attempted:
+            return self._benchmark_registry
+        self._benchmark_registry_load_attempted = True
+        try:
+            self._benchmark_registry = load_benchmark_registry(self.registry_path)
+        except Exception as exc:
+            logger.warning(f"无法加载 benchmark_registry.json: {exc}")
+            self._benchmark_registry = None
+        return self._benchmark_registry
+
+    def _default_is_trainable(self, algorithm_type: str) -> bool:
+        normalized_algorithm = str(algorithm_type or "").strip().lower()
+        if self.control_mode == "dqn":
+            return True
+        if self.apf_weight_mode == "learned":
+            return True
+        return any(token in normalized_algorithm for token in ("ddpg", "dqn", "ppo", "sac"))
+
+    def _set_benchmark_metadata_defaults(self) -> None:
+        if not self.data_collector:
+            return
+        self.data_collector.set_external_data("seed", "" if self.seed is None else self.seed)
+        self.data_collector.set_external_data("run_kind", self.run_kind)
+        self.data_collector.set_external_data("apf_weight_mode", self.apf_weight_mode)
+
+    def _apply_apf_coefficients(self, coefficients: Dict[str, float]) -> None:
+        if self.control_mode != "apf":
+            return
+        for algorithm in self.algorithms.values():
+            algorithm.set_coefficients(coefficients)
+
+    def prepare_apf_episode(self, episode_index: Optional[int] = None) -> Dict[str, float]:
+        if self.control_mode != "apf":
+            return {}
+
+        if episode_index is None:
+            episode_index = self._apf_episode_index
+        self._apf_episode_index = int(episode_index or 0)
+
+        if self.apf_weight_mode == "random_episode":
+            benchmark_cfg = getattr(self.config_data, "paper_benchmark", {}) or {}
+            random_cfg = benchmark_cfg.get("random_apf", {}) or {}
+            weight_min = float(random_cfg.get("weight_min", 0.5))
+            weight_max = float(random_cfg.get("weight_max", 5.0))
+            self._current_random_apf_weights = sample_random_episode_weights(
+                self.seed,
+                self._apf_episode_index,
+                weight_min,
+                weight_max,
+            )
+            self._apply_apf_coefficients(self._current_random_apf_weights)
+            if self.data_collector:
+                self.data_collector.set_external_data(
+                    "sampled_apf_weights",
+                    json.dumps(self._current_random_apf_weights, ensure_ascii=False),
+                )
+            return dict(self._current_random_apf_weights)
+
+        if self.apf_weight_mode == "fixed":
+            self._apply_apf_coefficients(self._fixed_apf_coefficients)
+
+        if self.data_collector:
+            self.data_collector.set_external_data("sampled_apf_weights", "")
+        return dict(self._fixed_apf_coefficients if self.apf_weight_mode == "fixed" else {})
 
     def _init_weight_predictor(self):
         """初始化权重预测器（DDPG模型）"""
@@ -532,7 +637,7 @@ class MultiDroneAlgorithmServer:
                 "episode_elapsed_time", episode_elapsed_time
             )
 
-    def reset_episode_timer(self):
+    def reset_episode_timer(self, episode_index: Optional[int] = None):
         """Reset per-episode timing stats without changing training behavior."""
         with self._training_stats_lock:
             previous_elapsed = float(
@@ -548,6 +653,13 @@ class MultiDroneAlgorithmServer:
                 self.current_training_stats
             )
 
+        if self.control_mode == "apf":
+            if episode_index is None:
+                self._apf_episode_index += 1
+            else:
+                self._apf_episode_index = max(int(episode_index), 0)
+            self.prepare_apf_episode(self._apf_episode_index)
+
     def set_experiment_meta(
         self, algorithm_type: str, env_type: str, control_mode: str
     ):
@@ -558,9 +670,53 @@ class MultiDroneAlgorithmServer:
         :param control_mode: 控制模式 (如 'dqn', 'apf')
         """
         if self.data_collector:
+            registry = self._load_benchmark_registry()
+            resolved = None
+            if registry is not None:
+                resolved = resolve_algorithm_registration(
+                    algorithm_type,
+                    registry,
+                    control_mode=control_mode,
+                    apf_weight_mode=self.apf_weight_mode,
+                    is_trainable=self._default_is_trainable(algorithm_type),
+                )
             self.data_collector.set_external_data("algorithm_type", algorithm_type)
             self.data_collector.set_external_data("env_type", env_type)
             self.data_collector.set_external_data("control_mode", control_mode)
+            self.data_collector.set_external_data("seed", "" if self.seed is None else self.seed)
+            self.data_collector.set_external_data("run_kind", self.run_kind)
+            if resolved is not None:
+                self.data_collector.set_external_data(
+                    "primary_family", resolved.primary_family
+                )
+                self.data_collector.set_external_data(
+                    "family_memberships", ";".join(resolved.family_memberships)
+                )
+                self.data_collector.set_external_data(
+                    "comparison_profiles", ";".join(resolved.comparison_profiles)
+                )
+                self.data_collector.set_external_data(
+                    "is_trainable", int(bool(resolved.is_trainable))
+                )
+                self.data_collector.set_external_data(
+                    "registry_version", resolved.registry_version
+                )
+                if resolved.is_fallback and resolved.recommended_family_memberships:
+                    logger.info(
+                        "算法 %s 未注册，运行时仅接入 global_benchmark；推荐 family: %s",
+                        algorithm_type,
+                        ", ".join(resolved.recommended_family_memberships),
+                    )
+            else:
+                self.data_collector.set_external_data("primary_family", "")
+                self.data_collector.set_external_data("family_memberships", "")
+                self.data_collector.set_external_data(
+                    "comparison_profiles", "global_benchmark"
+                )
+                self.data_collector.set_external_data(
+                    "is_trainable", int(bool(self._default_is_trainable(algorithm_type)))
+                )
+                self.data_collector.set_external_data("registry_version", "")
             logger.info(f"实验元数据已设置: {algorithm_type}/{env_type}/{control_mode}")
 
     def set_run_stage_meta(
@@ -1021,6 +1177,9 @@ class MultiDroneAlgorithmServer:
             self.running = True
             # 记录Episode开始时间
             self._episode_start_time = _time.time()
+            if self.control_mode == "apf":
+                self._apf_episode_index = 0
+                self.prepare_apf_episode(self._apf_episode_index)
             for drone_name in self.drone_names:
                 self.drone_threads[drone_name] = threading.Thread(
                     target=self._process_drone, args=(drone_name,), daemon=True
@@ -3195,6 +3354,19 @@ if __name__ == "__main__":
         default=None,
         help="DDPG模型路径（相对或绝对路径，不含.zip后缀）。如果不指定，将自动选择：best_model > weight_predictor_airsim > weight_predictor_simple",
     )
+    parser.add_argument(
+        "--apf-weight-mode",
+        type=str,
+        choices=["fixed", "random_episode", "learned"],
+        default=None,
+        help="APF权重模式。未指定时保持与 --use-learned-weights 的兼容映射。",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="可选随机种子；random_episode 模式会用 seed + episode_index 采样权重。",
+    )
     parser.add_argument("--drones", type=int, default=1, help="无人机数量（默认1）")
     parser.add_argument(
         "--no-visualization", action="store_true", help="禁用可视化（默认启用）"
@@ -3208,7 +3380,12 @@ if __name__ == "__main__":
         logger.info("=" * 60)
         logger.info(f"启动多无人机系统 - {args.drones}台无人机")
         logger.info(f"无人机列表: {drone_names}")
-        if args.use_learned_weights:
+        resolved_mode = resolve_apf_weight_mode(
+            "apf",
+            use_learned_weights=args.use_learned_weights,
+            explicit_mode=args.apf_weight_mode,
+        )
+        if resolved_mode == "learned":
             logger.info("模式: DDPG权重预测")
             if args.model_path:
                 logger.info(f"模型: {args.model_path}")
@@ -3216,6 +3393,9 @@ if __name__ == "__main__":
                 logger.info(
                     "模型: 自动选择（best_model > weight_predictor_airsim > weight_predictor_simple）"
                 )
+        elif resolved_mode == "random_episode":
+            logger.info("模式: Random APF（按 episode 采样）")
+            logger.info(f"随机种子: {args.seed if args.seed is not None else '未指定'}")
         else:
             logger.info("模式: 固定权重")
         logger.info(f"可视化: {'禁用' if args.no_visualization else '启用'}")
@@ -3225,6 +3405,8 @@ if __name__ == "__main__":
         server = MultiDroneAlgorithmServer(
             drone_names=drone_names,
             use_learned_weights=args.use_learned_weights,
+            apf_weight_mode=args.apf_weight_mode,
+            seed=args.seed,
             model_path=args.model_path,
             enable_visualization=not args.no_visualization,
         )

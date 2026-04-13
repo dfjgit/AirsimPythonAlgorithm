@@ -112,6 +112,34 @@ class SnapshotServerProxy:
         return self.battery_data
 
 
+def build_visualizer(mode: str, proxy):
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode == "runtime":
+        from multirotor.Visualization.runtime_visualizer import (
+            RuntimeVisualizer as _Vis,
+        )
+
+        return _Vis(server=proxy)
+    if normalized_mode == "dqn":
+        from multirotor.Visualization.dqn_movement_visualizer import (
+            DQNMovementTrainingVisualizer as _Vis,
+        )
+
+        return _Vis(env=None, server=proxy)
+    if normalized_mode == "hrl":
+        from multirotor.Visualization.hierarchical_training_visualizer import (
+            HierarchicalTrainingVisualizer as _Vis,
+        )
+
+        return _Vis(env=None, server=proxy)
+
+    from multirotor.Visualization.ddpg_training_visualizer import (
+        DDPGTrainingVisualizer as _Vis,
+    )
+
+    return _Vis(server=proxy, env=None)
+
+
 def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
     if not hasattr(proxy, "_last_verbose_snapshot_log_time"):
         proxy._last_verbose_snapshot_log_time = 0.0
@@ -302,30 +330,12 @@ def main():
         print(f"Failed to connect to IPC server at {args.host}:{args.port}: {e}")
         sys.exit(1)
 
-    # Import visualizer based on mode
-    if args.mode == "runtime":
-        from multirotor.Visualization.runtime_visualizer import (
-            RuntimeVisualizer as _Vis,
-        )
-    elif args.mode == "dqn":
-        from multirotor.Visualization.dqn_movement_visualizer import (
-            DQNMovementTrainingVisualizer as _Vis,
-        )
-    elif args.mode == "hrl":
-        from multirotor.Visualization.hierarchical_training_visualizer import (
-            HierarchicalTrainingVisualizer as _Vis,
-        )
-    else:
-        from multirotor.Visualization.ddpg_training_visualizer import (
-            DDPGTrainingVisualizer as _Vis,
-        )
-
     # Create proxy first (without visualizer reference)
     proxy = SnapshotServerProxy(visualizer=None)
     proxy.visualizer_mode = args.mode
 
     # Initialize visualizer with proxy
-    vis = _Vis(server=proxy, env=None)
+    vis = build_visualizer(args.mode, proxy)
     vis.render_fps = max(1, int(args.render_fps))
 
     # Now update proxy with the visualizer instance for clear_cache callback
