@@ -19,7 +19,7 @@ RECOMMENDATIONS = {"ddpg_apf": {"decision": "寤鸿缁", "reasons": ["r
 
 class PaperWorkflowOrchestratorTests(unittest.TestCase):
     def setUp(self):
-        workspace_base = Path.cwd().parents[1]
+        workspace_base = Path.cwd()
         self.root = workspace_base / f".tmp_paper_workflow_{uuid.uuid4().hex}"
         self.root.mkdir(parents=True, exist_ok=False)
 
