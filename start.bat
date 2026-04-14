@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 setlocal EnableExtensions
 
@@ -33,6 +33,7 @@ echo   [B] DDPG vs DQN 算法对比
 echo.
 echo === 论文实验工作流 ===
 echo   [M] 论文对比分析实验工作流（DDPG+APF vs 纯DQN）
+echo   [N] 虚实两阶段工作流 (Virtual-Real Two-Stage Workflow)
 echo.
 echo === 四组论文实验 ===
 echo   [G] 四组冻结评测 / Benchmark
@@ -51,7 +52,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A-L,M,R,E):
+set /p choice=请输入选项 (0-9,A-N,R,E):
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_ddpg
@@ -74,6 +75,7 @@ if /i "%choice%"=="J" goto analyze_family_comparisons
 if /i "%choice%"=="K" goto train_paper_ddpg_seeds
 if /i "%choice%"=="L" goto train_paper_dqn_seeds
 if /i "%choice%"=="M" goto comparison_workflow
+if /i "%choice%"=="N" goto virtual_real_two_stage_workflow
 if /i "%choice%"=="C" goto cleanup_menu
 if /i "%choice%"=="9" goto info
 if /i "%choice%"=="0" goto end
@@ -313,6 +315,24 @@ echo.
 powershell -ExecutionPolicy Bypass -File "scripts\Run_Paper_Training_Seeds.ps1" -Algorithm pure_dqn
 goto menu
 
+:comparison_workflow
+cls
+echo ============================================================
+echo 论文对比分析实验工作流
+echo ============================================================
+echo.
+call scripts\Run_Paper_Workflow.bat --workflow comparison
+goto menu
+
+:virtual_real_two_stage_workflow
+cls
+echo ============================================================
+echo 虚实两阶段工作流 (Virtual-Real Two-Stage Workflow)
+echo ============================================================
+echo.
+call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
+goto menu
+
 :cleanup_menu
 cls
 echo ============================================================
@@ -517,3 +537,4 @@ echo.
 timeout /t 2 >nul
 endlocal
 exit /b 0
+

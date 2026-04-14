@@ -229,3 +229,30 @@ python multirotor/Algorithm/benchmark_registry_helper.py validate
 python multirotor/Algorithm/benchmark_registry_helper.py recommend --algorithm-type ppo_scan --control-mode dqn --trainable
 python multirotor/Algorithm/benchmark_registry_helper.py scaffold --algorithm-type ppo_scan --control-mode dqn --trainable
 ```
+
+## Workflow Entry Points
+
+The batch launcher now exposes two workflow-oriented experiment entries:
+
+- `M` / comparison workflow
+  - Runs the stage01 comparison stack for `ddpg_apf` and `pure_dqn`
+  - Archives outputs under `analysis_results/workflows/comparison/...`
+  - Produces comparison recommendations for whether to continue to `stage02_finetune`
+- `N` / virtual-real two-stage workflow
+  - Runs `sim_pretrain -> real_weighted_refine`
+  - Supports `online` and `offline_logs` refine modes
+  - Archives outputs under `analysis_results/workflows/virtual_real_two_stage/...`
+
+The wrapper script is:
+
+```bat
+scripts\Run_Paper_Workflow.bat --help
+```
+
+Direct CLI examples:
+
+```bash
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow comparison --alias demo
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode online --alias demo
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode offline_logs --alias demo
+```
