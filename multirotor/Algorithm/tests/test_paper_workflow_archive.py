@@ -29,14 +29,20 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         logs_dir = self.root / "multirotor" / "DDPG_Weight" / "airsim_training_logs"
         models_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
-        (models_dir / "weight_predictor_airsim_20260414_153000.zip").write_text("final", encoding="utf-8")
-        (models_dir / "weight_predictor_airsim_20260414_153000.stage_meta.json").write_text("{}", encoding="utf-8")
-        (models_dir / "best_model_20260414_153001.zip").write_text("best", encoding="utf-8")
-        (logs_dir / "ddpg_training_demo_stage01_20260414_153000.csv").write_text("episode,reward\n1,2\n", encoding="utf-8")
+        final_model_name = "weight_predictor_airsim_20260414_153000.zip"
+        stage_meta_name = "weight_predictor_airsim_20260414_153000.stage_meta.json"
+        best_model_name = "best_model_20260414_153001.zip"
+        log_name = "ddpg_training_demo_stage01_20260414_153000.csv"
+        (models_dir / final_model_name).write_text("final", encoding="utf-8")
+        (models_dir / stage_meta_name).write_text("{}", encoding="utf-8")
+        (models_dir / best_model_name).write_text("best", encoding="utf-8")
+        (logs_dir / log_name).write_text("episode,reward\n1,2\n", encoding="utf-8")
         outputs = collect_ddpg_stage_outputs(self.root, stage_name="stage01")
         self.assertTrue(outputs["final_model"].name.endswith(".zip"))
         self.assertTrue(outputs["stage_meta"].name.endswith(".stage_meta.json"))
         self.assertIn("training_logs", outputs)
+        self.assertEqual(outputs["best_model"].name, best_model_name)
+        self.assertIn(logs_dir / log_name, outputs["training_logs"])
 
     def test_archive_directory_tree_copies_existing_tree(self):
         src = self.root / "src"
@@ -51,9 +57,17 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "exp-1"
         (workspace / "multirotor" / "DDPG_Weight" / "models").mkdir(parents=True, exist_ok=True)
         (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs").mkdir(parents=True, exist_ok=True)
-        (workspace / "multirotor" / "DDPG_Weight" / "models" / "weight_predictor_airsim_20260414_153000.zip").write_text("final", encoding="utf-8")
-        (workspace / "multirotor" / "DDPG_Weight" / "models" / "weight_predictor_airsim_20260414_153000.stage_meta.json").write_text("{}", encoding="utf-8")
-        (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs" / "ddpg_training_demo_stage01_20260414_153000.csv").write_text("episode,reward\n1,2\n", encoding="utf-8")
+        final_model_name = "weight_predictor_airsim_20260414_153000.zip"
+        stage_meta_name = "weight_predictor_airsim_20260414_153000.stage_meta.json"
+        best_model_name = "best_model_20260414_153001.zip"
+        log_name = "ddpg_training_demo_stage01_20260414_153000.csv"
+        (workspace / "multirotor" / "DDPG_Weight" / "models" / final_model_name).write_text("final", encoding="utf-8")
+        (workspace / "multirotor" / "DDPG_Weight" / "models" / stage_meta_name).write_text("{}", encoding="utf-8")
+        (workspace / "multirotor" / "DDPG_Weight" / "models" / best_model_name).write_text("best", encoding="utf-8")
+        (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs" / log_name).write_text("episode,reward\n1,2\n", encoding="utf-8")
         archive_comparison_stage_outputs(workspace, exp_root, algorithm="ddpg_apf", stage_bucket="stage01")
-        self.assertTrue((exp_root / "artifacts" / "stage01" / "ddpg_apf" / "models").exists())
-        self.assertTrue((exp_root / "artifacts" / "stage01" / "ddpg_apf" / "logs").exists())
+        artifact_root = exp_root / "artifacts" / "stage01" / "ddpg_apf"
+        self.assertTrue((artifact_root / "models" / final_model_name).exists())
+        self.assertTrue((artifact_root / "models" / best_model_name).exists())
+        self.assertTrue((artifact_root / "models" / stage_meta_name).exists())
+        self.assertTrue((artifact_root / "logs" / log_name).exists())
