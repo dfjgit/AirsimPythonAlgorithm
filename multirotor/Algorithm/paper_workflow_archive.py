@@ -33,13 +33,12 @@ def _extract_stage_token(log_path: Path, stage_name: str) -> str | None:
 
 
 def _choose_by_token(candidates: list[Path], token: str | None) -> Path | None:
-    if not candidates:
+    if not candidates or not token:
         return None
-    if token:
-        for candidate in candidates:
-            if token in candidate.name:
-                return candidate
-    return candidates[0]
+    for candidate in candidates:
+        if token in candidate.name:
+            return candidate
+    return None
 
 
 def _determine_stage_token(logs: list[Path], stage_name: str, reference_files: list[Path]) -> str | None:
@@ -60,6 +59,11 @@ def collect_ddpg_stage_outputs(project_root: Path, *, stage_name: str) -> dict:
     metas = _sorted_candidates(models_dir, "*.stage_meta.json")
     training_logs = _sorted_candidates(logs_dir, f"*{stage_name}*.csv")
     stage_token = _determine_stage_token(training_logs, stage_name, finals + metas + bests)
+    if stage_token:
+        filtered_logs = [
+            log for log in training_logs if stage_token in log.name
+        ]
+        training_logs = filtered_logs or training_logs
     return {
         "final_model": _choose_by_token(finals, stage_token),
         "best_model": _choose_by_token(bests, stage_token),

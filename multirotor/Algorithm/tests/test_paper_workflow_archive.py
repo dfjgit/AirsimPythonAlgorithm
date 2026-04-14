@@ -31,7 +31,7 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         logs_dir.mkdir(parents=True, exist_ok=True)
         final_model_name = "weight_predictor_airsim_20260414_153000.zip"
         stage_meta_name = "weight_predictor_airsim_20260414_153000.stage_meta.json"
-        best_model_name = "best_model_20260414_153001.zip"
+        best_model_name = "best_model_20260414_153000.zip"
         log_name = "ddpg_training_demo_stage01_20260414_153000.csv"
         (models_dir / final_model_name).write_text("final", encoding="utf-8")
         (models_dir / stage_meta_name).write_text("{}", encoding="utf-8")
@@ -69,15 +69,31 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         old_log.write_text("episode,reward\n1,2\n", encoding="utf-8")
         new_log = logs_dir / f"ddpg_training_demo_stage01_{stage_run}.csv"
         new_log.write_text("episode,reward\n3,4\n", encoding="utf-8")
-        timestamp = 1_706_000_000
-        os.utime(old_log, (timestamp, timestamp))
-        os.utime(new_log, (timestamp + 10, timestamp + 10))
         outputs = collect_ddpg_stage_outputs(self.root, stage_name="stage01")
         self.assertEqual(outputs["final_model"].name, final_stage)
         self.assertEqual(outputs["best_model"].name, best_stage)
         self.assertEqual(outputs["stage_meta"].name, stage_meta_stage)
-        self.assertEqual(outputs["training_logs"][0], new_log)
-        self.assertEqual(outputs["training_logs"][1], old_log)
+        self.assertEqual(outputs["training_logs"], [new_log])
+
+    def test_collect_ddpg_stage_outputs_skips_mismatched_best_model(self):
+        models_dir = self.root / "multirotor" / "DDPG_Weight" / "models"
+        logs_dir = self.root / "multirotor" / "DDPG_Weight" / "airsim_training_logs"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stage_token = "20260414_153050"
+        final_stage = f"weight_predictor_airsim_{stage_token}.zip"
+        stage_meta_stage = f"weight_predictor_airsim_{stage_token}.stage_meta.json"
+        best_stage = "best_model_20260414_153100.zip"
+        (models_dir / final_stage).write_text("stage final", encoding="utf-8")
+        (models_dir / stage_meta_stage).write_text("stage meta", encoding="utf-8")
+        (models_dir / best_stage).write_text("stage best", encoding="utf-8")
+        log_path = logs_dir / f"ddpg_training_demo_stage01_{stage_token}.csv"
+        log_path.write_text("episode,reward\n1,2\n", encoding="utf-8")
+        outputs = collect_ddpg_stage_outputs(self.root, stage_name="stage01")
+        self.assertEqual(outputs["final_model"].name, final_stage)
+        self.assertEqual(outputs["stage_meta"].name, stage_meta_stage)
+        self.assertIsNone(outputs["best_model"])
+        self.assertEqual(outputs["training_logs"], [log_path])
 
     def test_archive_directory_tree_copies_existing_tree(self):
         src = self.root / "src"
@@ -94,15 +110,18 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs").mkdir(parents=True, exist_ok=True)
         final_model_name = "weight_predictor_airsim_20260414_153000.zip"
         stage_meta_name = "weight_predictor_airsim_20260414_153000.stage_meta.json"
-        best_model_name = "best_model_20260414_153001.zip"
+        best_model_name = "best_model_20260414_153000.zip"
         log_name = "ddpg_training_demo_stage01_20260414_153000.csv"
         (workspace / "multirotor" / "DDPG_Weight" / "models" / final_model_name).write_text("final", encoding="utf-8")
         (workspace / "multirotor" / "DDPG_Weight" / "models" / stage_meta_name).write_text("{}", encoding="utf-8")
         (workspace / "multirotor" / "DDPG_Weight" / "models" / best_model_name).write_text("best", encoding="utf-8")
         (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs" / log_name).write_text("episode,reward\n1,2\n", encoding="utf-8")
+        old_log_name = "ddpg_training_demo_stage01_20260413_114500.csv"
+        (workspace / "multirotor" / "DDPG_Weight" / "airsim_training_logs" / old_log_name).write_text("episode,reward\n5,6\n", encoding="utf-8")
         archive_comparison_stage_outputs(workspace, exp_root, algorithm="ddpg_apf", stage_bucket="stage01")
         artifact_root = exp_root / "artifacts" / "stage01" / "ddpg_apf"
         self.assertTrue((artifact_root / "models" / final_model_name).exists())
         self.assertTrue((artifact_root / "models" / best_model_name).exists())
         self.assertTrue((artifact_root / "models" / stage_meta_name).exists())
         self.assertTrue((artifact_root / "logs" / log_name).exists())
+        self.assertFalse((artifact_root / "logs" / old_log_name).exists())
