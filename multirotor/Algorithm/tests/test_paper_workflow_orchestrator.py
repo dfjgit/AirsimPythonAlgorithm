@@ -34,6 +34,16 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
             recommendation_runner=recommendation_runner,
         )
 
+    def _create_two_stage_orchestrator(self, command_runner, archive_runner, analysis_runner, recommendation_runner):
+        return PaperWorkflowOrchestrator(
+            workspace_root=self.root,
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            recommendation_runner=None,
+            two_stage_recommendation_runner=recommendation_runner,
+            two_stage_analysis_runner=analysis_runner,
+        )
+
     def test_run_comparison_workflow_records_full_sequence_and_state(self):
         command_runner = Mock(return_value=0)
         archive_runner = Mock()
@@ -144,6 +154,206 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["current_phase"], "real_weighted_refine_decision")
         self.assertEqual(state["recommendations"]["decision"], "寤鸿缁х画瀹為淇")
 
+    def test_virtual_real_two_stage_online_runs_in_expected_order_with_archives(self):
+        command_runner = Mock(return_value=0)
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock(return_value={"summary_csv": self.root / "summary.csv"})
+        two_stage_recommendation_runner = Mock(return_value={"decision": "ok", "reasons": ["metric"]})
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="online-path")
+
+        orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        expected_commands = [
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root),
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"], cwd=self.root),
+        ]
+        self.assertEqual(command_runner.call_args_list, expected_commands)
+
+        expected_archives = [
+            call(self.root, exp_root, phase_bucket="sim_pretrain", refine_mode=""),
+            call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="online"),
+        ]
+        self.assertEqual(archive_runner.call_args_list, expected_archives)
+
+        two_stage_analysis_runner.assert_called_once_with(exp_root, refine_mode="online")
+        two_stage_recommendation_runner.assert_called_once_with(self.root / "summary.csv")
+
+    def test_virtual_real_two_stage_offline_logs_uses_expected_command_and_archive_args(self):
+        command_runner = Mock(return_value=0)
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock(return_value={"summary_csv": self.root / "summary.csv"})
+        two_stage_recommendation_runner = Mock(return_value={"decision": "ok", "reasons": ["logs"]})
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="offline-path")
+
+        orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="offline_logs")
+
+        expected_commands = [
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root),
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Logs.bat"], cwd=self.root),
+        ]
+        self.assertEqual(command_runner.call_args_list, expected_commands)
+
+        expected_archives = [
+            call(self.root, exp_root, phase_bucket="sim_pretrain", refine_mode=""),
+            call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="offline_logs"),
+        ]
+        self.assertEqual(archive_runner.call_args_list, expected_archives)
+
+        two_stage_analysis_runner.assert_called_once_with(exp_root, refine_mode="offline_logs")
+        two_stage_recommendation_runner.assert_called_once_with(self.root / "summary.csv")
+
+    def test_virtual_real_two_stage_rejects_invalid_refine_mode_before_stages(self):
+        command_runner = Mock()
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock()
+        two_stage_recommendation_runner = Mock()
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="invalid")
+
+        with self.assertRaises(ValueError):
+            orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="unsupported_mode")
+
+        command_runner.assert_not_called()
+        archive_runner.assert_not_called()
+        two_stage_analysis_runner.assert_not_called()
+        two_stage_recommendation_runner.assert_not_called()
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["current_phase"], "real_weighted_refine")
+        self.assertEqual(state["steps"]["real_weighted_refine"]["status"], "failed")
+
+    def test_virtual_real_two_stage_sim_pretrain_command_failure_marks_failed_state(self):
+        command_runner = Mock(side_effect=[1])
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock()
+        two_stage_recommendation_runner = Mock()
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="sim-fail")
+
+        with self.assertRaises(RuntimeError):
+            orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["current_phase"], "sim_pretrain")
+        self.assertEqual(state["steps"]["sim_pretrain"]["status"], "failed")
+        archive_runner.assert_not_called()
+        two_stage_analysis_runner.assert_not_called()
+        two_stage_recommendation_runner.assert_not_called()
+        self.assertEqual(command_runner.call_args_list, [call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root)])
+
+    def test_virtual_real_two_stage_real_refine_command_failure_marks_failed_state(self):
+        command_runner = Mock(side_effect=[0, 1])
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock()
+        two_stage_recommendation_runner = Mock()
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="refine-fail")
+
+        with self.assertRaises(RuntimeError):
+            orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["current_phase"], "real_weighted_refine")
+        self.assertEqual(state["steps"]["real_weighted_refine"]["status"], "failed")
+        two_stage_analysis_runner.assert_not_called()
+        two_stage_recommendation_runner.assert_not_called()
+        self.assertEqual(command_runner.call_args_list, [
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root),
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"], cwd=self.root),
+        ])
+        expected_archives = [
+            call(self.root, exp_root, phase_bucket="sim_pretrain", refine_mode=""),
+        ]
+        self.assertEqual(archive_runner.call_args_list, expected_archives)
+
+    def test_virtual_real_two_stage_analysis_failure_marks_failed_state(self):
+        command_runner = Mock(side_effect=[0, 0])
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock(side_effect=RuntimeError("analysis fail"))
+        two_stage_recommendation_runner = Mock()
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="analysis-fail")
+
+        with self.assertRaises(RuntimeError):
+            orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["current_phase"], "two_stage_analysis")
+        self.assertEqual(state["steps"]["two_stage_analysis"]["status"], "failed")
+        two_stage_recommendation_runner.assert_not_called()
+        expected_archives = [
+            call(self.root, exp_root, phase_bucket="sim_pretrain", refine_mode=""),
+            call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="online"),
+        ]
+        self.assertEqual(archive_runner.call_args_list, expected_archives)
+
+    def test_virtual_real_two_stage_recommendation_failure_marks_failed_state(self):
+        command_runner = Mock(side_effect=[0, 0])
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock(return_value={"summary_csv": self.root / "summary.csv"})
+        two_stage_recommendation_runner = Mock(side_effect=RuntimeError("no rec"))
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="recommendation-fail")
+
+        with self.assertRaises(RuntimeError):
+            orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["current_phase"], "real_weighted_refine_decision")
+        self.assertEqual(state["steps"]["real_weighted_refine_decision"]["status"], "failed")
+        expected_archives = [
+            call(self.root, exp_root, phase_bucket="sim_pretrain", refine_mode=""),
+            call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="online"),
+        ]
+        self.assertEqual(archive_runner.call_args_list, expected_archives)
     def test_main_help_prints_usage_and_exits_cleanly(self):
         stdout = StringIO()
 

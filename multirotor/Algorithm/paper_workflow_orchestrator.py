@@ -112,19 +112,20 @@ class PaperWorkflowOrchestrator:
         save_workflow_state(exp_root, state)
 
     def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
+        refine_commands = {
+            "online": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"],
+            "offline_logs": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Logs.bat"],
+        }
+        if refine_mode not in refine_commands:
+            self._fail_step(exp_root, "real_weighted_refine", f"Unsupported refine_mode: {refine_mode}")
+            raise ValueError(f"Unsupported refine_mode: {refine_mode}")
+
         self._run_stage(
             exp_root,
             "sim_pretrain",
             ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
             {"phase_bucket": "sim_pretrain", "refine_mode": ""},
         )
-
-        refine_commands = {
-            "online": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"],
-            "offline_logs": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Logs.bat"],
-        }
-        if refine_mode not in refine_commands:
-            raise ValueError(f"Unsupported refine_mode: {refine_mode}")
 
         self._run_stage(
             exp_root,
