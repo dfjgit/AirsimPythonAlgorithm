@@ -32,5 +32,44 @@ class PaperTwoStageAnalysisTests(unittest.TestCase):
         ).to_csv(refine_csv, index=False, encoding="utf-8-sig")
 
         outputs = build_two_stage_summary(sim_csv, refine_csv, out_dir)
+        self.assertEqual(set(outputs), {"summary_csv", "summary_md"})
         self.assertTrue(outputs["summary_csv"].exists())
         self.assertTrue(outputs["summary_md"].exists())
+        self.assertEqual(outputs["summary_csv"].name, "two_stage_summary.csv")
+        self.assertEqual(outputs["summary_md"].name, "two_stage_summary.md")
+
+        summary_df = pd.read_csv(outputs["summary_csv"], encoding="utf-8-sig")
+        self.assertListEqual(
+            list(summary_df.columns),
+            ["phase", "episodes", "avg_scan_efficiency", "success_rate"],
+        )
+        self.assertListEqual(
+            summary_df["phase"].tolist(),
+            ["sim_pretrain", "real_weighted_refine"],
+        )
+        self.assertListEqual(summary_df["episodes"].tolist(), [2, 2])
+
+        self.assertAlmostEqual(summary_df.loc[0, "avg_scan_efficiency"], 1.1)
+        self.assertAlmostEqual(summary_df.loc[1, "avg_scan_efficiency"], 1.5)
+        self.assertAlmostEqual(summary_df.loc[0, "success_rate"], 0.5)
+        self.assertAlmostEqual(summary_df.loc[1, "success_rate"], 1.0)
+
+        summary_md = outputs["summary_md"].read_text(encoding="utf-8")
+        expected_summary = pd.DataFrame(
+            [
+                {
+                    "phase": "sim_pretrain",
+                    "episodes": 2,
+                    "avg_scan_efficiency": 1.1,
+                    "success_rate": 0.5,
+                },
+                {
+                    "phase": "real_weighted_refine",
+                    "episodes": 2,
+                    "avg_scan_efficiency": 1.5,
+                    "success_rate": 1.0,
+                },
+            ]
+        )
+        expected_md = "# Two-Stage Summary\n\n" + expected_summary.to_markdown(index=False)
+        self.assertEqual(summary_md, expected_md)
