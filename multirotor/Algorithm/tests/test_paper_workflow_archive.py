@@ -44,6 +44,41 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         self.assertEqual(outputs["best_model"].name, best_model_name)
         self.assertIn(logs_dir / log_name, outputs["training_logs"])
 
+    def test_collect_ddpg_stage_outputs_uses_stage_run_token(self):
+        models_dir = self.root / "multirotor" / "DDPG_Weight" / "models"
+        logs_dir = self.root / "multirotor" / "DDPG_Weight" / "airsim_training_logs"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stage_run = "20260414_153050"
+        older_run = "20260414_153000"
+        stage_prefix = "weight_predictor_airsim"
+        final_stage = f"{stage_prefix}_{stage_run}.zip"
+        stage_meta_stage = f"{stage_prefix}_{stage_run}.stage_meta.json"
+        best_stage = f"best_model_{stage_run}.zip"
+        # create stage-specific artifacts first so later stale files exercise token filtering
+        (models_dir / final_stage).write_text("stage final", encoding="utf-8")
+        (models_dir / stage_meta_stage).write_text("stage meta", encoding="utf-8")
+        (models_dir / best_stage).write_text("stage best", encoding="utf-8")
+        stale_final = f"{stage_prefix}_20260415_000000.zip"
+        stale_meta = f"{stage_prefix}_20260415_000000.stage_meta.json"
+        stale_best = "best_model_20260415_000000.zip"
+        (models_dir / stale_final).write_text("stale final", encoding="utf-8")
+        (models_dir / stale_meta).write_text("stale meta", encoding="utf-8")
+        (models_dir / stale_best).write_text("stale best", encoding="utf-8")
+        old_log = logs_dir / f"ddpg_training_demo_stage01_{older_run}.csv"
+        old_log.write_text("episode,reward\n1,2\n", encoding="utf-8")
+        new_log = logs_dir / f"ddpg_training_demo_stage01_{stage_run}.csv"
+        new_log.write_text("episode,reward\n3,4\n", encoding="utf-8")
+        timestamp = 1_706_000_000
+        os.utime(old_log, (timestamp, timestamp))
+        os.utime(new_log, (timestamp + 10, timestamp + 10))
+        outputs = collect_ddpg_stage_outputs(self.root, stage_name="stage01")
+        self.assertEqual(outputs["final_model"].name, final_stage)
+        self.assertEqual(outputs["best_model"].name, best_stage)
+        self.assertEqual(outputs["stage_meta"].name, stage_meta_stage)
+        self.assertEqual(outputs["training_logs"][0], new_log)
+        self.assertEqual(outputs["training_logs"][1], old_log)
+
     def test_archive_directory_tree_copies_existing_tree(self):
         src = self.root / "src"
         dst = self.root / "dst"
