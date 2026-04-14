@@ -25,6 +25,12 @@ def recommend_comparison_stage02(
 ) -> dict:
     training_df = pd.read_csv(training_csv, encoding="utf-8-sig")
     benchmark_df = pd.read_csv(benchmark_csv, encoding="utf-8-sig")
+    required_benchmark_columns = {"algorithm_type", "final_global_scan_ratio"}
+    missing_benchmark_columns = required_benchmark_columns - set(benchmark_df.columns)
+    if missing_benchmark_columns:
+        return _manual_review(
+            f"benchmark schema missing columns: {', '.join(sorted(missing_benchmark_columns))}"
+        )
     recent_df = training_df.tail(recent_window)
     if len(recent_df) < min_recent_window:
         return _manual_review("最近窗口样本不足，建议人工确认")

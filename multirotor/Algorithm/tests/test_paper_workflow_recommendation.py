@@ -184,3 +184,35 @@ class ComparisonRecommendationTests(unittest.TestCase):
         )
         self.assertEqual(result["decision"], "可选续训")
         self.assertTrue(any("benchmark" in reason for reason in result["reasons"]))
+
+    def test_malformed_benchmark_schema_requires_manual_review(self):
+        training_csv = self.root / "training.csv"
+        benchmark_csv = self.root / "benchmark.csv"
+        pd.DataFrame(
+            {
+                "episode": [1, 2, 3, 4],
+                "success_flag": [1, 1, 1, 1],
+                "scan_efficiency": [2.0, 2.0, 2.0, 2.0],
+                "collision_rate": [1.0, 1.0, 1.0, 1.0],
+            }
+        ).to_csv(training_csv, index=False, encoding="utf-8-sig")
+        pd.DataFrame(
+            {
+                "algorithm_type": ["ddpg_apf"],
+                "success_flag": [1],
+            }
+        ).to_csv(benchmark_csv, index=False, encoding="utf-8-sig")
+        result = recommend_comparison_stage02(
+            training_csv,
+            benchmark_csv,
+            algorithm_type="ddpg_apf",
+            recent_window=4,
+            min_recent_window=2,
+        )
+        self.assertEqual(result["decision"], "可选续训")
+        self.assertTrue(
+            any(
+                "benchmark schema missing columns" in reason
+                for reason in result["reasons"]
+            )
+        )
