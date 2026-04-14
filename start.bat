@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 setlocal EnableExtensions
 
@@ -264,10 +264,19 @@ goto menu
 :comparison_workflow
 cls
 echo ============================================================
-echo 论文对比分析实验工作流 (DDPG+APF vs 纯DQN)
+echo 论文对比分析实验工作流
 echo ============================================================
 echo.
-call scripts\Run_Paper_Workflow.bat
+call scripts\Run_Paper_Workflow.bat --workflow comparison
+goto menu
+
+:virtual_real_two_stage_workflow
+cls
+echo ============================================================
+echo 虚实两阶段工作流 (Virtual-Real Two-Stage Workflow)
+echo ============================================================
+echo.
+call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
 goto menu
 
 :four_group_benchmark
@@ -315,24 +324,6 @@ echo.
 powershell -ExecutionPolicy Bypass -File "scripts\Run_Paper_Training_Seeds.ps1" -Algorithm pure_dqn
 goto menu
 
-:comparison_workflow
-cls
-echo ============================================================
-echo 论文对比分析实验工作流
-echo ============================================================
-echo.
-call scripts\Run_Paper_Workflow.bat --workflow comparison
-goto menu
-
-:virtual_real_two_stage_workflow
-cls
-echo ============================================================
-echo 虚实两阶段工作流 (Virtual-Real Two-Stage Workflow)
-echo ============================================================
-echo.
-call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
-goto menu
-
 :cleanup_menu
 cls
 echo ============================================================
@@ -354,7 +345,7 @@ echo   [9] 返回主菜单
 echo.
 echo ============================================================
 echo.
-set /p cleanup_choice=请输入选项 (1-9): 
+set /p cleanup_choice=请输入选项 (1-9):
 
 if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
 if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
@@ -382,7 +373,7 @@ echo ============================================================
 echo.
 echo [警告] 该操作不可恢复！
 echo.
-set /p confirm=请输入 YES 确认删除，输入其它取消: 
+set /p confirm=请输入 YES 确认删除，输入其它取消:
 if /i not "%confirm%"=="YES" (
     echo.
     echo 已取消操作。
@@ -425,7 +416,7 @@ echo   - multirotor\DDPG_Weight\crazyflie_logs
 echo.
 echo [警告] 该操作不可恢复！
 echo.
-set /p confirm=请输入 YES 确认删除，输入其它取消: 
+set /p confirm=请输入 YES 确认删除，输入其它取消:
 if /i not "%confirm%"=="YES" (
     echo.
     echo 已取消操作。
@@ -468,7 +459,7 @@ echo ============================================================
 echo.
 echo 将删除所有 DDPG / DQN / HRL 的模型、日志以及分析结果。
 echo.
-set /p final_confirm=请输入 DELETE_ALL 确认执行: 
+set /p final_confirm=请输入 DELETE_ALL 确认执行:
 if /i not "%final_confirm%"=="DELETE_ALL" (
     echo.
     echo 操作已取消。
@@ -537,4 +528,3 @@ echo.
 timeout /t 2 >nul
 endlocal
 exit /b 0
-
