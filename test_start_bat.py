@@ -28,9 +28,9 @@ class StartBatTests(unittest.TestCase):
             "not recognized as an internal or external command", combined_output
         )
 
-    def test_start_bat_menu_mentions_comparison_workflow(self):
+    def test_start_bat_menu_mentions_virtual_real_two_stage_workflow(self):
         _, combined_output = self._run_start_bat()
-        self.assertIn("论文对比分析实验工作流", combined_output)
+        self.assertIn("Virtual-Real Two-Stage Workflow", combined_output)
 
 
 if __name__ == "__main__":

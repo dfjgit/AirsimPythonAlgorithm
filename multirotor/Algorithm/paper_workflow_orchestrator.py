@@ -5,7 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from paper_workflow_archive import archive_comparison_stage_outputs, collect_ddpg_stage_outputs, collect_dqn_stage_outputs
+from paper_two_stage_analysis import build_two_stage_summary
+from paper_two_stage_recommendation import recommend_real_weighted_continue
+from paper_workflow_archive import (
+    archive_comparison_stage_outputs,
+    archive_two_stage_outputs,
+    collect_ddpg_stage_outputs,
+    collect_dqn_stage_outputs,
+)
 from paper_workflow_recommendation import recommend_comparison_stage02
 from paper_workflow_state import create_experiment_root, initialize_workflow_state, load_workflow_state, save_workflow_state
 
@@ -200,13 +207,71 @@ def _default_recommendation_runner(workspace_root: Path) -> dict:
     }
 
 
+def _sorted_logs(log_root: Path, pattern: str) -> list[Path]:
+    return sorted(log_root.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _default_two_stage_analysis_runner(workspace_root: Path, exp_root: Path, *, refine_mode: str) -> dict[str, Path]:
+    sim_logs = _sorted_logs(exp_root / "artifacts" / "sim_pretrain" / "ddpg_apf" / "logs", "*.csv")
+    sim_training_csv = _select_training_log(sim_logs, "ddpg_training_")
+    if sim_training_csv is None:
+        sim_training_csv = _select_training_log(
+            collect_ddpg_stage_outputs(workspace_root, stage_name="stage01").get("training_logs", []),
+            "ddpg_training_",
+        )
+    if sim_training_csv is None:
+        raise FileNotFoundError("No DDPG stage01 training CSV found for two-stage summary")
+
+    refine_patterns = {
+        "online": "crazyflie_training_online*.csv",
+        "offline_logs": "crazyflie_training_logs*.csv",
+    }
+    refine_prefixes = {
+        "online": "crazyflie_training_online",
+        "offline_logs": "crazyflie_training_logs",
+    }
+    refine_logs = _sorted_logs(
+        exp_root / "artifacts" / "real_weighted_refine" / refine_mode / "logs",
+        "*.csv",
+    )
+    refine_training_csv = _select_training_log(refine_logs, refine_prefixes[refine_mode])
+    if refine_training_csv is None:
+        refine_training_csv = _select_training_log(
+            _sorted_logs(
+                workspace_root / "multirotor" / "DDPG_Weight" / "crazyflie_logs",
+                refine_patterns[refine_mode],
+            ),
+            refine_prefixes[refine_mode],
+        )
+    if refine_training_csv is None:
+        raise FileNotFoundError(f"No refine training CSV found for two-stage summary ({refine_mode})")
+
+    return build_two_stage_summary(
+        sim_training_csv,
+        refine_training_csv,
+        exp_root / "analysis" / "two_stage",
+    )
+
+
+def _default_archive_runner(workspace_root: Path, exp_root: Path, **archive_kwargs) -> dict:
+    if "algorithm" in archive_kwargs:
+        return archive_comparison_stage_outputs(workspace_root, exp_root, **archive_kwargs)
+    return archive_two_stage_outputs(workspace_root, exp_root, **archive_kwargs)
+
+
 def create_default_orchestrator(*, workspace_root: Path) -> PaperWorkflowOrchestrator:
     workspace_root = Path(workspace_root)
     return PaperWorkflowOrchestrator(
         workspace_root=workspace_root,
         command_runner=_default_command_runner,
-        archive_runner=archive_comparison_stage_outputs,
+        archive_runner=_default_archive_runner,
         recommendation_runner=lambda: _default_recommendation_runner(workspace_root),
+        two_stage_recommendation_runner=recommend_real_weighted_continue,
+        two_stage_analysis_runner=lambda exp_root, refine_mode: _default_two_stage_analysis_runner(
+            workspace_root,
+            exp_root,
+            refine_mode=refine_mode,
+        ),
     )
 
 
@@ -214,9 +279,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run paper workflow orchestration tasks.")
     parser.add_argument(
         "--workflow",
-        choices=["comparison"],
+        choices=["comparison", "virtual_real_two_stage"],
         required=True,
-        help="Workflow to run. Comparison executes the stage01 comparison stack.",
+        help="Workflow to run. Comparison executes the stage01 comparison stack; virtual_real_two_stage runs sim pretrain plus real refine.",
+    )
+    parser.add_argument(
+        "--refine-mode",
+        choices=["online", "offline_logs"],
+        default="online",
+        help="Real refine mode for the virtual_real_two_stage workflow. Defaults to online.",
     )
     parser.add_argument(
         "--workspace-root",
@@ -242,6 +313,12 @@ def main(argv: list[str] | None = None, *, orchestrator_factory=create_default_o
     if args.workflow == "comparison":
         print(f"[paper-workflow] comparison experiment: {exp_root}")
         orchestrator.run_comparison_workflow(exp_root)
+        print(f"[paper-workflow] completed: {exp_root}")
+        return 0
+
+    if args.workflow == "virtual_real_two_stage":
+        print(f"[paper-workflow] virtual-real two-stage experiment: {exp_root} (refine_mode={args.refine_mode})")
+        orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode=args.refine_mode)
         print(f"[paper-workflow] completed: {exp_root}")
         return 0
 

@@ -364,6 +364,8 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         output = stdout.getvalue().lower()
         self.assertIn("usage:", output)
         self.assertIn("--workflow", output)
+        self.assertIn("virtual_real_two_stage", output)
+        self.assertIn("--refine-mode", output)
 
     def test_main_comparison_workflow_uses_injected_factory_without_running_real_scripts(self):
         recorded = {}
@@ -392,3 +394,72 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(recorded["workflow_type"], "comparison")
         self.assertEqual(recorded["alias"], "cli-run")
         self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+
+    def test_main_virtual_real_two_stage_workflow_defaults_to_online_refine_mode(self):
+        recorded = {}
+        expected_exp_root = self.root / "analysis_results" / "workflows" / "virtual_real_two_stage" / "cli-two-stage"
+
+        class FakeOrchestrator:
+            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+                recorded["workflow_type"] = workflow_type
+                recorded["alias"] = alias
+                return expected_exp_root
+
+            def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
+                recorded["run_exp_root"] = exp_root
+                recorded["refine_mode"] = refine_mode
+
+        def orchestrator_factory(*, workspace_root: Path):
+            recorded["workspace_root"] = workspace_root
+            return FakeOrchestrator()
+
+        exit_code = paper_workflow_orchestrator.main(
+            ["--workflow", "virtual_real_two_stage", "--workspace-root", str(self.root), "--alias", "cli-two-stage"],
+            orchestrator_factory=orchestrator_factory,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recorded["workspace_root"], self.root)
+        self.assertEqual(recorded["workflow_type"], "virtual_real_two_stage")
+        self.assertEqual(recorded["alias"], "cli-two-stage")
+        self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+        self.assertEqual(recorded["refine_mode"], "online")
+
+    def test_main_virtual_real_two_stage_workflow_accepts_explicit_refine_mode(self):
+        recorded = {}
+        expected_exp_root = self.root / "analysis_results" / "workflows" / "virtual_real_two_stage" / "cli-offline"
+
+        class FakeOrchestrator:
+            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+                recorded["workflow_type"] = workflow_type
+                recorded["alias"] = alias
+                return expected_exp_root
+
+            def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
+                recorded["run_exp_root"] = exp_root
+                recorded["refine_mode"] = refine_mode
+
+        def orchestrator_factory(*, workspace_root: Path):
+            recorded["workspace_root"] = workspace_root
+            return FakeOrchestrator()
+
+        exit_code = paper_workflow_orchestrator.main(
+            [
+                "--workflow",
+                "virtual_real_two_stage",
+                "--refine-mode",
+                "offline_logs",
+                "--workspace-root",
+                str(self.root),
+                "--alias",
+                "cli-offline",
+            ],
+            orchestrator_factory=orchestrator_factory,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recorded["workspace_root"], self.root)
+        self.assertEqual(recorded["workflow_type"], "virtual_real_two_stage")
+        self.assertEqual(recorded["alias"], "cli-offline")
+        self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+        self.assertEqual(recorded["refine_mode"], "offline_logs")
