@@ -125,3 +125,38 @@ class PaperWorkflowArchiveTests(unittest.TestCase):
         self.assertTrue((artifact_root / "models" / stage_meta_name).exists())
         self.assertTrue((artifact_root / "logs" / log_name).exists())
         self.assertFalse((artifact_root / "logs" / old_log_name).exists())
+
+    def test_archive_comparison_stage_outputs_copies_dqn_model_sidecar_and_stage_logs(self):
+        workspace = self.root / "repo"
+        exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "exp-1"
+        models_dir = workspace / "multirotor" / "DQN_Movement" / "models"
+        logs_dir = workspace / "multirotor" / "DQN_Movement" / "logs" / "dqn_scan_data"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        model_name = "movement_dqn_airsim_final.zip"
+        stage_meta_name = "movement_dqn_airsim_final.stage_meta.json"
+        stage_token = "comparison_pure_dqn_stage01"
+        training_log = f"dqn_training_{stage_token}_20260414_153000.csv"
+        scan_log = f"scan_data_{stage_token}_20260414_153000.csv"
+        stale_log = "dqn_training_comparison_pure_dqn_stage02_20260414_160000.csv"
+
+        (models_dir / model_name).write_text("model", encoding="utf-8")
+        (models_dir / stage_meta_name).write_text(
+            '{"experiment_id": "comparison_pure_dqn", "stage_name": "stage01_from_scratch", "stage_index": 1}',
+            encoding="utf-8",
+        )
+        (logs_dir / training_log).write_text("episode,reward\n1,2\n", encoding="utf-8")
+        (logs_dir / scan_log).write_text("elapsed_time,scan_ratio\n1,5\n", encoding="utf-8")
+        (logs_dir / stale_log).write_text("episode,reward\n9,9\n", encoding="utf-8")
+
+        outputs = archive_comparison_stage_outputs(workspace, exp_root, algorithm="pure_dqn", stage_bucket="stage01")
+
+        artifact_root = exp_root / "artifacts" / "stage01" / "pure_dqn"
+        self.assertEqual(outputs["final_model"].name, model_name)
+        self.assertEqual(outputs["stage_meta"].name, stage_meta_name)
+        self.assertTrue((artifact_root / "models" / model_name).exists())
+        self.assertTrue((artifact_root / "models" / stage_meta_name).exists())
+        self.assertTrue((artifact_root / "logs" / training_log).exists())
+        self.assertTrue((artifact_root / "logs" / scan_log).exists())
+        self.assertFalse((artifact_root / "logs" / stale_log).exists())

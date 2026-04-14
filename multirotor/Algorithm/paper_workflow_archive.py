@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import shutil
 from pathlib import Path
 
@@ -19,6 +21,16 @@ def _sorted_candidates(path: Path, pattern: str) -> list[Path]:
     if not path.exists():
         return []
     return sorted(path.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _candidate_project_roots(project_root: Path) -> list[Path]:
+    roots = [Path(project_root)]
+    parts = list(project_root.parts)
+    if ".worktrees" in parts:
+        primary_root = Path(*parts[: parts.index(".worktrees")])
+        if primary_root not in roots:
+            roots.append(primary_root)
+    return roots
 
 
 def _extract_stage_token(log_path: Path, stage_name: str) -> str | None:
@@ -72,11 +84,115 @@ def collect_ddpg_stage_outputs(project_root: Path, *, stage_name: str) -> dict:
     }
 
 
+def _extract_stage_index(stage_name: str) -> int | None:
+    match = re.search(r"stage(\d+)", str(stage_name or ""), re.IGNORECASE)
+    if not match:
+        return None
+    return max(int(match.group(1)), 1)
+
+
+def _load_stage_meta(meta_path: Path | None) -> dict:
+    if meta_path is None or not meta_path.exists():
+        return {}
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _dqn_model_candidates(project_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for root in _candidate_project_roots(project_root):
+        candidates.extend(
+            [
+                root / "multirotor" / "DQN_Movement" / "models" / "movement_dqn_airsim_final.zip",
+                root / "multirotor" / "DQN_Movement" / "models" / "movement_dqn_final.zip",
+                root / "multirotor" / "DQN_Movement" / "scripts" / "models" / "movement_dqn_airsim_final.zip",
+                root / "multirotor" / "DQN_Movement" / "scripts" / "models" / "movement_dqn_final.zip",
+            ]
+        )
+    return candidates
+
+
+def _build_stage_file_token(stage_meta: dict) -> str | None:
+    experiment_id = str(stage_meta.get("experiment_id", "") or "").strip()
+    stage_index = stage_meta.get("stage_index")
+    if not experiment_id:
+        return None
+    try:
+        normalized_stage_index = max(int(stage_index or 1), 1)
+    except (TypeError, ValueError):
+        normalized_stage_index = 1
+    return f"{experiment_id}_stage{normalized_stage_index:02d}"
+
+
+def _stage_meta_matches(stage_meta: dict, *, stage_name: str) -> bool:
+    if not stage_meta:
+        return False
+    requested_index = _extract_stage_index(stage_name)
+    meta_stage_name = str(stage_meta.get("stage_name", "") or "")
+    if meta_stage_name.startswith(stage_name):
+        return True
+    if requested_index is None:
+        return False
+    try:
+        return int(stage_meta.get("stage_index", 0) or 0) == requested_index
+    except (TypeError, ValueError):
+        return False
+
+
+def collect_dqn_stage_outputs(project_root: Path, *, stage_name: str) -> dict:
+    final_model = next((candidate for candidate in _dqn_model_candidates(project_root) if candidate.exists()), None)
+    stage_meta = None
+    stage_meta_payload: dict = {}
+    if final_model is not None:
+        candidate_meta = final_model.with_suffix("").with_suffix(".stage_meta.json")
+        if candidate_meta.exists():
+            payload = _load_stage_meta(candidate_meta)
+            if payload and not _stage_meta_matches(payload, stage_name=stage_name):
+                final_model = None
+            else:
+                stage_meta = candidate_meta
+                stage_meta_payload = payload
+
+    training_logs: list[Path] = []
+    for root in _candidate_project_roots(project_root):
+        logs_dir = root / "multirotor" / "DQN_Movement" / "logs" / "dqn_scan_data"
+        training_logs.extend(_sorted_candidates(logs_dir, f"*{stage_name}*.csv"))
+
+    stage_token = _build_stage_file_token(stage_meta_payload)
+    if stage_token:
+        filtered_logs = [log_path for log_path in training_logs if stage_token in log_path.name]
+        training_logs = filtered_logs or training_logs
+
+    deduped_logs: list[Path] = []
+    seen_paths: set[str] = set()
+    for log_path in training_logs:
+        resolved = str(log_path.resolve())
+        if resolved in seen_paths:
+            continue
+        deduped_logs.append(log_path)
+        seen_paths.add(resolved)
+
+    return {
+        "final_model": final_model,
+        "best_model": None,
+        "stage_meta": stage_meta,
+        "training_logs": deduped_logs,
+    }
+
+
 def archive_comparison_stage_outputs(project_root: Path, exp_root: Path, *, algorithm: str, stage_bucket: str) -> dict:
     target_root = exp_root / "artifacts" / stage_bucket / algorithm
     (target_root / "models").mkdir(parents=True, exist_ok=True)
     (target_root / "logs").mkdir(parents=True, exist_ok=True)
-    outputs = collect_ddpg_stage_outputs(project_root, stage_name=stage_bucket)
+    if algorithm == "ddpg_apf":
+        outputs = collect_ddpg_stage_outputs(project_root, stage_name=stage_bucket)
+    elif algorithm == "pure_dqn":
+        outputs = collect_dqn_stage_outputs(project_root, stage_name=stage_bucket)
+    else:
+        raise ValueError(f"Unsupported comparison workflow algorithm: {algorithm}")
     if outputs["final_model"]:
         _copy_if_exists(outputs["final_model"], target_root / "models" / outputs["final_model"].name)
     if outputs["best_model"]:

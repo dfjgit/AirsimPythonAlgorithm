@@ -3,11 +3,14 @@ import shutil
 import sys
 import unittest
 import uuid
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, call
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import paper_workflow_orchestrator
 from paper_workflow_orchestrator import PaperWorkflowOrchestrator
 
 
@@ -116,3 +119,42 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["status"], "failed")
         self.assertEqual(state["current_phase"], "stage02_decision")
         self.assertEqual(state["steps"]["stage02_decision"]["status"], "failed")
+
+    def test_main_help_prints_usage_and_exits_cleanly(self):
+        stdout = StringIO()
+
+        with self.assertRaises(SystemExit) as ctx, redirect_stdout(stdout):
+            paper_workflow_orchestrator.main(["--help"])
+
+        self.assertEqual(ctx.exception.code, 0)
+        output = stdout.getvalue().lower()
+        self.assertIn("usage:", output)
+        self.assertIn("--workflow", output)
+
+    def test_main_comparison_workflow_uses_injected_factory_without_running_real_scripts(self):
+        recorded = {}
+        expected_exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "cli-run"
+
+        class FakeOrchestrator:
+            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+                recorded["workflow_type"] = workflow_type
+                recorded["alias"] = alias
+                return expected_exp_root
+
+            def run_comparison_workflow(self, exp_root: Path) -> None:
+                recorded["run_exp_root"] = exp_root
+
+        def orchestrator_factory(*, workspace_root: Path):
+            recorded["workspace_root"] = workspace_root
+            return FakeOrchestrator()
+
+        exit_code = paper_workflow_orchestrator.main(
+            ["--workflow", "comparison", "--workspace-root", str(self.root), "--alias", "cli-run"],
+            orchestrator_factory=orchestrator_factory,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recorded["workspace_root"], self.root)
+        self.assertEqual(recorded["workflow_type"], "comparison")
+        self.assertEqual(recorded["alias"], "cli-run")
+        self.assertEqual(recorded["run_exp_root"], expected_exp_root)

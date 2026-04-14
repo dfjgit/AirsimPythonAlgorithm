@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import subprocess
+import sys
 from pathlib import Path
 
+from paper_workflow_archive import archive_comparison_stage_outputs, collect_ddpg_stage_outputs, collect_dqn_stage_outputs
+from paper_workflow_recommendation import recommend_comparison_stage02
 from paper_workflow_state import create_experiment_root, initialize_workflow_state, load_workflow_state, save_workflow_state
 
 
@@ -94,3 +99,100 @@ class PaperWorkflowOrchestrator:
         state["status"] = "completed"
         state.setdefault("steps", {})["stage02_decision"] = {"status": "completed"}
         save_workflow_state(exp_root, state)
+
+
+def _repo_root_from_module() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _default_command_runner(command: list[str], *, cwd: Path) -> int:
+    completed = subprocess.run(command, cwd=str(cwd), check=False)
+    return int(completed.returncode)
+
+
+def _select_training_log(logs: list[Path], prefix: str) -> Path | None:
+    for log_path in logs:
+        if log_path.name.startswith(prefix):
+            return log_path
+    return logs[0] if logs else None
+
+
+def _default_recommendation_runner(workspace_root: Path) -> dict:
+    benchmark_csv = workspace_root / "analysis_results" / "four_group_benchmark" / "four_group_eval_episodes.csv"
+    if not benchmark_csv.exists():
+        raise FileNotFoundError(f"Benchmark CSV not found: {benchmark_csv}")
+
+    ddpg_outputs = collect_ddpg_stage_outputs(workspace_root, stage_name="stage01")
+    dqn_outputs = collect_dqn_stage_outputs(workspace_root, stage_name="stage01")
+    ddpg_training_csv = _select_training_log(ddpg_outputs.get("training_logs", []), "ddpg_training_")
+    dqn_training_csv = _select_training_log(dqn_outputs.get("training_logs", []), "dqn_training_")
+    if ddpg_training_csv is None:
+        raise FileNotFoundError("No DDPG training CSV found for stage01 recommendation")
+    if dqn_training_csv is None:
+        raise FileNotFoundError("No DQN training CSV found for stage01 recommendation")
+
+    return {
+        "ddpg_apf": recommend_comparison_stage02(
+            ddpg_training_csv,
+            benchmark_csv,
+            algorithm_type="ddpg_apf",
+        ),
+        "pure_dqn": recommend_comparison_stage02(
+            dqn_training_csv,
+            benchmark_csv,
+            algorithm_type="pure_dqn",
+        ),
+    }
+
+
+def create_default_orchestrator(*, workspace_root: Path) -> PaperWorkflowOrchestrator:
+    workspace_root = Path(workspace_root)
+    return PaperWorkflowOrchestrator(
+        workspace_root=workspace_root,
+        command_runner=_default_command_runner,
+        archive_runner=archive_comparison_stage_outputs,
+        recommendation_runner=lambda: _default_recommendation_runner(workspace_root),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run paper workflow orchestration tasks.")
+    parser.add_argument(
+        "--workflow",
+        choices=["comparison"],
+        required=True,
+        help="Workflow to run. Comparison executes the stage01 comparison stack.",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=_repo_root_from_module(),
+        help="Repository workspace root. Defaults to the current repository containing this module.",
+    )
+    parser.add_argument(
+        "--alias",
+        default="",
+        help="Optional experiment alias used in the workflow experiment directory name.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None, *, orchestrator_factory=create_default_orchestrator) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    workspace_root = Path(args.workspace_root).resolve()
+    orchestrator = orchestrator_factory(workspace_root=workspace_root)
+    exp_root = orchestrator.create_or_resume_experiment(workflow_type=args.workflow, alias=args.alias)
+
+    if args.workflow == "comparison":
+        print(f"[paper-workflow] comparison experiment: {exp_root}")
+        orchestrator.run_comparison_workflow(exp_root)
+        print(f"[paper-workflow] completed: {exp_root}")
+        return 0
+
+    parser.error(f"Unsupported workflow: {args.workflow}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
