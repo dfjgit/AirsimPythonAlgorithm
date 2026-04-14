@@ -230,29 +230,105 @@ python multirotor/Algorithm/benchmark_registry_helper.py recommend --algorithm-t
 python multirotor/Algorithm/benchmark_registry_helper.py scaffold --algorithm-type ppo_scan --control-mode dqn --trainable
 ```
 
-## Workflow Entry Points
+## 新增工作流能力
 
-The batch launcher now exposes two workflow-oriented experiment entries:
+当前版本新增了两条“实验工作流”主线，用于把训练、归档、分析和继续训练建议串成统一入口。
 
-- `M` / comparison workflow
-  - Runs the stage01 comparison stack for `ddpg_apf` and `pure_dqn`
-  - Archives outputs under `analysis_results/workflows/comparison/...`
-  - Produces comparison recommendations for whether to continue to `stage02_finetune`
-- `N` / virtual-real two-stage workflow
-  - Runs `sim_pretrain -> real_weighted_refine`
-  - Supports `online` and `offline_logs` refine modes
-  - Archives outputs under `analysis_results/workflows/virtual_real_two_stage/...`
+### 1. 论文对比分析实验工作流
 
-The wrapper script is:
+入口：
+- `start.bat` 中的 `M`
+- `python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow comparison`
+
+用途：
+- 组织 `ddpg_apf` 与 `pure_dqn` 的 stage01 对比实验
+- 自动串联训练、归档、对比分析和继续训练建议
+
+当前流程：
+1. 运行 `ddpg_apf` stage01 训练
+2. 运行 `pure_dqn` stage01 训练
+3. 归档两类模型与日志
+4. 生成 comparison workflow 对应的分析产物
+5. 给出是否继续进入 `stage02_finetune` 的建议
+
+产物目录：
+- `analysis_results/workflows/comparison/<experiment_id>/...`
+
+### 2. 虚实两阶段工作流
+
+入口：
+- `start.bat` 中的 `N`
+- `python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage`
+
+用途：
+- 组织 `sim_pretrain -> real_weighted_refine` 的双阶段实验
+- 把虚拟预训练模型和实飞修正模型归到同一个实验容器中
+
+支持模式：
+- `online`
+- `offline_logs`
+
+命令示例：
+
+```bash
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode online --alias demo
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode offline_logs --alias demo
+```
+
+产物目录：
+- `analysis_results/workflows/virtual_real_two_stage/<experiment_id>/...`
+
+## 工作流便捷功能
+
+本次新增的不只是菜单入口，还包括一整套实验组织能力：
+
+- 统一实验容器
+  - 每次 workflow 都会创建独立实验目录，便于归档和回看
+- 状态文件
+  - 使用 `workflow_state.json` 记录当前阶段、步骤状态和推荐结果
+- 归档能力
+  - 统一归档 comparison workflow 和 virtual-real two-stage workflow 的模型、日志和分析结果
+- 两类推荐引擎
+  - comparison workflow：给出是否继续 `stage02_finetune`
+  - virtual-real two-stage：给出是否继续实飞修正
+- CLI 统一入口
+  - 通过 `scripts\Run_Paper_Workflow.bat` 或 Python CLI 直接调用
+- 失败状态可追踪
+  - 对 command failure、archive failure、analysis failure、recommendation failure 都有状态记录
+- 回归测试补齐
+  - 覆盖 state / archive / recommendation / orchestrator / start.bat 菜单入口
+
+## 工作流文件
+
+新增的核心实现文件：
+
+- `multirotor/Algorithm/paper_workflow_state.py`
+- `multirotor/Algorithm/paper_workflow_archive.py`
+- `multirotor/Algorithm/paper_workflow_recommendation.py`
+- `multirotor/Algorithm/paper_workflow_orchestrator.py`
+- `multirotor/Algorithm/paper_two_stage_analysis.py`
+- `multirotor/Algorithm/paper_two_stage_recommendation.py`
+- `scripts/Run_Paper_Workflow.bat`
+
+对应测试：
+
+- `multirotor/Algorithm/tests/test_paper_workflow_state.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_archive.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_recommendation.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_orchestrator.py`
+- `multirotor/Algorithm/tests/test_paper_two_stage_analysis.py`
+- `multirotor/Algorithm/tests/test_paper_two_stage_recommendation.py`
+- `test_start_bat.py`
+
+## 快速查看 CLI 帮助
 
 ```bat
 scripts\Run_Paper_Workflow.bat --help
 ```
 
-Direct CLI examples:
-
-```bash
-python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow comparison --alias demo
-python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode online --alias demo
-python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode offline_logs --alias demo
-```
+当前 CLI 支持：
+- `--workflow comparison`
+- `--workflow virtual_real_two_stage`
+- `--refine-mode {online, offline_logs}`
+- `--workspace-root`
+- `--alias`
