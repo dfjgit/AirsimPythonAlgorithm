@@ -63,6 +63,50 @@ def _determine_stage_token(logs: list[Path], stage_name: str, reference_files: l
     return None
 
 
+def _stage_meta_matches_final_model(stage_meta: Path, final_model: Path | None) -> bool:
+    if not final_model:
+        return False
+    base = stage_meta.with_suffix("").with_suffix("").name
+    return base == final_model.stem
+
+
+def _extract_best_model_run_token(best_model: Path) -> str | None:
+    stem = best_model.stem
+    prefix = "best_model_"
+    if stem.startswith(prefix):
+        return stem[len(prefix) :]
+    return None
+
+
+def _best_model_matches_final_model(best_model: Path, final_model: Path | None) -> bool:
+    if not final_model:
+        return False
+    token = _extract_best_model_run_token(best_model)
+    return bool(token and final_model.stem.endswith(token))
+
+
+def _select_stage_meta_candidate(candidates: list[Path], stage_token: str | None, final_model: Path | None) -> Path | None:
+    if stage_token:
+        return _choose_by_token(candidates, stage_token)
+    if final_model:
+        for candidate in candidates:
+            if _stage_meta_matches_final_model(candidate, final_model):
+                return candidate
+        return None
+    return candidates[0] if candidates else None
+
+
+def _select_best_model_candidate(candidates: list[Path], stage_token: str | None, final_model: Path | None) -> Path | None:
+    if stage_token:
+        return _choose_by_token(candidates, stage_token)
+    if final_model:
+        for candidate in candidates:
+            if _best_model_matches_final_model(candidate, final_model):
+                return candidate
+        return None
+    return candidates[0] if candidates else None
+
+
 def collect_ddpg_stage_outputs(project_root: Path, *, stage_name: str) -> dict:
     models_dir = project_root / "multirotor" / "DDPG_Weight" / "models"
     logs_dir = project_root / "multirotor" / "DDPG_Weight" / "airsim_training_logs"
@@ -76,10 +120,30 @@ def collect_ddpg_stage_outputs(project_root: Path, *, stage_name: str) -> dict:
             log for log in training_logs if stage_token in log.name
         ]
         training_logs = filtered_logs or training_logs
+    stage_meta_candidates = [
+        meta
+        for meta in metas
+        if stage_name in meta.name or (stage_token and stage_token in meta.name)
+    ]
+    if not stage_meta_candidates:
+        stage_meta_candidates = metas
+
+    def _pick_candidate(candidates: list[Path]) -> Path | None:
+        matched = _choose_by_token(candidates, stage_token)
+        if matched:
+            return matched
+        if stage_token is None:
+            return candidates[0] if candidates else None
+        return None
+
+    final_model = _pick_candidate(finals)
+    stage_meta = _select_stage_meta_candidate(stage_meta_candidates, stage_token, final_model)
+    best_model = _select_best_model_candidate(bests, stage_token, final_model)
+
     return {
-        "final_model": _choose_by_token(finals, stage_token),
-        "best_model": _choose_by_token(bests, stage_token),
-        "stage_meta": _choose_by_token(metas, stage_token),
+        "final_model": final_model,
+        "best_model": best_model,
+        "stage_meta": stage_meta,
         "training_logs": training_logs,
     }
 
@@ -202,3 +266,67 @@ def archive_comparison_stage_outputs(project_root: Path, exp_root: Path, *, algo
     for log_path in outputs["training_logs"]:
         _copy_if_exists(log_path, target_root / "logs" / log_path.name)
     return outputs
+
+
+def archive_two_stage_outputs(
+    project_root: Path,
+    exp_root: Path,
+    *,
+    phase_bucket: str,
+    refine_mode: str,
+) -> dict:
+    stage_meta_path: Path | None = None
+    if phase_bucket == "sim_pretrain":
+        target_root = exp_root / "artifacts" / "sim_pretrain" / "ddpg_apf"
+        stage_outputs = collect_ddpg_stage_outputs(project_root, stage_name="stage01")
+        final_model = stage_outputs.get("final_model")
+        best_model = stage_outputs.get("best_model") if final_model else None
+        stage_meta_path = stage_outputs.get("stage_meta") if final_model else None
+        outputs = {
+            "models": [path for path in (final_model, best_model) if path],
+            "logs": stage_outputs.get("training_logs", []),
+        }
+    elif phase_bucket == "real_weighted_refine" and refine_mode == "online":
+        target_root = exp_root / "artifacts" / "real_weighted_refine" / "online"
+        models_root = project_root / "multirotor" / "DDPG_Weight" / "models"
+        logs_root = project_root / "multirotor" / "DDPG_Weight" / "crazyflie_logs"
+        outputs = {
+            "models": sorted(
+                models_root.glob("weight_predictor_crazyflie_online*.zip"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ),
+            "logs": sorted(
+                logs_root.glob("crazyflie_training_online*.csv"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ),
+        }
+    elif phase_bucket == "real_weighted_refine" and refine_mode == "offline_logs":
+        target_root = exp_root / "artifacts" / "real_weighted_refine" / "offline_logs"
+        models_root = project_root / "multirotor" / "DDPG_Weight" / "models"
+        logs_root = project_root / "multirotor" / "DDPG_Weight" / "crazyflie_logs"
+        outputs = {
+            "models": sorted(
+                models_root.glob("weight_predictor_crazyflie_logs*.zip"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ),
+            "logs": sorted(
+                logs_root.glob("crazyflie_training_logs*.csv"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ),
+        }
+    else:
+        raise ValueError(f"Unsupported two-stage archive bucket: {phase_bucket}/{refine_mode}")
+
+    (target_root / "models").mkdir(parents=True, exist_ok=True)
+    (target_root / "logs").mkdir(parents=True, exist_ok=True)
+    for model_path in outputs.get("models", []):
+        _copy_if_exists(model_path, target_root / "models" / model_path.name)
+    for log_path in outputs.get("logs", []):
+        _copy_if_exists(log_path, target_root / "logs" / log_path.name)
+    if stage_meta_path:
+        _copy_if_exists(stage_meta_path, target_root / "models" / stage_meta_path.name)
+    return {"target_root": target_root, "copied": outputs}
