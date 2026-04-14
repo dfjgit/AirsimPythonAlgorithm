@@ -31,6 +31,9 @@ echo === 数据分析 ===
 echo   [A] 数据可视化分析
 echo   [B] DDPG vs DQN 算法对比
 echo.
+echo === 论文实验工作流 ===
+echo   [M] 论文对比分析实验工作流（DDPG+APF vs 纯DQN）
+echo.
 echo === 四组论文实验 ===
 echo   [G] 四组冻结评测 / Benchmark
 echo   [I] 生成四组主结果分析
@@ -48,7 +51,7 @@ echo.
 echo ============================================================
 echo.
 
-set /p choice=请输入选项 (0-9,A-L,R,E):
+set /p choice=请输入选项 (0-9,A-L,M,R,E):
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_ddpg
@@ -70,6 +73,7 @@ if /i "%choice%"=="I" goto analyze_four_group_benchmark
 if /i "%choice%"=="J" goto analyze_family_comparisons
 if /i "%choice%"=="K" goto train_paper_ddpg_seeds
 if /i "%choice%"=="L" goto train_paper_dqn_seeds
+if /i "%choice%"=="M" goto comparison_workflow
 if /i "%choice%"=="C" goto cleanup_menu
 if /i "%choice%"=="9" goto info
 if /i "%choice%"=="0" goto end
@@ -253,6 +257,15 @@ echo.
 python "multirotor\Algorithm\visualize_training_data.py" --compare-algorithms --out analysis_results
 echo.
 pause
+goto menu
+
+:comparison_workflow
+cls
+echo ============================================================
+echo 论文对比分析实验工作流 (DDPG+APF vs 纯DQN)
+echo ============================================================
+echo.
+call scripts\Run_Paper_Workflow.bat
 goto menu
 
 :four_group_benchmark
