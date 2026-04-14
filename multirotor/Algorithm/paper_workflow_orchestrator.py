@@ -11,12 +11,23 @@ from paper_workflow_state import create_experiment_root, initialize_workflow_sta
 
 
 class PaperWorkflowOrchestrator:
-    def __init__(self, *, workspace_root: Path, command_runner, archive_runner, recommendation_runner):
+    def __init__(
+        self,
+        *,
+        workspace_root: Path,
+        command_runner,
+        archive_runner,
+        recommendation_runner,
+        two_stage_recommendation_runner=None,
+        two_stage_analysis_runner=None,
+    ):
         self.workspace_root = Path(workspace_root)
         self.workflow_root = self.workspace_root / "analysis_results" / "workflows"
         self.command_runner = command_runner
         self.archive_runner = archive_runner
         self.recommendation_runner = recommendation_runner
+        self.two_stage_recommendation_runner = two_stage_recommendation_runner
+        self.two_stage_analysis_runner = two_stage_analysis_runner
 
     def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
         exp_root = create_experiment_root(base_root=self.workflow_root, workflow_type=workflow_type, alias=alias)
@@ -98,6 +109,49 @@ class PaperWorkflowOrchestrator:
         state["current_phase"] = "stage02_decision"
         state["status"] = "completed"
         state.setdefault("steps", {})["stage02_decision"] = {"status": "completed"}
+        save_workflow_state(exp_root, state)
+
+    def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
+        self._run_stage(
+            exp_root,
+            "sim_pretrain",
+            ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
+            {"phase_bucket": "sim_pretrain", "refine_mode": ""},
+        )
+
+        refine_commands = {
+            "online": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"],
+            "offline_logs": ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Logs.bat"],
+        }
+        if refine_mode not in refine_commands:
+            raise ValueError(f"Unsupported refine_mode: {refine_mode}")
+
+        self._run_stage(
+            exp_root,
+            "real_weighted_refine",
+            refine_commands[refine_mode],
+            {"phase_bucket": "real_weighted_refine", "refine_mode": refine_mode},
+        )
+
+        self._mark_step(exp_root, "two_stage_analysis", "running")
+        try:
+            analysis_outputs = self.two_stage_analysis_runner(exp_root, refine_mode=refine_mode)
+        except Exception as exc:
+            self._fail_step(exp_root, "two_stage_analysis", exc)
+            raise
+        self._mark_step(exp_root, "two_stage_analysis", "completed")
+
+        self._mark_step(exp_root, "real_weighted_refine_decision", "running")
+        try:
+            recommendation = self.two_stage_recommendation_runner(analysis_outputs["summary_csv"])
+        except Exception as exc:
+            self._fail_step(exp_root, "real_weighted_refine_decision", exc)
+            raise
+        state = load_workflow_state(exp_root)
+        state["recommendations"] = recommendation
+        state["current_phase"] = "real_weighted_refine_decision"
+        state["status"] = "completed"
+        state.setdefault("steps", {})["real_weighted_refine_decision"] = {"status": "completed"}
         save_workflow_state(exp_root, state)
 
 

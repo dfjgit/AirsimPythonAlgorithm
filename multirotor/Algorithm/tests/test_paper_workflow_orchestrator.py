@@ -120,6 +120,30 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["current_phase"], "stage02_decision")
         self.assertEqual(state["steps"]["stage02_decision"]["status"], "failed")
 
+    def test_run_virtual_real_two_stage_workflow_updates_state_and_archives_outputs(self):
+        command_runner = Mock(return_value=0)
+        archive_runner = Mock()
+        recommendation_runner = Mock(return_value={"decision": "寤鸿缁х画瀹為淇", "reasons": ["efficiency gain remains large"]})
+        two_stage_analysis_runner = Mock(return_value={"summary_csv": self.root / "summary.csv"})
+
+        orchestrator = PaperWorkflowOrchestrator(
+            workspace_root=self.root,
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            recommendation_runner=None,
+            two_stage_recommendation_runner=recommendation_runner,
+            two_stage_analysis_runner=two_stage_analysis_runner,
+        )
+
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="real-a")
+
+        orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["workflow_type"], "virtual_real_two_stage")
+        self.assertEqual(state["current_phase"], "real_weighted_refine_decision")
+        self.assertEqual(state["recommendations"]["decision"], "寤鸿缁х画瀹為淇")
+
     def test_main_help_prints_usage_and_exits_cleanly(self):
         stdout = StringIO()
 
