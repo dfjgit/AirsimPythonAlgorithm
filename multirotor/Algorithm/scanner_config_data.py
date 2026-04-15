@@ -36,6 +36,7 @@ class ScannerConfigData:
 
     # 新增字段：统一环境配置（物理规则与RL解耦）
     env_config: Dict[str, Any]
+    paper_benchmark: Dict[str, Any]
 
     def __init__(self, config_file: str = None):
         # 设置默认值
@@ -45,30 +46,30 @@ class ScannerConfigData:
             self.load_from_file(config_file)
 
     def _set_default_values(self) -> None:
-        """设置所有属性的默认值"""
+        """设置所有属性的默认值（与 system_config.json 保持一致）"""
         # 系数默认值
         self.repulsionCoefficient = 2.0
-        self.entropyCoefficient = 3.0
+        self.entropyCoefficient = 2.0
         self.distanceCoefficient = 2.0
-        self.leaderRangeCoefficient = 3.0
-        self.directionRetentionCoefficient = 2.0
-        self.updateInterval = 0.2
-        self.groundRepulsionCoefficient = 0.2
+        self.leaderRangeCoefficient = 1.5
+        self.directionRetentionCoefficient = 0.5
+        self.updateInterval = 0.5
+        self.groundRepulsionCoefficient = 2.0
 
         # 运动参数默认值
-        self.moveSpeed = 2.0
+        self.moveSpeed = 1.0
         self.rotationSpeed = 120.0
-        self.scanRadius = 5.0
-        self.altitude = 10.0  # 默认高度为10米
+        self.scanRadius = 2.0
+        self.altitude = 2.0
 
         # 距离参数默认值
-        self.maxRepulsionDistance = 5.0
-        self.minSafeDistance = 2.0
+        self.maxRepulsionDistance = 3.0
+        self.minSafeDistance = 1.0
 
         # 目标选择策略默认值
         self.avoidRevisits = True
         self.targetSearchRange = 20.0
-        self.revisitCooldown = 60.0
+        self.revisitCooldown = 10.0
 
         # 新增字段默认值
         self.name = "ScannerConfigData"
@@ -85,7 +86,7 @@ class ScannerConfigData:
                 "out_of_range_continuous_count": 12
             },
             "battery": {
-                "low_threshold": 3.2,
+                "low_threshold": 3.5,
                 "optimal_min": 3.7,
                 "optimal_max": 4.1
             },
@@ -98,45 +99,51 @@ class ScannerConfigData:
                 "step_penalty": -0.1
             }
         }
+        self.paper_benchmark = {
+            "seeds": [20260413, 20260414, 20260415],
+            "eval_episodes_per_seed": 10,
+            "termination": {
+                "target_scan_ratio": 0.25,
+                "max_collision_count": 6,
+                "max_elapsed_time_sec": 300.0,
+                "stagnation_timeout_sec": 30.0,
+                "out_of_range_reset_enabled": True,
+                "out_of_range_continuous_count": 12,
+            },
+            "random_apf": {
+                "weight_min": 0.5,
+                "weight_max": 5.0,
+                "sampling_mode": "uniform",
+            },
+        }
 
     def parse_json_data(self, json_data: Dict[str, Any]) -> None:
         """从JSON字典解析数据到对象属性"""
         # 解析基础参数
         self.repulsionCoefficient = self._get_float(json_data, 'repulsionCoefficient', 2.0)
-        self.entropyCoefficient = self._get_float(json_data, 'entropyCoefficient', 3.0)
+        self.entropyCoefficient = self._get_float(json_data, 'entropyCoefficient', 2.0)
         self.distanceCoefficient = self._get_float(json_data, 'distanceCoefficient', 2.0)
-        self.leaderRangeCoefficient = self._get_float(json_data, 'leaderRangeCoefficient', 3.0)
-        self.directionRetentionCoefficient = self._get_float(json_data, 'directionRetentionCoefficient', 2.0)
+        self.leaderRangeCoefficient = self._get_float(json_data, 'leaderRangeCoefficient', 1.5)
+        self.directionRetentionCoefficient = self._get_float(json_data, 'directionRetentionCoefficient', 0.5)
         self.groundRepulsionCoefficient = self._get_float(json_data, 'groundRepulsionCoefficient', 2.0)
 
-        self.updateInterval = self._get_float(json_data, 'updateInterval', 0.2)
+        self.updateInterval = self._get_float(json_data, 'updateInterval', 0.5)
 
-        self.moveSpeed = self._get_float(json_data, 'moveSpeed', 2.0)
+        self.moveSpeed = self._get_float(json_data, 'moveSpeed', 1.0)
         self.rotationSpeed = self._get_float(json_data, 'rotationSpeed', 120.0)
-        self.scanRadius = self._get_float(json_data, 'scanRadius', 5.0)
-        self.altitude = self._get_float(json_data, 'altitude', 10.0)
+        self.scanRadius = self._get_float(json_data, 'scanRadius', 2.0)
+        self.altitude = self._get_float(json_data, 'altitude', 2.0)
 
-        self.maxRepulsionDistance = self._get_float(json_data, 'maxRepulsionDistance', 5.0)
-        self.minSafeDistance = self._get_float(json_data, 'minSafeDistance', 2.0)
+        self.maxRepulsionDistance = self._get_float(json_data, 'maxRepulsionDistance', 3.0)
+        self.minSafeDistance = self._get_float(json_data, 'minSafeDistance', 1.0)
 
         self.avoidRevisits = json_data.get('avoidRevisits', True)
         self.targetSearchRange = self._get_float(json_data, 'targetSearchRange', 20.0)
-        self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 60.0)
+        self.revisitCooldown = self._get_float(json_data, 'revisitCooldown', 10.0)
 
         # 解析统一环境配置
-        env_config = json_data.get('env_config')
-        if isinstance(env_config, dict):
-            self._merge_env_config(env_config)
-
-    def _merge_env_config(self, env_config: Dict[str, Any]) -> None:
-        """合并环境规则，保留未显式覆盖的默认奖励与阈值。"""
-        merged_env_config = deepcopy(self.env_config)
-        for key, value in env_config.items():
-            if isinstance(value, dict) and isinstance(merged_env_config.get(key), dict):
-                merged_env_config[key].update(deepcopy(value))
-            else:
-                merged_env_config[key] = deepcopy(value)
-        self.env_config = merged_env_config
+        self.env_config = json_data.get('env_config', self.env_config)
+        self.paper_benchmark = json_data.get('paper_benchmark', self.paper_benchmark)
 
     @staticmethod
     def _get_float(data_dict: Dict[str, Any], key: str, default: float) -> float:
@@ -186,7 +193,8 @@ class ScannerConfigData:
             # 新增字段
             'name': self.name,
             'hideFlags': self.hideFlags,
-            'env_config': self.env_config
+            'env_config': self.env_config,
+            'paper_benchmark': self.paper_benchmark
         }
 
     def to_json(self) -> str:
@@ -226,9 +234,13 @@ class ScannerConfigData:
         new_data = ScannerConfigData()
         # 深拷贝env_config（避免浅拷贝导致的引用问题）
         new_data.env_config = {k: v.copy() if isinstance(v, dict) else v for k, v in self.env_config.items()}
+        new_data.paper_benchmark = {
+            k: v.copy() if isinstance(v, dict) else list(v) if isinstance(v, list) else v
+            for k, v in self.paper_benchmark.items()
+        }
         # 拷贝其他属性
         new_data.__dict__.update({
-            k: v for k, v in self.__dict__.items() if k != 'env_config'
+            k: v for k, v in self.__dict__.items() if k not in {'env_config', 'paper_benchmark'}
         })
         return new_data
     
@@ -246,11 +258,25 @@ class ScannerConfigData:
     def load_from_file(self, config_file: str) -> None:
         """
         从配置文件加载数据
+        支持两种格式：
+        - 新格式（system_config.json）：从 algorithm 和 environment 节读取
+        - 旧格式（apf_algorithm_config.json）：直接从顶层读取
         """
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+
+            # 新格式：system_config.json 包含 algorithm 和 environment 顶层键
+            if 'algorithm' in data and 'environment' in data:
+                self.parse_json_data(data['algorithm'])
+                self.env_config = data.get('environment', self.env_config)
+                self.paper_benchmark = data.get('paper_benchmark', self.paper_benchmark)
+            # 旧格式：apf_algorithm_config.json 直接包含 APF 参数和 env_config
+            elif 'repulsionCoefficient' in data or 'env_config' in data:
                 self.parse_json_data(data)
+            else:
+                print(f"未识别的配置文件格式: {config_file}")
+                self._set_default_values()
         except Exception as e:
             print(f"加载配置文件失败: {str(e)}")
             # 加载失败时保持默认值

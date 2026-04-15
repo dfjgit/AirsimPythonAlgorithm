@@ -154,10 +154,26 @@ class HierarchicalMovementEnv(gym.Env):
 
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        self.term_cfg = _apply_shared_unified_config(
-            self.server,
-            self.config,
-            {
+        unified_env_cfg = None
+        
+        # 1. 尝试从 server 获取 (最优先)
+        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
+            unified_env_cfg = self.server.config_data.env_config
+        else:
+            # 2. 尝试从本地 system_config.json 加载
+            try:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "system_config.json")
+                if os.path.exists(scanner_cfg_path):
+                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        unified_env_cfg = data.get('environment')
+            except Exception as e:
+                logger.warning(f"无法加载统一环境配置: {e}")
+
+        if not unified_env_cfg:
+            # 使用默认终止配置
+            self.term_cfg = self.config.get('termination_config', {
                 "target_scan_ratio": 0.95,
                 "max_collision_count": 1,
                 "max_elapsed_time_sec": 300.0,
@@ -801,10 +817,26 @@ class MultiDroneHierarchicalMovementEnv(gym.Env):
 
     def _apply_unified_config(self):
         """从统一源加载环境规则（终止阈值、电量参数、基础奖励）"""
-        self.term_cfg = _apply_shared_unified_config(
-            self.server,
-            self.config,
-            {
+        unified_env_cfg = None
+        
+        # 1. 尝试从 server 获取 (最优先)
+        if self.server and hasattr(self.server, 'config_data') and hasattr(self.server.config_data, 'env_config'):
+            unified_env_cfg = self.server.config_data.env_config
+        else:
+            # 2. 尝试从本地 system_config.json 加载
+            try:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                scanner_cfg_path = os.path.join(current_dir, "..", "..", "..", "system_config.json")
+                if os.path.exists(scanner_cfg_path):
+                    with open(scanner_cfg_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        unified_env_cfg = data.get('environment')
+            except Exception as e:
+                logger.warning(f"无法加载统一环境配置: {e}")
+
+        if not unified_env_cfg:
+            # 使用默认终止配置
+            self.term_cfg = self.config.get('termination_config', {
                 "target_scan_ratio": 0.95,
                 "max_collision_count": 1,
                 "max_elapsed_time_sec": 300.0,

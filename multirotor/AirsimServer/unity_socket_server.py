@@ -17,6 +17,9 @@ logger = logging.getLogger("UnitySocketServer")
 class UnitySocketServer:
     """与Unity通信的Socket服务器核心类"""
 
+    socket_family_ipv4 = socket.AF_INET
+    socket_family_ipv6 = socket.AF_INET6
+
     def __init__(self, host='localhost', port=5000, buffer_size=8192):  # 优化：增大缓冲区
         self.host = host
         self.port = port
@@ -46,18 +49,48 @@ class UnitySocketServer:
         self.stats_crazyflie_logging_updates = 0
         self.stats_obstacle_updates = 0
 
+    def _create_server_socket(self):
+        """Create a listening socket that accepts localhost via IPv4 or IPv6."""
+        errors = []
+
+        if self.host in ("localhost", "", None):
+            try:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                except (AttributeError, OSError):
+                    pass
+                sock.bind(("::", self.port))
+                sock.listen(1)
+                logger.info(f"服务器启动成功 [dual-stack] ::{self.port}")
+                return sock
+            except Exception as exc:
+                errors.append(exc)
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            bind_host = "127.0.0.1" if self.host in ("localhost", "", None) else self.host
+            sock.bind((bind_host, self.port))
+            sock.listen(1)
+            logger.info(f"服务器启动成功 {bind_host}:{self.port}")
+            return sock
+        except Exception as exc:
+            errors.append(exc)
+
+        raise OSError(
+            "启动失败: " + "; ".join(str(error) for error in errors)
+        )
+
     def start(self) -> bool:
         """启动Socket服务器并监听连接"""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
-            self.socket.listen(1)
+            self.socket = self._create_server_socket()
             self.running = True
 
             self.server_thread = threading.Thread(target=self._server_loop, daemon=True)
             self.server_thread.start()
-            logger.info(f"服务器启动成功 {self.host}:{self.port}")
             return True
         except Exception as e:
             logger.error(f"启动失败: {str(e)}")

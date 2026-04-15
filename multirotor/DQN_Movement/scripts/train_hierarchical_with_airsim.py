@@ -105,7 +105,7 @@ def train_hrl_with_airsim(enable_visualization=True):
     drones_config = DronesConfig()
     drone_names = drones_config.get_training_drones('hierarchical')
     if not drone_names:
-        print(f"  ✗ 错误: 没有可用的训练无人机，请检查 drones_config.json 中的 hierarchical 配置")
+        print(f"  ✗ 错误: 没有可用的训练无人机，请检查 system_config.json 中的 hierarchical 配置")
         sys.exit(1)
     
     print(f"✓ 训练无人机: {drone_names}")
@@ -114,7 +114,7 @@ def train_hrl_with_airsim(enable_visualization=True):
     with open(hrl_config_path, 'r', encoding='utf-8') as f:
         hrl_config = json.load(f)
 
-    config_file = os.path.join(os.path.dirname(__file__), "..", "..", "apf_algorithm_config.json")
+    config_file = os.path.join(os.path.dirname(__file__), "..", "..", "system_config.json")
 
     # 2. 启动 AirSim 服务器（禁用SimpleVisualizer，使用HierarchicalVisualizer代替）
     print(f"正在启动服务器 (DQN控制模式)...")

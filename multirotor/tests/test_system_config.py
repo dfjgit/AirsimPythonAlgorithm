@@ -1,5 +1,4 @@
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +20,7 @@ class SystemConfigTests(unittest.TestCase):
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
-    def test_prefers_new_system_config_when_present(self):
+    def test_loads_drones_and_environment_from_system_config(self):
         system_path = self._write_json(
             "system_config.json",
             {
@@ -43,35 +42,33 @@ class SystemConfigTests(unittest.TestCase):
         self.assertTrue(config.is_crazyflie_mirror("CF1"))
         self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.25)
 
-    def test_falls_back_to_legacy_files_when_system_config_is_missing(self):
-        drones_path = self._write_json(
-            "drones_config.json",
+    def test_reads_algorithm_params(self):
+        system_path = self._write_json(
+            "system_config.json",
             {
-                "drones": {
-                    "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False}
-                }
-            },
-        )
-        apf_path = self._write_json(
-            "apf_algorithm_config.json",
-            {
-                "repulsionCoefficient": 2.0,
-                "env_config": {
-                    "termination": {"target_scan_ratio": 0.4},
-                    "battery": {"low_threshold": 3.4, "optimal_min": 3.7, "optimal_max": 4.1},
+                "drones": {"UAV1": {"enabled": True, "type": "virtual"}},
+                "environment": {
+                    "termination": {"target_scan_ratio": 0.25},
+                    "battery": {"low_threshold": 3.5},
+                },
+                "algorithm": {
+                    "repulsionCoefficient": 2.0,
+                    "scanRadius": 5.0,
+                    "moveSpeed": 1.0,
                 },
             },
         )
 
-        config = SystemConfig(
-            config_file=str(self.root / "missing_system_config.json"),
-            legacy_drones_file=str(drones_path),
-            legacy_apf_file=str(apf_path),
-        )
+        config = SystemConfig(config_file=str(system_path))
+        algo = config.get_algorithm_params()
 
-        self.assertEqual(config.get_all_drones(), ["UAV1"])
-        self.assertEqual(load_environment_rules(config), config.get_environment_rules())
-        self.assertEqual(config.get_environment_rules()["termination"]["target_scan_ratio"], 0.4)
+        self.assertEqual(algo["repulsionCoefficient"], 2.0)
+        self.assertEqual(algo["scanRadius"], 5.0)
+        self.assertEqual(algo["moveSpeed"], 1.0)
+
+    def test_raises_file_not_found_when_missing(self):
+        with self.assertRaises(FileNotFoundError):
+            SystemConfig(config_file=str(self.root / "missing.json"))
 
     def test_environment_rules_are_isolated_from_internal_state(self):
         system_path = self._write_json(
@@ -120,63 +117,21 @@ class SystemConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected_message):
                     SystemConfig(config_file=str(config_path))
 
-    def test_rejects_malformed_legacy_fallback_shapes(self):
-        cases = [
-            (
-                "legacy_drones_not_dict",
-                {"drones": []},
-                {"env_config": {}},
-                "legacy drones must be a dict",
-            ),
-            (
-                "legacy_environment_not_dict",
-                {"drones": {"UAV1": {"enabled": True}}},
-                {"env_config": []},
-                "legacy env_config must be a dict",
-            ),
-            (
-                "legacy_drone_entry_not_dict",
-                {"drones": {"UAV1": 1}},
-                {"env_config": {}},
-                "legacy drone entry 'UAV1' must be a dict",
-            ),
-        ]
+    def test_load_environment_rules_helper(self):
+        system_path = self._write_json(
+            "system_config.json",
+            {
+                "drones": {"UAV1": {"enabled": True}},
+                "environment": {
+                    "termination": {"target_scan_ratio": 0.3},
+                    "battery": {"low_threshold": 3.4},
+                },
+            },
+        )
 
-        for case_name, drones_payload, apf_payload, expected_message in cases:
-            with self.subTest(case=case_name):
-                drones_path = self._write_json(f"{case_name}_drones.json", drones_payload)
-                apf_path = self._write_json(f"{case_name}_apf.json", apf_payload)
-                with self.assertRaisesRegex(ValueError, expected_message):
-                    SystemConfig(
-                        config_file=str(self.root / "missing_system_config.json"),
-                        legacy_drones_file=str(drones_path),
-                        legacy_apf_file=str(apf_path),
-                    )
-
-    def test_rejects_malformed_legacy_root_payloads(self):
-        bad_drones_root = self._write_json("bad_legacy_drones_root.json", [])
-        good_apf = self._write_json("good_legacy_apf.json", {"env_config": {}})
-        with self.assertRaisesRegex(
-            ValueError,
-            re.escape(str(bad_drones_root)),
-        ):
-            SystemConfig(
-                config_file=str(self.root / "missing_system_config.json"),
-                legacy_drones_file=str(bad_drones_root),
-                legacy_apf_file=str(good_apf),
-            )
-
-        good_drones = self._write_json("good_legacy_drones.json", {"drones": {}})
-        bad_apf_root = self._write_json("bad_legacy_apf_root.json", "broken")
-        with self.assertRaisesRegex(
-            ValueError,
-            re.escape(str(bad_apf_root)),
-        ):
-            SystemConfig(
-                config_file=str(self.root / "missing_system_config.json"),
-                legacy_drones_file=str(good_drones),
-                legacy_apf_file=str(bad_apf_root),
-            )
+        config = SystemConfig(config_file=str(system_path))
+        rules = load_environment_rules(config)
+        self.assertEqual(rules["termination"]["target_scan_ratio"], 0.3)
 
 
 if __name__ == "__main__":

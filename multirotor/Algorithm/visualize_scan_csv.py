@@ -20,6 +20,7 @@ except ImportError:  # script-mode fallback
 
 LOGGER = logging.getLogger("scan_csv_visualizer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+ROLLING_BAND_LABEL = "滑动均值 ± 1σ"
 
 
 def setup_plot_style() -> None:
@@ -89,7 +90,73 @@ class RunData:
             df["min_global_avg_entropy"] = pd.to_numeric(df["min_global_avg_entropy"], errors="coerce")
         return df
 
+    @staticmethod
+    def _text_series(df: pd.DataFrame, column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series([""] * len(df), index=df.index, dtype=object)
+        return df[column].fillna("").astype(str).str.strip()
+
+    def _scan_episode_summary(self) -> pd.DataFrame:
+        if self.scan_df.empty or "episode" not in self.scan_df.columns:
+            return pd.DataFrame()
+
+        working = self.scan_df.copy()
+        working = working.dropna(subset=["episode"])
+        if working.empty:
+            return pd.DataFrame()
+        working["episode"] = pd.to_numeric(working["episode"], errors="coerce")
+        working = working.dropna(subset=["episode"])
+        if working.empty:
+            return pd.DataFrame()
+        working["episode"] = working["episode"].astype(int)
+        if "step" in working.columns:
+            working["step"] = pd.to_numeric(working["step"], errors="coerce").fillna(0)
+        elif "episode_step" in working.columns:
+            working["step"] = pd.to_numeric(working["episode_step"], errors="coerce").fillna(0)
+        else:
+            working["step"] = 0
+        working["reset_reason"] = self._text_series(working, "reset_reason")
+        terminal = working[(working["step"] > 0) & (working["reset_reason"] != "")].copy()
+        if terminal.empty:
+            terminal = working.sort_values(["episode", "step"]).groupby("episode", as_index=False).tail(1)
+
+        if "episode_reward" not in working.columns:
+            working["episode_reward"] = np.nan
+        if "global_scan_ratio" not in working.columns:
+            working["global_scan_ratio"] = np.nan
+        if "global_avg_entropy" not in working.columns:
+            working["global_avg_entropy"] = np.nan
+
+        grouped = working.groupby("episode", as_index=False).agg(
+            episode_reward=("episode_reward", "max"),
+            episode_length=("step", "max"),
+            episode_scan_ratio=("global_scan_ratio", "max"),
+            episode_min_entropy=("global_avg_entropy", "min"),
+        )
+        merge_cols = [c for c in ["episode", "reset_reason", "collision_object_name", "collision_position"] if c in terminal.columns]
+        terminal = terminal[merge_cols].drop_duplicates(subset=["episode"], keep="last")
+        episode_df = grouped.merge(terminal, on="episode", how="left")
+        episode_df["reset_reason"] = self._text_series(episode_df, "reset_reason")
+        episode_df["collision_object_name"] = self._text_series(episode_df, "collision_object_name")
+        episode_df["collision_position"] = self._text_series(episode_df, "collision_position")
+        return episode_df.sort_values("episode")
+
+    @staticmethod
+    def _should_replace_placeholder_metric(training_series: pd.Series, scan_series: pd.Series, *, metric: str) -> bool:
+        training = pd.to_numeric(training_series, errors="coerce").dropna()
+        scan = pd.to_numeric(scan_series, errors="coerce").dropna()
+        if scan.empty:
+            return False
+        if training.empty:
+            return True
+        if metric == "episode_scan_ratio":
+            return training.nunique() <= 1 and float(training.max()) <= 0 and float(scan.max()) > 0
+        if metric == "episode_min_entropy":
+            return training.nunique() <= 1 and float(training.min()) >= 100 and float(scan.min()) < 100
+        return False
+
     def _build_episode_df(self) -> pd.DataFrame:
+        scan_summary = self._scan_episode_summary()
         if not self.training_df.empty and {"episode", "reward", "length"}.issubset(self.training_df.columns):
             episode_df = self.training_df.copy()
             rename_map = {
@@ -108,44 +175,51 @@ class RunData:
                 episode_df["episode_min_entropy"] = pd.to_numeric(
                     episode_df["episode_min_entropy"], errors="coerce"
                 )
-            episode_df["reset_reason"] = episode_df.get("reset_reason", "").fillna("").astype(str).str.strip()
-            episode_df["collision_object_name"] = (
-                episode_df.get("collision_object_name", "").fillna("").astype(str).str.strip()
-            )
-            episode_df["collision_position"] = (
-                episode_df.get("collision_position", "").fillna("").astype(str).str.strip()
-            )
-            episode_df = episode_df.sort_values("episode").dropna(subset=["episode"])
+            episode_df["reset_reason"] = self._text_series(episode_df, "reset_reason")
+            episode_df["collision_object_name"] = self._text_series(episode_df, "collision_object_name")
+            episode_df["collision_position"] = self._text_series(episode_df, "collision_position")
+            episode_df = episode_df.sort_values("episode").dropna(subset=["episode"]).copy()
+
+            if not scan_summary.empty:
+                scan_episode_scan_ratio = scan_summary.set_index("episode")["episode_scan_ratio"]
+                scan_episode_min_entropy = scan_summary.set_index("episode")["episode_min_entropy"]
+                scan_reset_reason = scan_summary.set_index("episode")["reset_reason"]
+                scan_collision_object_name = scan_summary.set_index("episode")["collision_object_name"]
+                scan_collision_position = scan_summary.set_index("episode")["collision_position"]
+
+                if "episode_scan_ratio" not in episode_df.columns:
+                    episode_df["episode_scan_ratio"] = episode_df["episode"].map(scan_episode_scan_ratio)
+                elif self._should_replace_placeholder_metric(
+                    episode_df["episode_scan_ratio"],
+                    episode_df["episode"].map(scan_episode_scan_ratio),
+                    metric="episode_scan_ratio",
+                ):
+                    episode_df["episode_scan_ratio"] = episode_df["episode"].map(scan_episode_scan_ratio)
+
+                if "episode_min_entropy" not in episode_df.columns:
+                    episode_df["episode_min_entropy"] = episode_df["episode"].map(scan_episode_min_entropy)
+                elif self._should_replace_placeholder_metric(
+                    episode_df["episode_min_entropy"],
+                    episode_df["episode"].map(scan_episode_min_entropy),
+                    metric="episode_min_entropy",
+                ):
+                    episode_df["episode_min_entropy"] = episode_df["episode"].map(scan_episode_min_entropy)
+
+                blank_reset = episode_df["reset_reason"].eq("")
+                episode_df.loc[blank_reset, "reset_reason"] = episode_df.loc[blank_reset, "episode"].map(scan_reset_reason).fillna("")
+
+                blank_collision = episode_df["collision_object_name"].eq("")
+                episode_df.loc[blank_collision, "collision_object_name"] = (
+                    episode_df.loc[blank_collision, "episode"].map(scan_collision_object_name).fillna("")
+                )
+
+                blank_position = episode_df["collision_position"].eq("")
+                episode_df.loc[blank_position, "collision_position"] = (
+                    episode_df.loc[blank_position, "episode"].map(scan_collision_position).fillna("")
+                )
             return episode_df
 
-        if self.scan_df.empty or "episode" not in self.scan_df.columns:
-            return pd.DataFrame()
-
-        working = self.scan_df.copy()
-        working = working.dropna(subset=["episode"]) 
-        working["episode"] = working["episode"].astype(int)
-        if "step" in working.columns:
-            working["step"] = pd.to_numeric(working["step"], errors="coerce").fillna(0)
-        else:
-            working["step"] = 0
-        working["reset_reason"] = working.get("reset_reason", "").fillna("").astype(str).str.strip()
-        terminal = working[(working["step"] > 0) & (working["reset_reason"] != "")].copy()
-        if terminal.empty:
-            terminal = working.sort_values(["episode", "step"]).groupby("episode", as_index=False).tail(1)
-
-        grouped = working.groupby("episode", as_index=False).agg(
-            episode_reward=("episode_reward", "max"),
-            episode_length=("step", "max"),
-            episode_scan_ratio=("global_scan_ratio", "max"),
-            episode_min_entropy=("global_avg_entropy", "min"),
-        )
-        merge_cols = [c for c in ["episode", "reset_reason", "collision_object_name", "collision_position"] if c in terminal.columns]
-        terminal = terminal[merge_cols].drop_duplicates(subset=["episode"], keep="last")
-        episode_df = grouped.merge(terminal, on="episode", how="left")
-        episode_df["reset_reason"] = episode_df.get("reset_reason", "").fillna("").astype(str).str.strip()
-        episode_df["collision_object_name"] = episode_df.get("collision_object_name", "").fillna("")
-        episode_df["collision_position"] = episode_df.get("collision_position", "").fillna("")
-        return episode_df.sort_values("episode")
+        return scan_summary
 
 
 def normalize_percent_series(series: pd.Series) -> pd.Series:
@@ -247,9 +321,9 @@ def plot_episode_performance_summary(run: RunData) -> None:
     fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
     x = df["episode"]
     configs = [
-        ("episode_reward", "Episode Reward", axes[0], "tab:blue"),
-        ("episode_scan_ratio", "Max Global Scan Ratio (%)", axes[1], "tab:green"),
-        ("episode_min_entropy", "Min Global Avg Entropy", axes[2], "tab:red"),
+        ("episode_reward", "单轮累计奖励", axes[0], "tab:blue"),
+        ("episode_scan_ratio", "最大全局扫描率 (%)", axes[1], "tab:green"),
+        ("episode_min_entropy", "最小全局平均熵", axes[2], "tab:red"),
     ]
     for col, title, ax, color in configs:
         if col not in df.columns:
@@ -259,13 +333,13 @@ def plot_episode_performance_summary(run: RunData) -> None:
             x,
             df[col],
             color=color,
-            label="Rolling Mean ± 1σ",
+            label=ROLLING_BAND_LABEL,
             window=20,
         )
         ax.set_ylabel(title)
         ax.legend(loc="best")
-    axes[2].set_xlabel("Episode")
-    fig.suptitle("Episode Performance Summary", fontsize=16)
+    axes[2].set_xlabel("训练轮次")
+    fig.suptitle("单轮性能概览", fontsize=16)
     fig.tight_layout()
     fig.savefig(run.output_dir / "episode_performance_summary.png", dpi=160)
     plt.close(fig)
@@ -285,9 +359,9 @@ def plot_reset_reason_rolling_ratio(run: RunData) -> None:
     for reason in reasons:
         values = (df["reset_reason"] == reason).astype(float) * 100.0
         plot_mean_with_band(ax, x, values, label=reason, window=20, linewidth=2.2)
-    ax.set_title("Reset Reason Rolling Ratio (20 episodes)")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Ratio (%)")
+    ax.set_title("重置原因滚动占比（20轮）")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("占比 (%)")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "reset_reason_rolling_ratio.png", dpi=160)
@@ -310,12 +384,12 @@ def plot_collision_stability(run: RunData) -> None:
         x,
         collision_rate,
         color="#e76f51",
-        label="Rolling Mean ± 1σ",
+        label=ROLLING_BAND_LABEL,
         window=20,
     )
-    ax.set_title("Collision Stability")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Collision Termination Ratio (%)")
+    ax.set_title("碰撞稳定性变化")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("碰撞终止占比 (%)")
     ax.set_ylim(-5, 105)
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
@@ -343,12 +417,12 @@ def plot_collision_count_trend(run: RunData) -> None:
         x,
         collision_count.fillna(0.0),
         color="#bc6c25",
-        label="Rolling Mean ± 1σ",
+        label=ROLLING_BAND_LABEL,
         window=20,
     )
-    ax.set_title("Collision Count Trend")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Collision Count")
+    ax.set_title("碰撞次数变化")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("碰撞次数")
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -369,7 +443,7 @@ def plot_collision_hotspots(run: RunData) -> None:
     zs = [p[1] for p in points]
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.scatter(xs, zs, s=60, alpha=0.75, c=np.arange(len(xs)), cmap="Reds")
-    ax.set_title("Collision Hotspots (Top-Down XZ)")
+    ax.set_title("碰撞热点分布（XZ 俯视图）")
     ax.set_xlabel("X")
     ax.set_ylabel("Z")
     ax.grid(True, alpha=0.25)
@@ -388,8 +462,8 @@ def plot_collision_object_breakdown(run: RunData) -> None:
     counts = series.value_counts().head(10)
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.bar(counts.index.astype(str), counts.values, color="#d55e00")
-    ax.set_title("Collision Object Breakdown")
-    ax.set_ylabel("Count")
+    ax.set_title("碰撞对象构成")
+    ax.set_ylabel("次数")
     ax.tick_params(axis="x", rotation=25)
     fig.tight_layout()
     fig.savefig(run.output_dir / "collision_object_breakdown.png", dpi=160)
@@ -425,9 +499,9 @@ def plot_algorithm_weights_stability(run: RunData) -> None:
             linewidth=1.8,
             band_alpha=0.15,
         )
-    axes[0].set_title("Weight Rolling Mean (window=50)")
-    axes[1].set_title("Weight Rolling Std (window=50)")
-    axes[1].set_xlabel("Elapsed Time (s)")
+    axes[0].set_title("权重滑动均值（窗口=50）")
+    axes[1].set_title("权重滑动标准差（窗口=50）")
+    axes[1].set_xlabel("运行时间（秒）")
     axes[0].legend(loc="best", ncol=2)
     axes[1].legend(loc="best", ncol=2)
     fig.tight_layout()
@@ -505,7 +579,7 @@ def _select_representative_episodes(run: RunData, limit: int = 4) -> list[tuple[
         ascending=[False, False, False],
         na_position="last",
     )
-    _append_from_row("Best Scan", best_scan.iloc[0] if not best_scan.empty else None)
+    _append_from_row("最佳扫描", best_scan.iloc[0] if not best_scan.empty else None)
 
     best_entropy = working.sort_values(
         ["episode_min_entropy", "episode_scan_ratio", "episode"],
@@ -513,10 +587,10 @@ def _select_representative_episodes(run: RunData, limit: int = 4) -> list[tuple[
         na_position="last",
     )
     _append_from_row(
-        "Lowest Entropy", best_entropy.iloc[0] if not best_entropy.empty else None
+        "最低熵值", best_entropy.iloc[0] if not best_entropy.empty else None
     )
 
-    _append_from_row("Latest Episode", working.iloc[-1])
+    _append_from_row("最近回合", working.iloc[-1])
 
     failure_mask = (
         (working["reset_reason"] != "")
@@ -524,14 +598,14 @@ def _select_representative_episodes(run: RunData, limit: int = 4) -> list[tuple[
     )
     failure_rows = working[failure_mask]
     if not failure_rows.empty:
-        _append_from_row("Representative Failure", failure_rows.iloc[-1])
+        _append_from_row("代表性失败", failure_rows.iloc[-1])
 
     worst_scan = working.sort_values(
         ["episode_scan_ratio", "episode", "episode_reward"],
         ascending=[True, False, True],
         na_position="last",
     )
-    _append_from_row("Worst Scan", worst_scan.iloc[0] if not worst_scan.empty else None)
+    _append_from_row("最低扫描", worst_scan.iloc[0] if not worst_scan.empty else None)
 
     deduped: list[tuple[str, int]] = []
     seen: set[int] = set()
@@ -547,7 +621,7 @@ def _select_representative_episodes(run: RunData, limit: int = 4) -> list[tuple[
             episode = int(row["episode"])
             if episode in seen:
                 continue
-            deduped.append((f"Recent Ep {episode}", episode))
+            deduped.append(("最近补充", episode))
             seen.add(episode)
             if len(deduped) >= limit:
                 break
@@ -571,7 +645,8 @@ def plot_best_vs_recent_trajectory_comparison(run: RunData) -> None:
         has_data = True
         for drone, (x, z) in xz.items():
             ax.plot(x, z, linewidth=1.8, label=drone)
-        ax.set_title(f"{label.title()} Episode #{episode}")
+        label_map = {"best": "最佳回合", "recent": "最近回合"}
+        ax.set_title(f"{label_map.get(label, label)} 第 {episode} 轮")
         ax.set_xlabel("X")
         ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)
@@ -593,12 +668,12 @@ def plot_scan_progress(run: RunData) -> None:
         ax,
         df["episode"],
         df["episode_scan_ratio"],
-        label="Rolling Mean ± 1σ",
+        label=ROLLING_BAND_LABEL,
         window=20,
     )
-    ax.set_title("Episode Scan Progress")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Max Global Scan Ratio (%)")
+    ax.set_title("单轮扫描进展")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("最大全局扫描率 (%)")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "scan_progress.png", dpi=160)
@@ -614,12 +689,12 @@ def plot_entropy_trend(run: RunData) -> None:
         ax,
         df["episode"],
         df["episode_min_entropy"],
-        label="Rolling Mean ± 1σ",
+        label=ROLLING_BAND_LABEL,
         window=20,
     )
-    ax.set_title("Episode Min Entropy Trend")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Min Global Avg Entropy")
+    ax.set_title("单轮最小熵变化")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("最小全局平均熵")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "entropy_trend.png", dpi=160)
@@ -656,7 +731,7 @@ def plot_trajectories_xy(run: RunData) -> None:
         plotted = True
         for drone, (x, z) in xz.items():
             ax.plot(x, z, linewidth=1.6, alpha=0.9, label=drone)
-        ax.set_title(f"{label} | Episode {episode}")
+        ax.set_title(f"{label} | 第 {episode} 轮")
         ax.set_xlabel("X")
         ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)
@@ -669,7 +744,7 @@ def plot_trajectories_xy(run: RunData) -> None:
         plt.close(fig)
         return
 
-    fig.suptitle("Representative Trajectories (Top-Down XZ)", fontsize=16)
+    fig.suptitle("代表性轨迹对比（XZ 俯视图）", fontsize=16)
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_xy.png", dpi=160)
     plt.close(fig)
@@ -715,10 +790,10 @@ def plot_trajectories_3d(run: RunData) -> None:
                 episode_plotted = True
                 plotted = True
         if episode_plotted:
-            ax.set_title(f"{label} | Episode {episode}")
+            ax.set_title(f"{label} | 第 {episode} 轮")
             ax.set_xlabel("X")
             ax.set_ylabel("Z")
-            ax.set_zlabel("Y (Height)")
+            ax.set_zlabel("Y（高度）")
             ax.legend(loc="best")
         else:
             ax.set_visible(False)
@@ -727,7 +802,7 @@ def plot_trajectories_3d(run: RunData) -> None:
         plt.close(fig)
         return
 
-    fig.suptitle("Representative Trajectories (3D, Height=Y)", fontsize=16)
+    fig.suptitle("代表性轨迹对比（三维，高度轴为 Y）", fontsize=16)
     fig.tight_layout()
     fig.savefig(run.output_dir / "trajectories_3d.png", dpi=160)
     plt.close(fig)
@@ -744,12 +819,12 @@ def plot_uncertainty_elimination_efficiency(run: RunData) -> None:
         ax,
         df["episode"],
         efficiency,
-        label="Rolling Mean ± 1σ",
+        label=ROLLING_BAND_LABEL,
         window=20,
     )
-    ax.set_title("Uncertainty Elimination Efficiency")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Scan Ratio per Step")
+    ax.set_title("不确定性消减效率")
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("单步扫描率")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "uncertainty_elimination_efficiency.png", dpi=160)
@@ -786,9 +861,9 @@ def plot_entropy_hist_snapshots(run: RunData, snapshots: int) -> None:
     if not drawn:
         plt.close(fig)
         return
-    ax.set_title("Entropy Histogram Snapshots")
-    ax.set_xlabel("Entropy Bin")
-    ax.set_ylabel("Cell Count")
+    ax.set_title("熵直方图快照")
+    ax.set_xlabel("熵分箱")
+    ax.set_ylabel("网格数量")
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(run.output_dir / "entropy_hist_snapshots.png", dpi=160)
@@ -812,7 +887,7 @@ def plot_selected_episode_trajectories(run: RunData) -> None:
         fig, ax = plt.subplots(figsize=(7, 7))
         for drone, (x, z) in xz.items():
             ax.plot(x, z, linewidth=1.4, label=drone)
-        ax.set_title(f"{label} | Episode {episode} Trajectory Top-Down XZ")
+        ax.set_title(f"{label} | 第 {episode} 轮轨迹（XZ 俯视图）")
         ax.set_xlabel("X")
         ax.set_ylabel("Z")
         ax.grid(True, alpha=0.25)

@@ -44,23 +44,23 @@ def main():
             if drone_names:
                 # 使用配置文件中的无人机
                 drone_name = drone_names[0]
-                logger.info(f"从 drones_config.json 读取训练无人机: {drone_name}")
+                logger.info(f"从 system_config.json 读取训练无人机: {drone_name}")
             else:
                 # 配置文件存在但没有对应的训练配置，使用默认值并提示
                 drone_name = "UAV1"
-                logger.warning(f"drones_config.json 中未找到 training.hierarchical 配置")
+                logger.warning(f"system_config.json 中未找到 training.hierarchical 配置")
                 logger.warning(f"使用默认无人机: {drone_name}")
-                logger.info(f"提示: 如需自定义训练无人机，请在 drones_config.json 的 training.hierarchical 部分配置")
+                logger.info(f"提示: 如需自定义训练无人机，请在 system_config.json 的 training.hierarchical 部分配置")
         except FileNotFoundError:
             # 配置文件不存在，使用默认值并提示
             drone_name = "UAV1"
-            logger.warning(f"未找到 drones_config.json 配置文件")
+            logger.warning(f"未找到 system_config.json 配置文件")
             logger.warning(f"使用默认无人机: {drone_name}")
-            logger.info(f"提示: 配置文件应位于项目根目录的 multirotor/drones_config.json")
+            logger.info(f"提示: 配置文件应位于项目根目录的 multirotor/system_config.json")
         except Exception as e:
             # 其他错误，使用默认值并提示
             drone_name = "UAV1"
-            logger.warning(f"读取 drones_config.json 时出错: {e}")
+            logger.warning(f"读取 system_config.json 时出错: {e}")
             logger.warning(f"使用默认无人机: {drone_name}")
 
     # 1. 启动 AlgorithmServer (控制模式必须为 apf)

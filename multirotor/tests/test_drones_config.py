@@ -21,20 +21,11 @@ class DronesConfigFacadeTests(unittest.TestCase):
                         "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False},
                         "UAV2": {"enabled": False, "type": "virtual", "isCrazyflieMirror": False},
                     },
-                    "environment": {"termination": {}, "battery": {}},
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        (self.root / "drones_config.json").write_text(
-            json.dumps(
-                {
                     "training": {
                         "dqn": {"use_all_drones": False, "drone_list": ["UAV1", "UAV2"]},
                         "ddpg": {"use_all_drones": True},
-                    }
+                    },
+                    "environment": {"termination": {}, "battery": {}},
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -45,31 +36,24 @@ class DronesConfigFacadeTests(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def test_uses_system_config_for_inventory_and_training_config_for_selection(self):
-        config = DronesConfig(
-            config_file=str(self.root / "drones_config.json"),
-            system_config_file=str(self.root / "system_config.json"),
-        )
+    def test_reads_drones_and_training_from_single_file(self):
+        config = DronesConfig(config_file=str(self.root / "system_config.json"))
 
         self.assertEqual(config.get_all_drones(), ["UAV1", "UAV2"])
         self.assertEqual(config.get_enabled_drones(), ["UAV1"])
         self.assertEqual(config.get_training_drones("dqn"), ["UAV1"])
         self.assertEqual(config.get_training_drones("ddpg"), ["UAV1"])
 
-    def test_save_config_persists_training_and_drone_updates_to_their_own_files(self):
-        config = DronesConfig(
-            config_file=str(self.root / "drones_config.json"),
-            system_config_file=str(self.root / "system_config.json"),
-        )
+    def test_save_config_persists_to_single_file(self):
+        config = DronesConfig(config_file=str(self.root / "system_config.json"))
 
         config.get_drone_info("UAV1")["isCrazyflieMirror"] = True
         config.config["training"]["dqn"] = {"use_all_drones": True}
         config.save_config()
 
-        saved_training = json.loads((self.root / "drones_config.json").read_text(encoding="utf-8"))
-        saved_system = json.loads((self.root / "system_config.json").read_text(encoding="utf-8"))
-        self.assertTrue(saved_training["training"]["dqn"]["use_all_drones"])
-        self.assertTrue(saved_system["drones"]["UAV1"]["isCrazyflieMirror"])
+        saved = json.loads((self.root / "system_config.json").read_text(encoding="utf-8"))
+        self.assertTrue(saved["training"]["dqn"]["use_all_drones"])
+        self.assertTrue(saved["drones"]["UAV1"]["isCrazyflieMirror"])
 
     def test_mixed_legacy_shape_only_persists_training_block_to_drones_config_file(self):
         (self.root / "drones_config.json").write_text(

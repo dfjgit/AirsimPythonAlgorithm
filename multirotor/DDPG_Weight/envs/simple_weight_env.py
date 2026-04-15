@@ -278,9 +278,24 @@ class SimpleWeightEnv(gym.Env):
             and hasattr(self.server.config_data, "env_config")
         ):
             unified_env_cfg = self.server.config_data.env_config
-        else:
+
+        # 2. 如果没有 server，尝试从本地 system_config.json 加载
+        if unified_env_cfg is None:
             try:
-                unified_env_cfg = load_environment_rules(SystemConfig())
+                # 寻找根目录下的 system_config.json
+                # 当前文件在 multirotor/DDPG_Weight/envs/，根目录在 multirotor/
+                config_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "..",
+                    "..",
+                    "system_config.json",
+                )
+                if os.path.exists(config_path):
+                    import json
+
+                    with open(config_path, "r", encoding="utf-8-sig") as f:
+                        full_cfg = json.load(f)
+                        unified_env_cfg = full_cfg.get("environment")
             except Exception as e:
                 print(f"[Warning] 加载共享环境配置失败: {e}")
 
@@ -336,10 +351,13 @@ class SimpleWeightEnv(gym.Env):
                         setattr(self.reward_config, local_attr, val)
                 print(f"  • 奖励系数已对齐: Scan={self.reward_config.scan_reward}")
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """重置环境"""
         import time
         import sys
+
+        if seed is not None:
+            np.random.seed(int(seed))
 
         # Episode计数
         self.episode_count += 1

@@ -16,11 +16,16 @@
 - `multirotor/DQN_Movement/`：DQN 位移控制训练
 - `multirotor/Visualization/`：统一可视化模块
 
-## 当前版本重点修复
+## 当前版本重点
 
-本版本重点处理了训练稳定性问题，尤其是“重置后状态不完整”和“训练统计失真”两类问题。
+本版本重点完成了配置体系整合与训练稳定性修复。
 
-已完成的关键修复：
+配置整合：
+- 将 15 个配置文件精简为 5 个，统一入口为 `system_config.json`
+- 修正 ScannerConfigData 11 处默认值不一致问题
+- 消除电池阈值、终止条件、无人机列表等参数的重复定义
+
+已完成的训练稳定性修复：
 - 修复多次重置后无人机能移动但不再采集网格熵值的问题
 - 修复重置后仅无人机回原位、Leader 或网格状态残留的问题
 - 统一 DDPG、DQN、HRL 环境的完整重置逻辑，保证不同算法之间对比公平
@@ -84,17 +89,20 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 
 ## 关键配置文件
 
-常用配置：
-- `multirotor/apf_algorithm_config.json`：APF 参数、统一环境参数
-- `multirotor/drones_config.json`：无人机配置
-- `multirotor/DDPG_Weight/configs/unified_train_config.json`：DDPG 训练统一配置入口
-- `multirotor/DDPG_Weight/configs/legacy/`：旧版 DDPG 训练配置样例归档
-- `multirotor/DQN_Movement/configs/movement_dqn_config.json`：DQN Movement 配置
+采用统一配置架构，所有系统级配置集中在一个文件：
+
+| 配置文件 | 职责 |
+|---|---|
+| `multirotor/system_config.json` | 统一入口：无人机定义、APF 算法参数、环境规则、训练选择 |
+| `multirotor/DDPG_Weight/configs/unified_train_config.json` | DDPG 训练：4 种模式（虚拟/在线/离线日志/混合） |
+| `multirotor/DDPG_Weight/configs/crazyflie_reward_config.json` | Crazyflie 奖励配置 |
+| `multirotor/DQN_Movement/configs/movement_dqn_config.json` | DQN Movement 专属参数 |
+| `multirotor/DQN_Movement/configs/hierarchical_dqn_config.json` | 分层 DQN 专属参数 |
 
 当前版本建议：
-- 新一轮训练优先使用 `unified_train_config.json`
-- 算法对比时保持相同重置流程
-- 旧版单场景配置样例已归档到 `multirotor/DDPG_Weight/configs/legacy/`
+- 系统级参数修改只编辑 `system_config.json`
+- DQN 配置中的 termination/battery 运行时自动从 `system_config.json` 继承
+- 新一轮 DDPG 训练使用 `unified_train_config.json`
 
 ## 训练与日志
 
@@ -144,8 +152,7 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 ```text
 multirotor/
   AlgorithmServer.py                 主服务入口
-  apf_algorithm_config.json          APF 与统一环境配置
-  drones_config.json                 无人机配置
+  system_config.json                 统一系统配置
   AirsimServer/                      AirSim 与 Unity 通信层
   Algorithm/                         APF、网格、数据采集等算法模块
   DDPG_Weight/                       DDPG 权重训练模块
@@ -155,7 +162,8 @@ multirotor/
 
 ## 说明
 
-当前仓库中的核心修复已经覆盖：
+当前仓库已完成配置整合，核心模块覆盖：
+- 统一配置体系（system_config.json 单一入口）
 - 重置流程
 - 熵值采集
 - 网格更新
@@ -164,7 +172,163 @@ multirotor/
 - 训练诊断
 
 如果后续继续扩展算法或做实验对比，建议优先保证：
+- 系统参数统一在 `system_config.json` 中管理
 - 重置流程统一
 - 统计口径统一
 - 日志输出稳定
 - 验证脚本可重复执行
+## Four-Group Benchmark Workflow
+
+The repository now includes a four-group benchmark workflow plus a registry-driven family comparison system.
+
+Key files:
+
+- `multirotor/system_config.json`
+- `multirotor/benchmark_registry.json`
+- `multirotor/Algorithm/four_group_benchmark_runner.py`
+- `multirotor/Algorithm/four_group_benchmark_analyzer.py`
+- `multirotor/Algorithm/family_analysis.py`
+- `multirotor/Algorithm/benchmark_registry_helper.py`
+
+Recommended workflow:
+
+1. Run seeded DDPG and DQN training.
+2. Run the four-group frozen benchmark.
+3. Generate the four-group benchmark report.
+4. Generate family comparison reports.
+
+Seeded training examples:
+
+```powershell
+powershell -File .\scripts\Run_Paper_Training_Seeds.ps1 -Algorithm ddpg_apf -Seeds 20260413,20260414,20260415 -StageName stage01 -StageIndex 1
+powershell -File .\scripts\Run_Paper_Training_Seeds.ps1 -Algorithm pure_dqn -Seeds 20260413,20260414,20260415 -StageName stage01 -StageIndex 1
+```
+
+Four-group frozen benchmark:
+
+```bat
+scripts\Run_Four_Group_Benchmark.bat
+```
+
+Generate four-group report:
+
+```bat
+scripts\Analyze_Four_Group_Benchmark.bat
+```
+
+Generate family reports:
+
+```bat
+scripts\Analyze_Family_Comparisons.bat
+```
+
+Registry helper examples:
+
+```bash
+python multirotor/Algorithm/benchmark_registry_helper.py validate
+python multirotor/Algorithm/benchmark_registry_helper.py recommend --algorithm-type ppo_scan --control-mode dqn --trainable
+python multirotor/Algorithm/benchmark_registry_helper.py scaffold --algorithm-type ppo_scan --control-mode dqn --trainable
+```
+
+## 新增工作流能力
+
+当前版本新增了两条“实验工作流”主线，用于把训练、归档、分析和继续训练建议串成统一入口。
+
+### 1. 论文对比分析实验工作流
+
+入口：
+- `start.bat` 中的 `M`
+- `python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow comparison`
+
+用途：
+- 组织 `ddpg_apf` 与 `pure_dqn` 的 stage01 对比实验
+- 自动串联训练、归档、对比分析和继续训练建议
+
+当前流程：
+1. 运行 `ddpg_apf` stage01 训练
+2. 运行 `pure_dqn` stage01 训练
+3. 归档两类模型与日志
+4. 生成 comparison workflow 对应的分析产物
+5. 给出是否继续进入 `stage02_finetune` 的建议
+
+产物目录：
+- `analysis_results/workflows/comparison/<experiment_id>/...`
+
+### 2. 虚实两阶段工作流
+
+入口：
+- `start.bat` 中的 `N`
+- `python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage`
+
+用途：
+- 组织 `sim_pretrain -> real_weighted_refine` 的双阶段实验
+- 把虚拟预训练模型和实飞修正模型归到同一个实验容器中
+
+支持模式：
+- `online`
+- `offline_logs`
+
+命令示例：
+
+```bash
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode online --alias demo
+python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow virtual_real_two_stage --refine-mode offline_logs --alias demo
+```
+
+产物目录：
+- `analysis_results/workflows/virtual_real_two_stage/<experiment_id>/...`
+
+## 工作流便捷功能
+
+本次新增的不只是菜单入口，还包括一整套实验组织能力：
+
+- 统一实验容器
+  - 每次 workflow 都会创建独立实验目录，便于归档和回看
+- 状态文件
+  - 使用 `workflow_state.json` 记录当前阶段、步骤状态和推荐结果
+- 归档能力
+  - 统一归档 comparison workflow 和 virtual-real two-stage workflow 的模型、日志和分析结果
+- 两类推荐引擎
+  - comparison workflow：给出是否继续 `stage02_finetune`
+  - virtual-real two-stage：给出是否继续实飞修正
+- CLI 统一入口
+  - 通过 `scripts\Run_Paper_Workflow.bat` 或 Python CLI 直接调用
+- 失败状态可追踪
+  - 对 command failure、archive failure、analysis failure、recommendation failure 都有状态记录
+- 回归测试补齐
+  - 覆盖 state / archive / recommendation / orchestrator / start.bat 菜单入口
+
+## 工作流文件
+
+新增的核心实现文件：
+
+- `multirotor/Algorithm/paper_workflow_state.py`
+- `multirotor/Algorithm/paper_workflow_archive.py`
+- `multirotor/Algorithm/paper_workflow_recommendation.py`
+- `multirotor/Algorithm/paper_workflow_orchestrator.py`
+- `multirotor/Algorithm/paper_two_stage_analysis.py`
+- `multirotor/Algorithm/paper_two_stage_recommendation.py`
+- `scripts/Run_Paper_Workflow.bat`
+
+对应测试：
+
+- `multirotor/Algorithm/tests/test_paper_workflow_state.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_archive.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_recommendation.py`
+- `multirotor/Algorithm/tests/test_paper_workflow_orchestrator.py`
+- `multirotor/Algorithm/tests/test_paper_two_stage_analysis.py`
+- `multirotor/Algorithm/tests/test_paper_two_stage_recommendation.py`
+- `test_start_bat.py`
+
+## 快速查看 CLI 帮助
+
+```bat
+scripts\Run_Paper_Workflow.bat --help
+```
+
+当前 CLI 支持：
+- `--workflow comparison`
+- `--workflow virtual_real_two_stage`
+- `--refine-mode {online, offline_logs}`
+- `--workspace-root`
+- `--alias`

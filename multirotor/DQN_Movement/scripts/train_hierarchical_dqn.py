@@ -84,25 +84,25 @@ def train_hrl(enable_visualization=True):
         if drone_names:
             # 使用配置文件中的无人机
             training_drone = drone_names[0]
-            print(f"  ✓ 从 drones_config.json 读取训练无人机: {training_drone}")
+            print(f"  ✓ 从 system_config.json 读取训练无人机: {training_drone}")
         else:
             # 配置文件存在但没有对应的训练配置，使用默认值并提示
             training_drone = "UAV1"
-            print(f"  ⚠️  警告: drones_config.json 中未找到 training.hierarchical 配置")
+            print(f"  ⚠️  警告: system_config.json 中未找到 training.hierarchical 配置")
             print(f"  ⚠️  使用默认无人机: {training_drone}")
-            print(f"  💡 提示: 如需自定义训练无人机，请在 drones_config.json 的 training.hierarchical 部分配置:")
+            print(f"  💡 提示: 如需自定义训练无人机，请在 system_config.json 的 training.hierarchical 部分配置:")
             print(f"  💡     \"hierarchical\": {{\"drone_list\": [\"UAV1\"]}}")
     except FileNotFoundError:
         # 配置文件不存在，使用默认值并提示
         training_drone = "UAV1"
-        print(f"  ⚠️  警告: 未找到 drones_config.json 配置文件")
+        print(f"  ⚠️  警告: 未找到 system_config.json 配置文件")
         print(f"  ⚠️  使用默认无人机: {training_drone}")
-        print(f"  💡 提示: 配置文件应位于项目根目录的 multirotor/drones_config.json")
+        print(f"  💡 提示: 配置文件应位于项目根目录的 multirotor/system_config.json")
         print(f"  💡     配置示例: {{\"training\": {{\"hierarchical\": {{\"drone_list\": [\"UAV1\"]}}}}}}")
     except Exception as e:
         # 其他错误，使用默认值并提示
         training_drone = "UAV1"
-        print(f"  ⚠️  警告: 读取 drones_config.json 时出错: {e}")
+        print(f"  ⚠️  警告: 读取 system_config.json 时出错: {e}")
         print(f"  ⚠️  使用默认无人机: {training_drone}")
 
     config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "hierarchical_dqn_config.json")

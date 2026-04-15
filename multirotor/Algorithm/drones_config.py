@@ -9,46 +9,12 @@ from .system_config import SystemConfig
 
 
 class DronesConfig:
-    def __init__(self, config_file: Optional[str] = None, system_config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None):
         base_dir = Path(__file__).resolve().parent.parent
-        self.config_file = Path(config_file) if config_file else base_dir / "drones_config.json"
-        payload = self._load_config_payload()
-        self._source_payload = deepcopy(payload)
-        self._legacy_override_mode = False
-        self.system_config = self._load_system_config(payload, system_config_file)
-        self.config = self._load_training_config(payload)
-
-    def _load_config_payload(self) -> dict:
-        if not self.config_file.exists():
-            raise FileNotFoundError(f"Drone training config file not found: {self.config_file}")
-        with self.config_file.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        if not isinstance(payload, dict):
-            raise ValueError(
-                f"Invalid drone training config structure: {self.config_file} "
-                "(top-level JSON root must be a dict)"
-            )
-        return payload
-
-    def _load_system_config(self, payload: dict, system_config_file: Optional[str]) -> SystemConfig:
-        if system_config_file is None:
-            legacy_drones = payload.get("drones")
-            if isinstance(legacy_drones, dict):
-                self._legacy_override_mode = True
-                bootstrap_system_path = self.config_file.parent / f".{self.config_file.stem}.bootstrap_system.json"
-                bootstrap_apf_path = self.config_file.parent / f".{self.config_file.stem}.bootstrap_apf.json"
-                system_config = SystemConfig(
-                    config_file=str(bootstrap_system_path),
-                    legacy_drones_file=str(self.config_file),
-                    legacy_apf_file=str(bootstrap_apf_path),
-                )
-                system_config.config_file = self.config_file
-                return system_config
-        return SystemConfig(config_file=system_config_file)
-
-    def _load_training_config(self, payload: dict) -> dict:
-        training = payload.get("training", {}) if isinstance(payload, dict) else {}
-        return {"training": training if isinstance(training, dict) else {}}
+        self.config_file = Path(config_file) if config_file else base_dir / "system_config.json"
+        self.system_config = SystemConfig(config_file=str(self.config_file))
+        # 直接使用 system_config.config 作为内部数据，避免两个独立副本不同步
+        self.config = self.system_config.config
 
     def get_all_drones(self) -> List[str]:
         return self.system_config.get_all_drones()
@@ -90,24 +56,9 @@ class DronesConfig:
         return result
 
     def get_drones_dict(self) -> dict:
-        return {"drones": self.system_config.config.get("drones", {})}
+        return {"drones": self.config.get("drones", {})}
 
     def save_config(self) -> None:
-        training_payload = {"training": self.config.get("training", {})}
-        if self._legacy_override_mode:
-            merged_payload = {
-                key: value
-                for key, value in self._source_payload.items()
-                if key not in {"drones", "training"}
-            }
-            merged_payload["drones"] = self.system_config.config.get("drones", {})
-            merged_payload["training"] = training_payload["training"]
-            with self.config_file.open("w", encoding="utf-8") as handle:
-                json.dump(merged_payload, handle, indent=2, ensure_ascii=False)
-            self._source_payload = deepcopy(merged_payload)
-            return
-
+        """保存配置到 system_config.json（统一单文件）"""
         with self.config_file.open("w", encoding="utf-8") as handle:
-            json.dump(training_payload, handle, indent=2, ensure_ascii=False)
-        with self.system_config.config_file.open("w", encoding="utf-8") as handle:
-            json.dump(self.system_config.config, handle, indent=2, ensure_ascii=False)
+            json.dump(self.config, handle, indent=2, ensure_ascii=False)

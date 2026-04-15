@@ -1,0 +1,61 @@
+{
+  "registry_version": 1,
+  "families": [
+    {
+      "family_id": "apf_family",
+      "display_name": "APF Family",
+      "analysis_template": "apf_common",
+      "description": "APF and APF-hybrid algorithms",
+      "enabled": true
+    },
+    {
+      "family_id": "learning_family",
+      "display_name": "Learning Family",
+      "analysis_template": "learning_common",
+      "description": "Trainable policy families",
+      "enabled": true
+    }
+  ],
+  "algorithms": [
+    {
+      "algorithm_type": "fixed_apf",
+      "display_name": "Fixed APF",
+      "primary_family": "apf_family",
+      "family_memberships": ["apf_family"],
+      "comparison_profiles": ["global_benchmark"],
+      "is_trainable": false,
+      "control_mode": "apf",
+      "enabled": true
+    },
+    {
+      "algorithm_type": "random_apf",
+      "display_name": "Random APF",
+      "primary_family": "apf_family",
+      "family_memberships": ["apf_family"],
+      "comparison_profiles": ["global_benchmark"],
+      "is_trainable": false,
+      "control_mode": "apf",
+      "enabled": true
+    },
+    {
+      "algorithm_type": "ddpg_apf",
+      "display_name": "DDPG+APF",
+      "primary_family": "apf_family",
+      "family_memberships": ["apf_family", "learning_family"],
+      "comparison_profiles": ["global_benchmark"],
+      "is_trainable": true,
+      "control_mode": "apf",
+      "enabled": true
+    },
+    {
+      "algorithm_type": "pure_dqn",
+      "display_name": "Pure DQN",
+      "primary_family": "learning_family",
+      "family_memberships": ["learning_family"],
+      "comparison_profiles": ["global_benchmark"],
+      "is_trainable": true,
+      "control_mode": "dqn",
+      "enabled": true
+    }
+  ]
+}

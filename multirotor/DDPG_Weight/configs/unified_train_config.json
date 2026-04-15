@@ -48,6 +48,18 @@
       "max_real_updates_per_episode": 8,
       "real_buffer_capacity": 5000,
       "rollback_on_bad_update": true
+    },
+    "presets": {
+      "train": {
+        "_comment": "Multi-episode online training preset.",
+        "total_timesteps": 20,
+        "progress_interval": 10
+      },
+      "single_episode": {
+        "_comment": "Single episode online training preset.",
+        "total_timesteps": 1,
+        "progress_interval": 1
+      }
     }
   },
   "crazyflie_logs": {

@@ -7,16 +7,9 @@ from typing import Any, Dict, Optional
 
 
 class SystemConfig:
-    def __init__(
-        self,
-        config_file: Optional[str] = None,
-        legacy_drones_file: Optional[str] = None,
-        legacy_apf_file: Optional[str] = None,
-    ):
+    def __init__(self, config_file: Optional[str] = None):
         base_dir = Path(__file__).resolve().parent.parent
         self.config_file = Path(config_file) if config_file else base_dir / "system_config.json"
-        self.legacy_drones_file = Path(legacy_drones_file) if legacy_drones_file else base_dir / "drones_config.json"
-        self.legacy_apf_file = Path(legacy_apf_file) if legacy_apf_file else base_dir / "apf_algorithm_config.json"
         self.config = self._load_config()
 
     def _load_json(self, path: Path) -> Dict[str, Any]:
@@ -30,46 +23,33 @@ class SystemConfig:
         return ValueError(f"Invalid system config structure: {path} ({reason})")
 
     def _load_config(self) -> Dict[str, Any]:
-        if self.config_file.exists():
-            data = self._load_json(self.config_file)
-            if "drones" not in data or "environment" not in data:
-                raise self._invalid_config(self.config_file, "missing 'drones' or 'environment'")
+        if not self.config_file.exists():
+            raise FileNotFoundError(f"System config not found: {self.config_file}")
 
-            drones = data.get("drones")
-            if not isinstance(drones, dict):
-                raise self._invalid_config(self.config_file, "drones must be a dict")
+        data = self._load_json(self.config_file)
 
-            environment = data.get("environment")
-            if not isinstance(environment, dict):
-                raise self._invalid_config(self.config_file, "environment must be a dict")
+        if "drones" not in data:
+            raise self._invalid_config(self.config_file, "missing 'drones'")
 
-            for drone_name, drone_info in drones.items():
-                if not isinstance(drone_info, dict):
-                    raise self._invalid_config(
-                        self.config_file,
-                        f"drone entry '{drone_name}' must be a dict",
-                    )
-            return data
+        if "environment" not in data:
+            raise self._invalid_config(self.config_file, "missing 'environment'")
 
-        drones = {}
-        if self.legacy_drones_file.exists():
-            drones = self._load_json(self.legacy_drones_file).get("drones", {})
-            if not isinstance(drones, dict):
-                raise self._invalid_config(self.legacy_drones_file, "legacy drones must be a dict")
-            for drone_name, drone_info in drones.items():
-                if not isinstance(drone_info, dict):
-                    raise self._invalid_config(
-                        self.legacy_drones_file,
-                        f"legacy drone entry '{drone_name}' must be a dict",
-                    )
+        drones = data.get("drones")
+        if not isinstance(drones, dict):
+            raise self._invalid_config(self.config_file, "drones must be a dict")
 
-        environment = {}
-        if self.legacy_apf_file.exists():
-            environment = self._load_json(self.legacy_apf_file).get("env_config", {})
-            if not isinstance(environment, dict):
-                raise self._invalid_config(self.legacy_apf_file, "legacy env_config must be a dict")
+        environment = data.get("environment")
+        if not isinstance(environment, dict):
+            raise self._invalid_config(self.config_file, "environment must be a dict")
 
-        return {"drones": drones, "environment": environment}
+        for drone_name, drone_info in drones.items():
+            if not isinstance(drone_info, dict):
+                raise self._invalid_config(
+                    self.config_file,
+                    f"drone entry '{drone_name}' must be a dict",
+                )
+
+        return data
 
     @classmethod
     def from_legacy_sources(
@@ -101,6 +81,10 @@ class SystemConfig:
 
     def get_environment_rules(self) -> Dict[str, Any]:
         return deepcopy(self.config.get("environment", {}))
+
+    def get_algorithm_params(self) -> Dict[str, Any]:
+        """返回 APF 算法参数节"""
+        return deepcopy(self.config.get("algorithm", {}))
 
 
 def overlay_environment_rules(scanner_config: Any, environment_rules: Optional[Dict[str, Any]]) -> Any:
