@@ -91,6 +91,7 @@ class MultiDroneAlgorithmServer:
         stage_index: int = 1,
         is_resume: bool = False,
         source_model: str = "",
+        data_log_dir: Optional[str] = None,
     ):
         """
         初始化服务器实例
@@ -122,6 +123,7 @@ class MultiDroneAlgorithmServer:
         logger.info(f"配置文件加载完成 {self.drone_names}")
         self.seed = int(seed) if seed not in (None, "") else None
         self.run_kind = str(run_kind or "train").strip() or "train"
+        self.data_log_dir = str(data_log_dir or "").strip()
         self.registry_path = (
             Path(registry_path)
             if registry_path
@@ -231,7 +233,7 @@ class MultiDroneAlgorithmServer:
         # 数据采集系统（根据控制模式选择不同的数据目录）
         if self.control_mode == "dqn":
             # DQN 模式：保存到 DQN_Movement/logs/dqn_scan_data
-            dqn_data_dir = os.path.join(
+            dqn_data_dir = self.data_log_dir or os.path.join(
                 os.path.dirname(__file__), "DQN_Movement", "logs", "dqn_scan_data"
             )
             self.data_collector = DataCollector(
@@ -248,6 +250,7 @@ class MultiDroneAlgorithmServer:
         else:
             # APF/DDPG 模式：保存到 DDPG_Weight/airsim_training_logs（默认）
             self.data_collector = DataCollector(
+                data_dir=self.data_log_dir or None,
                 collection_interval=1.0,
                 enable_debug_print=enable_data_collection_print,
                 experiment_id=experiment_id,

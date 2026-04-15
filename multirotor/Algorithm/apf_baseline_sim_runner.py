@@ -28,10 +28,12 @@ def write_apf_baseline_outputs(
     experiment_id: str,
     stage_name: str,
     stage_index: int,
+    file_token: str = "",
 ) -> Dict[str, Dict[str, Path]]:
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     outputs: Dict[str, Dict[str, Path]] = {}
+    resolved_file_token = str(file_token or time.strftime("%Y%m%d_%H%M%S")).strip()
 
     for algorithm_type, rows in grouped_rows.items():
         algo_root = output_root / algorithm_type
@@ -47,8 +49,7 @@ def write_apf_baseline_outputs(
         frame["is_resume"] = 0
         frame["source_model"] = algorithm_type
 
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        training_csv = algo_root / f"{algorithm_type}_training_{experiment_id}_{timestamp}.csv"
+        training_csv = algo_root / f"{algorithm_type}_training_{experiment_id}_{resolved_file_token}.csv"
         training_frame = frame[
             [
                 "algorithm_type",
@@ -72,7 +73,7 @@ def write_apf_baseline_outputs(
         training_frame.rename(columns={"episode_elapsed_time": "elapsed_time"}, inplace=True)
         training_frame.to_csv(training_csv, index=False, encoding="utf-8-sig")
 
-        scan_csv = algo_root / f"{algorithm_type}_scan_{experiment_id}_{timestamp}.csv"
+        scan_csv = algo_root / f"{algorithm_type}_scan_{experiment_id}_{resolved_file_token}.csv"
         scan_frame = frame[
             [
                 "algorithm_type",
@@ -112,8 +113,10 @@ def run_apf_baseline_simulation(
     experiment_id: str = "",
     stage_name: str = "stage00_apf_baseline",
     stage_index: int = 0,
+    raw_log_dir: str | Path | None = None,
 ) -> Dict[str, Dict[str, Path]]:
     project_root = Path(__file__).resolve().parent.parent
+    output_root = Path(output_root)
     system_config_path = Path(system_config_path) if system_config_path else project_root / "system_config.json"
     experiment_id = experiment_id or f"apf_baseline_sim_{time.strftime('%Y%m%d_%H%M%S')}"
     default_seed = int(os.environ.get("TRAIN_SEED", "20260413"))
@@ -121,40 +124,54 @@ def run_apf_baseline_simulation(
     resolved_episodes = int(
         episodes if episodes is not None else int(os.environ.get("AIRSIM_QUICK_APF_BASELINE_EPISODES", "10"))
     )
+    raw_log_root = Path(raw_log_dir) if raw_log_dir else None
     quick_drone_count = _env_int("AIRSIM_QUICK_DRONES")
     if quick_drone_count:
         print(f"[apf-baseline] 使用 {quick_drone_count} 台无人机进行基线仿真")
 
     grouped_rows: Dict[str, list[dict]] = {"fixed_apf": [], "random_apf": []}
-    for seed in resolved_seeds:
-        grouped_rows["fixed_apf"].extend(
-            _run_apf_algorithm(
-                algorithm_type="fixed_apf",
-                seed=seed,
-                eval_episodes=resolved_episodes,
-                system_config_path=system_config_path,
-                ddpg_model_path=None,
-                output_dir=Path(output_root),
-            )
-        )
-        grouped_rows["random_apf"].extend(
-            _run_apf_algorithm(
-                algorithm_type="random_apf",
-                seed=seed,
-                eval_episodes=resolved_episodes,
-                system_config_path=system_config_path,
-                ddpg_model_path=None,
-                output_dir=Path(output_root),
-            )
+    file_token = time.strftime("%Y%m%d_%H%M%S")
+
+    def flush_outputs() -> Dict[str, Dict[str, Path]]:
+        return write_apf_baseline_outputs(
+            output_root=output_root,
+            grouped_rows=grouped_rows,
+            experiment_id=experiment_id,
+            stage_name=stage_name,
+            stage_index=stage_index,
+            file_token=file_token,
         )
 
-    return write_apf_baseline_outputs(
-        output_root=output_root,
-        grouped_rows=grouped_rows,
-        experiment_id=experiment_id,
-        stage_name=stage_name,
-        stage_index=stage_index,
-    )
+    def record_episode(algorithm_type: str, row: dict) -> None:
+        grouped_rows[algorithm_type].append(dict(row))
+        flush_outputs()
+
+    if raw_log_root:
+        raw_log_root.mkdir(parents=True, exist_ok=True)
+
+    for seed in resolved_seeds:
+        _run_apf_algorithm(
+            algorithm_type="fixed_apf",
+            seed=seed,
+            eval_episodes=resolved_episodes,
+            system_config_path=system_config_path,
+            ddpg_model_path=None,
+            output_dir=output_root,
+            data_log_dir=raw_log_root,
+            on_episode_complete=lambda row: record_episode("fixed_apf", row),
+        )
+        _run_apf_algorithm(
+            algorithm_type="random_apf",
+            seed=seed,
+            eval_episodes=resolved_episodes,
+            system_config_path=system_config_path,
+            ddpg_model_path=None,
+            output_dir=output_root,
+            data_log_dir=raw_log_root,
+            on_episode_complete=lambda row: record_episode("random_apf", row),
+        )
+
+    return flush_outputs()
 
 
 def main() -> int:
@@ -166,6 +183,7 @@ def main() -> int:
     parser.add_argument("--experiment-id", default="")
     parser.add_argument("--stage-name", default="stage00_apf_baseline")
     parser.add_argument("--stage-index", type=int, default=0)
+    parser.add_argument("--raw-log-dir", default=None)
     args = parser.parse_args()
 
     run_apf_baseline_simulation(
@@ -176,6 +194,7 @@ def main() -> int:
         experiment_id=args.experiment_id,
         stage_name=args.stage_name,
         stage_index=args.stage_index,
+        raw_log_dir=args.raw_log_dir,
     )
     return 0
 

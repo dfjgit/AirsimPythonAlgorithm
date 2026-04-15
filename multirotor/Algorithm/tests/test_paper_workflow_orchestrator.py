@@ -51,8 +51,27 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
 
         orchestrator.run_comparison_workflow(exp_root)
 
+        apf_output_root = exp_root / "artifacts" / "apf_baseline_sim"
         expected_commands = [
-            call(["cmd.exe", "/d", "/c", "scripts\\Run_APF_Baseline_Simulation.bat"], cwd=self.root),
+            call(
+                [
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    "scripts\\Run_APF_Baseline_Simulation.bat",
+                    "--out",
+                    str(apf_output_root),
+                    "--raw-log-dir",
+                    str(apf_output_root / "logs"),
+                    "--experiment-id",
+                    exp_root.name,
+                    "--stage-name",
+                    "stage00_apf_baseline",
+                    "--stage-index",
+                    "0",
+                ],
+                cwd=self.root,
+            ),
             call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root),
             call(["cmd.exe", "/d", "/c", "scripts\\Train_DQN_Movement_Real_Environment.bat"], cwd=self.root),
             call(["cmd.exe", "/d", "/c", "scripts\\Run_Four_Group_Benchmark.bat"], cwd=self.root),

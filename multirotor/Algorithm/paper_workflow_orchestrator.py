@@ -88,10 +88,26 @@ class PaperWorkflowOrchestrator:
         self._mark_step(exp_root, phase, "completed")
 
     def run_comparison_workflow(self, exp_root: Path) -> None:
+        apf_output_root = exp_root / "artifacts" / "apf_baseline_sim"
         self._run_stage(
             exp_root,
             "apf_baseline_sim",
-            ["cmd.exe", "/d", "/c", "scripts\\Run_APF_Baseline_Simulation.bat"],
+            [
+                "cmd.exe",
+                "/d",
+                "/c",
+                "scripts\\Run_APF_Baseline_Simulation.bat",
+                "--out",
+                str(apf_output_root),
+                "--raw-log-dir",
+                str(apf_output_root / "logs"),
+                "--experiment-id",
+                exp_root.name,
+                "--stage-name",
+                "stage00_apf_baseline",
+                "--stage-index",
+                "0",
+            ],
         )
         self._run_stage(
             exp_root,

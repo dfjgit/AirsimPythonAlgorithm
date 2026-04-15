@@ -4,7 +4,7 @@ import argparse
 import json
 import contextlib
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -243,6 +243,8 @@ def _run_apf_algorithm(
     system_config_path: Path,
     ddpg_model_path: Optional[Path],
     output_dir: Path,
+    data_log_dir: Optional[Path] = None,
+    on_episode_complete: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> List[Dict[str, object]]:
     from stable_baselines3 import DDPG
 
@@ -262,6 +264,7 @@ def _run_apf_algorithm(
             experiment_id=experiment_id,
             algorithm_type=algorithm_type,
         ),
+        data_log_dir=str(data_log_dir) if data_log_dir else None,
     )
     if not server.start():
         raise RuntimeError(f"Failed to start APF benchmark server for {algorithm_type}")
@@ -350,6 +353,8 @@ def _run_apf_algorithm(
             )
             row["sampled_apf_weights"] = sampled_weights
             results.append(row)
+            if on_episode_complete is not None:
+                on_episode_complete(dict(row))
     finally:
         try:
             server.stop()
