@@ -1,4 +1,8 @@
-﻿@echo off
+@echo off
+if /i "%AIRSIM_UI_LANG%"=="zh" (
+    call "%~dp0数据可视化分析.bat" %*
+    exit /b %ERRORLEVEL%
+)
 chcp 65001 >nul
 cls
 echo ============================================================

@@ -12,12 +12,9 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 
-# 配置日志系统
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+from runtime_logging import configure_runtime_logging
+
+configure_runtime_logging()
 logger = logging.getLogger("AlgorithmServer")
 
 # 导入核心模块
@@ -280,7 +277,7 @@ class MultiDroneAlgorithmServer:
                     self.unity_connect_timeout_sec = None
             except ValueError:
                 logger.warning(
-                    f"????? UNITY_CONNECT_TIMEOUT_SEC={timeout_env!r}?????? Unity ??"
+                    f"无效的 UNITY_CONNECT_TIMEOUT_SEC={timeout_env!r}，将继续等待 Unity 连接"
                 )
 
         self.unity_socket.set_callback(self._handle_unity_data)
@@ -363,17 +360,21 @@ class MultiDroneAlgorithmServer:
         try:
             logger.info(f"加载配置文件: {self.config_path}")
             config_data = ScannerConfigData(self.config_path)
-            if self.system_config_path:
-                self.system_config = SystemConfig(
-                    config_file=self.system_config_path,
+            config_path_obj = Path(self.config_path)
+            uses_shared_system_config = config_path_obj.name.lower() == "system_config.json"
+            if self.system_config_path and not uses_shared_system_config:
+                self.system_config = SystemConfig.from_legacy_sources(
+                    shared_system_config_file=self.system_config_path,
                     legacy_apf_file=self.config_path,
                 )
-            elif self._config_file_provided:
+            elif self.system_config_path:
+                self.system_config = SystemConfig(config_file=self.system_config_path)
+            elif self._config_file_provided and not uses_shared_system_config:
                 self.system_config = SystemConfig.from_legacy_sources(
                     legacy_apf_file=self.config_path,
                 )
             else:
-                self.system_config = SystemConfig(legacy_apf_file=self.config_path)
+                self.system_config = SystemConfig(config_file=str(config_path_obj))
             overlay_environment_rules(
                 config_data,
                 self.system_config.get_environment_rules(),
@@ -791,7 +792,7 @@ class MultiDroneAlgorithmServer:
                 },
             )
         except Exception as exc:
-            logger.warning(f"[ResetTrace] ?????: {exc}")
+            logger.warning(f"[ResetTrace] 初始化失败: {exc}")
             self.reset_trace_path = None
 
     def _collect_reset_trace_state(self) -> Dict[str, Any]:
@@ -916,14 +917,14 @@ class MultiDroneAlgorithmServer:
                 with self.reset_trace_path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as exc:
-            logger.warning(f"[ResetTrace] ????: {exc}")
+            logger.warning(f"[ResetTrace] 写入失败: {exc}")
 
     def get_all_battery_data(self) -> Dict[str, Dict[str, float]]:
         """获取所有无人机的电量数据"""
         return self.battery_manager.get_all_battery_data()
 
     def _get_training_data(self) -> Dict[str, Any]:
-        """?????????????????"""
+        """获取当前训练统计快照，供可视化与调试读取。"""
         if hasattr(self, "current_training_stats"):
             with self._training_stats_lock:
                 stats = dict(self.current_training_stats)
@@ -1043,10 +1044,10 @@ class MultiDroneAlgorithmServer:
             return False
 
     def _start_unity_socket(self) -> bool:
-        """??Unity Socket???????"""
-        logger.info("??Unity Socket??...")
+        """启动 Unity Socket 服务并等待客户端连接。"""
+        logger.info("启动 Unity Socket 服务...")
         if not self.unity_socket.start():
-            logger.error("Unity Socket??????")
+            logger.error("Unity Socket 服务启动失败")
             return False
 
         # ?????? Unity ?????????? UNITY_CONNECT_TIMEOUT_SEC?
@@ -1055,7 +1056,7 @@ class MultiDroneAlgorithmServer:
         last_wait_log = start_time - 15.0
         while True:
             if self.unity_socket.is_connected():
-                logger.info("Unity??????")
+                logger.info("Unity 连接成功")
                 self.unity_socket.send_config(self.config_data)
                 self.unity_socket.send_drone_config(self.drones_config)
                 # logger.info("??????????Unity")
@@ -1064,15 +1065,15 @@ class MultiDroneAlgorithmServer:
             now = _time.time()
             elapsed = now - start_time
             if timeout is not None and elapsed >= timeout:
-                logger.error(f"??Unity?????{timeout}??")
+                logger.error(f"等待 Unity 连接超时（{timeout} 秒）")
                 return False
 
             if now - last_wait_log >= 15.0:
                 last_wait_log = now
                 if timeout is None:
-                    logger.info(f"????Unity?????? {elapsed:.1f} ?")
+                    logger.info(f"等待 Unity 连接中... {elapsed:.1f} 秒")
                 else:
-                    logger.info(f"????Unity?????? {elapsed:.1f}/{timeout:.1f} ?")
+                    logger.info(f"等待 Unity 连接中... {elapsed:.1f}/{timeout:.1f} 秒")
             _time.sleep(0.5)
 
         return False
@@ -1112,7 +1113,7 @@ class MultiDroneAlgorithmServer:
         return all_success
 
     def _wait_for_takeoff(self, timeout: float = 5.0) -> bool:
-        """????????????? Flying ???"""
+        """等待所有虚拟无人机确认进入 Flying 状态。"""
         start = _time.time()
         while _time.time() - start < timeout:
             all_ready = True
@@ -1129,7 +1130,7 @@ class MultiDroneAlgorithmServer:
                 all_ready = False
                 break
             if all_ready:
-                logger.info("?????????????")
+                logger.info("所有虚拟无人机已确认起飞")
                 return True
             _time.sleep(0.1)
 
@@ -1142,7 +1143,7 @@ class MultiDroneAlgorithmServer:
             altitude = -float(pos[2]) if pos is not None else 0.0
             if not state.get("flying", False) and altitude <= 1.2:
                 pending.append(f"{name}(alt={altitude:.2f})")
-        logger.warning(f"[????] ?????????: {pending}")
+        logger.warning(f"[起飞检查] 未完成起飞确认: {pending}")
         return False
 
     def start_mission(self) -> bool:
@@ -1159,7 +1160,7 @@ class MultiDroneAlgorithmServer:
             # 等待所有虚拟无人机确认 flying=True 再开始仿真
             logger.info("无人机起飞完成，等待所有无人机稳定...")
             if not self._wait_for_takeoff(timeout=12.0):
-                logger.error("[Mission] ?????????????")
+                logger.error("[Mission] 无人机起飞稳定确认失败")
                 return False
 
             # 记录每台无人机起飞后的初始位置（AirSim NED: x,y 为水平）
@@ -2211,12 +2212,12 @@ class MultiDroneAlgorithmServer:
                 if not self.ready_event.is_set():
                     if self.resetting:
                         logger.warning(
-                            f"[{drone_name}] ?? ?????????????? {reset_wait_timeout}s?????"
+                            f"[{drone_name}] 仍在等待重置后同步，已超过 {reset_wait_timeout}s，继续等待"
                         )
                         _time.sleep(0.5)
                         continue
                     logger.warning(
-                        f"[{drone_name}] ?? ??????? {reset_wait_timeout}s?? reset ????????"
+                        f"[{drone_name}] 等待重置后同步超过 {reset_wait_timeout}s，但 reset 标志未置位，强制放行"
                     )
                     self.ready_event.set()
                 else:
@@ -2963,7 +2964,7 @@ class MultiDroneAlgorithmServer:
 
                 # 等待起飞稳定
                 if not self._wait_for_takeoff(timeout=12.0):
-                    logger.error("[??] ???????????????")
+                    logger.error("[重置] 无人机重新起飞稳定确认失败")
                     self._write_reset_trace(
                         "reset_abort",
                         {
@@ -3116,10 +3117,10 @@ class MultiDroneAlgorithmServer:
                 timeout_sec=6.0, retry_on_timeout=True
             )
             if data_ready:
-                logger.info("[??] ???? runtime/grid ???????? DQN ????")
+                logger.info("[重置] 已检测到 runtime/grid 数据恢复，允许算法线程继续运行")
             else:
                 logger.warning(
-                    "[??] ???? runtime/grid ???????????????????"
+                    "[重置] 未检测到 runtime/grid 数据恢复，继续执行但建议关注后续状态"
                 )
         else:
             logger.warning("[重置] Unity 未连接，仅清空本地数据")
@@ -3133,7 +3134,7 @@ class MultiDroneAlgorithmServer:
         self.resetting = False
         self.ready_event.set()
         logger.info(
-            "[??] ? ????????????????????????????"
+            "[重置] 重置流程结束，已重新放行算法线程"
         )
         self._write_reset_trace(
             "reset_complete",

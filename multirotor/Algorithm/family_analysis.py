@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -12,6 +13,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from benchmark_registry import BenchmarkRegistry, resolve_algorithm_registration
+
+
+def _localized_text(zh_text: str, en_text: str) -> str:
+    return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
 
 
 def configure_plot_fonts():
@@ -102,7 +107,7 @@ def _write_bar_plot(summary: pd.DataFrame, metric: str, output_path: Path, title
     plt.figure(figsize=(8, 4.5))
     plt.bar(summary["algorithm_type"], summary[metric], color="#457b9d")
     plt.title(title)
-    plt.ylabel(metric)
+    plt.ylabel(_localized_text("指标值", metric))
     plt.tight_layout()
     plt.savefig(output_path, dpi=160)
     plt.close()
@@ -167,7 +172,7 @@ def generate_family_reports(
             summary,
             "mean_final_global_scan_ratio",
             scan_ratio_plot,
-            f"{family.display_name} Scan Ratio",
+            _localized_text(f"{family.display_name} 扫描率", f"{family.display_name} Scan Ratio"),
         )
 
         success_rate_plot = family_dir / "success_rate_bar.png"
@@ -175,7 +180,7 @@ def generate_family_reports(
             summary,
             "success_rate",
             success_rate_plot,
-            f"{family.display_name} Success Rate",
+            _localized_text(f"{family.display_name} 成功率", f"{family.display_name} Success Rate"),
         )
 
         generated[family_id] = {
@@ -188,15 +193,30 @@ def generate_family_reports(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate family comparison reports from evaluation CSV files.")
-    parser.add_argument("--eval-csv", action="append", required=True, help="Path to an evaluation CSV. Repeatable.")
+    parser = argparse.ArgumentParser(
+        description=_localized_text("根据评测 CSV 生成 family 对比分析。", "Generate family comparison reports from evaluation CSV files.")
+    )
+    parser.add_argument(
+        "--eval-csv",
+        action="append",
+        required=True,
+        help=_localized_text("评测 CSV 路径，可重复指定。", "Path to an evaluation CSV. Repeatable."),
+    )
     parser.add_argument(
         "--registry",
         type=str,
         default=None,
-        help="Optional benchmark registry path. Defaults to multirotor/benchmark_registry.json.",
+        help=_localized_text(
+            "可选 benchmark_registry.json 路径，默认使用 multirotor/benchmark_registry.json。",
+            "Optional benchmark registry path. Defaults to multirotor/benchmark_registry.json.",
+        ),
     )
-    parser.add_argument("--out", type=str, required=True, help="Output directory for family reports.")
+    parser.add_argument(
+        "--out",
+        type=str,
+        required=True,
+        help=_localized_text("family 对比分析输出目录。", "Output directory for family reports."),
+    )
     args = parser.parse_args()
 
     from benchmark_registry import load_benchmark_registry

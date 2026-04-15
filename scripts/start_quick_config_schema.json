@@ -1,0 +1,247 @@
+{
+  "fields": {
+    "drone_count": {
+      "env": "AIRSIM_QUICK_DRONES",
+      "type": "int",
+      "min": 1,
+      "zh_label": "无人机数量",
+      "zh_description": "用于系统运行和训练环境初始化；直接回车将沿用当前默认无人机数量。",
+      "en_label": "Drone Count",
+      "en_description": "Used for runtime and training environment setup. Press Enter to keep the current default drone count.",
+      "default": {
+        "kind": "json",
+        "path": "multirotor/DDPG_Weight/configs/unified_train_config.json",
+        "key": "airsim_virtual.drone_names",
+        "transform": "len"
+      }
+    },
+    "simulation_visualization": {
+      "env": "AIRSIM_QUICK_VISUALIZATION",
+      "type": "bool",
+      "zh_label": "仿真可视化窗口",
+      "zh_description": "控制 APF 基线多轮仿真、学习训练阶段和四组最终统一仿真对比是否弹出可视化窗口。",
+      "en_label": "Simulation Visualization Window",
+      "en_description": "Controls whether the APF baseline simulation stage, learning-stage training, and the final four-group comparison open visualization windows.",
+      "default": {
+        "kind": "static",
+        "value": true
+      }
+    },
+    "ddpg_total_timesteps": {
+      "env": "AIRSIM_QUICK_DDPG_TIMESTEPS",
+      "type": "int",
+      "min": 1,
+      "zh_label": "DDPG 训练步数",
+      "zh_description": "用于 DDPG+APF 学习阶段；后面的时间是按默认仿真步长换算的仿真时间预估。",
+      "en_label": "DDPG Training Steps",
+      "en_description": "Used for the DDPG+APF learning stage. The time shown below is an estimated simulation duration based on the default step length.",
+      "estimate": {
+        "kind": "sim_hours",
+        "seconds_per_step": 2.0,
+        "note": "按默认仿真步长估算",
+        "profiles": ["ddpg_train", "comparison_workflow", "paper_ddpg_seeds", "two_stage_workflow"]
+      },
+      "default": {
+        "kind": "json",
+        "path": "multirotor/DDPG_Weight/configs/unified_train_config.json",
+        "key": "airsim_virtual.total_timesteps"
+      }
+    },
+    "dqn_total_timesteps": {
+      "env": "AIRSIM_QUICK_DQN_TIMESTEPS",
+      "type": "int",
+      "min": 1,
+      "zh_label": "DQN 训练步数",
+      "zh_description": "用于 DQN 学习阶段；后面的时间是按默认仿真步长换算的仿真时间预估。",
+      "en_label": "DQN Training Steps",
+      "en_description": "Used for the DQN learning stage. The time shown below is an estimated simulation duration based on the default step length.",
+      "estimate": {
+        "kind": "sim_hours",
+        "seconds_per_step": 1.5,
+        "note": "按默认仿真步长估算",
+        "profiles": ["dqn_train", "comparison_workflow", "paper_dqn_seeds"]
+      },
+      "default": {
+        "kind": "json",
+        "path": "multirotor/DQN_Movement/configs/movement_dqn_config.json",
+        "key": "training.total_timesteps"
+      }
+    },
+    "dqn_resume_total_timesteps": {
+      "env": "AIRSIM_QUICK_DQN_TIMESTEPS",
+      "type": "int",
+      "min": 1,
+      "zh_label": "DQN 续训总步数",
+      "zh_description": "用于 DQN 续训场景；后面的时间是按默认仿真步长换算的仿真时间预估。",
+      "en_label": "DQN Resume Total Steps",
+      "en_description": "Used for DQN resume scenarios. The time shown below is an estimated simulation duration based on the default step length.",
+      "estimate": {
+        "kind": "sim_hours",
+        "seconds_per_step": 1.5,
+        "note": "按默认仿真步长估算",
+        "profiles": ["dqn_resume_train"]
+      },
+      "default": {
+        "kind": "json",
+        "path": "multirotor/DQN_Movement/configs/movement_dqn_config.json",
+        "key": "training.resume_total_timesteps"
+      }
+    },
+    "hrl_total_timesteps": {
+      "env": "AIRSIM_QUICK_HRL_TIMESTEPS",
+      "type": "int",
+      "min": 1,
+      "zh_label": "分层 DQN 训练步数",
+      "zh_description": "用于分层 DQN 训练阶段；默认值取自分层 DQN 配置文件。",
+      "en_label": "Hierarchical DQN Training Steps",
+      "en_description": "Used for the hierarchical DQN training stage. The default comes from the hierarchical DQN config file.",
+      "default": {
+        "kind": "json",
+        "path": "multirotor/DQN_Movement/configs/hierarchical_dqn_config.json",
+        "key": "training.total_timesteps"
+      }
+    },
+    "apf_baseline_episodes": {
+      "env": "AIRSIM_QUICK_APF_BASELINE_EPISODES",
+      "type": "int",
+      "min": 1,
+      "zh_label": "APF 基线多轮仿真轮次",
+      "zh_description": "用于 fixed APF / random APF 的基线多轮仿真阶段，主要生成过程对比数据。",
+      "en_label": "APF Baseline Simulation Episodes",
+      "en_description": "Used for the fixed APF / random APF baseline multi-episode simulation stage. This mainly generates process-comparison data.",
+      "default": {
+        "kind": "json",
+        "path": "multirotor/system_config.json",
+        "key": "paper_benchmark.eval_episodes_per_seed"
+      }
+    },
+    "benchmark_eval_episodes": {
+      "env": "AIRSIM_QUICK_BENCHMARK_EPISODES",
+      "type": "int",
+      "min": 1,
+      "zh_label": "四组 benchmark 每 seed 评测轮次",
+      "zh_description": "用于四组最终统一仿真对比阶段，决定每个 seed 下每组的评测回合数。",
+      "en_label": "Benchmark Episodes Per Seed",
+      "en_description": "Used for the final four-group unified simulation comparison stage. This controls how many evaluation episodes each group runs under every seed.",
+      "default": {
+        "kind": "json",
+        "path": "multirotor/system_config.json",
+        "key": "paper_benchmark.eval_episodes_per_seed"
+      }
+    },
+    "paper_seeds": {
+      "env": "AIRSIM_QUICK_SEEDS",
+      "type": "csv",
+      "zh_label": "Seed 列表（逗号分隔）",
+      "zh_description": "用于论文多 Seed 训练；输入多个 Seed 时请用英文逗号分隔。",
+      "en_label": "Seed List (comma-separated)",
+      "en_description": "Used for paper-style multi-seed training. Separate multiple seeds with standard commas.",
+      "default": {
+        "kind": "json",
+        "path": "multirotor/system_config.json",
+        "key": "paper_benchmark.seeds",
+        "transform": "csv"
+      }
+    }
+  },
+  "profiles": {
+    "run_fixed": {
+      "zh_title": "固定权重运行 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的参数；直接回车将沿用默认值。",
+      "en_title": "Fixed-Weight Runtime - Quick Config",
+      "en_intro": "Only the parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["drone_count"]
+    },
+    "run_ddpg": {
+      "zh_title": "DDPG 权重预测运行 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的参数；直接回车将沿用默认值。",
+      "en_title": "DDPG Weight Prediction Runtime - Quick Config",
+      "en_intro": "Only the parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["drone_count"]
+    },
+    "ddpg_train": {
+      "zh_title": "DDPG+APF 训练 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的训练参数；直接回车将沿用默认值。",
+      "en_title": "DDPG+APF Training - Quick Config",
+      "en_intro": "Only the training parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["simulation_visualization", "ddpg_total_timesteps"]
+    },
+    "ddpg_logs_train": {
+      "zh_title": "DDPG 实体日志离线训练 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的训练参数；直接回车将沿用默认值。",
+      "en_title": "DDPG Crazyflie Log Training - Quick Config",
+      "en_intro": "Only the training parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["simulation_visualization", "ddpg_total_timesteps"]
+    },
+    "ddpg_single_episode": {
+      "zh_title": "DDPG 单轮实体机训练 - 快速配置",
+      "zh_intro": "该入口通常用于单轮在线更新；如需调整训练步数，可在此覆盖默认值。",
+      "en_title": "DDPG Single-Episode Crazyflie Training - Quick Config",
+      "en_intro": "This entry is usually used for a single online update. Override the training steps here if needed.",
+      "fields": ["simulation_visualization", "ddpg_total_timesteps"]
+    },
+    "dqn_train": {
+      "zh_title": "DQN 训练 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的训练参数；直接回车将沿用默认值。",
+      "en_title": "DQN Training - Quick Config",
+      "en_intro": "Only the training parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["simulation_visualization", "dqn_total_timesteps"]
+    },
+    "dqn_resume_train": {
+      "zh_title": "DQN 续训 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的训练参数；直接回车将沿用默认值。",
+      "en_title": "DQN Resume Training - Quick Config",
+      "en_intro": "Only the training parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["simulation_visualization", "dqn_resume_total_timesteps"]
+    },
+    "hrl_train": {
+      "zh_title": "分层 DQN 训练 - 快速配置",
+      "zh_intro": "仅配置当前入口需要的训练参数；直接回车将沿用默认值。",
+      "en_title": "Hierarchical DQN Training - Quick Config",
+      "en_intro": "Only the training parameters relevant to this entry are shown here. Press Enter to keep the defaults.",
+      "fields": ["hrl_total_timesteps"]
+    },
+    "four_group_benchmark": {
+      "zh_title": "四组统一仿真对比阶段 - 快速配置",
+      "zh_intro": "这里配置的是四组最终统一仿真评测的采样规模；直接回车将沿用默认值，不会改动训练阶段。",
+      "en_title": "Four-Group Unified Simulation Comparison - Quick Config",
+      "en_intro": "This config controls the sample size of the final four-group unified simulation evaluation. It does not change the training stages.",
+      "fields": ["simulation_visualization", "benchmark_eval_episodes"]
+    },
+    "paper_ddpg_seeds": {
+      "zh_title": "论文多 Seed 训练（DDPG+APF）- 快速配置",
+      "zh_intro": "这里配置的是多 Seed 训练的随机种子与训练步数；直接回车将沿用默认值。",
+      "en_title": "Paper Multi-Seed Training (DDPG+APF) - Quick Config",
+      "en_intro": "This config controls the seed list and training steps for paper-style multi-seed training. Press Enter to keep the defaults.",
+      "fields": ["paper_seeds", "simulation_visualization", "ddpg_total_timesteps"]
+    },
+    "paper_dqn_seeds": {
+      "zh_title": "论文多 Seed 训练（Pure DQN）- 快速配置",
+      "zh_intro": "这里配置的是多 Seed 训练的随机种子与训练步数；直接回车将沿用默认值。",
+      "en_title": "Paper Multi-Seed Training (Pure DQN) - Quick Config",
+      "en_intro": "This config controls the seed list and training steps for paper-style multi-seed training. Press Enter to keep the defaults.",
+      "fields": ["paper_seeds", "simulation_visualization", "dqn_total_timesteps"]
+    },
+    "comparison_workflow": {
+      "zh_title": "四组统一仿真对比阶段 - 快速配置",
+      "zh_intro": "这里会先配置无人机数量，再按纯 APF -> 随机 APF -> DDPG+APF -> 纯 DQN 的顺序组织实验。步数对应的是仿真时间预估，不等同于真实墙钟耗时。",
+      "en_title": "Four-Group Unified Simulation Comparison - Quick Config",
+      "en_intro": "This config first asks for drone count, then follows the experiment order: fixed APF -> random APF -> DDPG+APF -> pure DQN. Step-based durations are simulation-time estimates, not wall-clock runtime.",
+      "fields": [
+        "drone_count",
+        "simulation_visualization",
+        "apf_baseline_episodes",
+        "benchmark_eval_episodes",
+        "ddpg_total_timesteps",
+        "dqn_total_timesteps"
+      ]
+    },
+    "two_stage_workflow": {
+      "zh_title": "虚实两阶段实验工作流 - 快速配置",
+      "zh_intro": "这里会先配置无人机数量，再配置预训练阶段的训练步数；直接回车将沿用默认值。",
+      "en_title": "Virtual-Real Two-Stage Workflow - Quick Config",
+      "en_intro": "This config first asks for drone count, then lets you override the pretraining step budget. Press Enter to keep the defaults.",
+      "fields": ["drone_count", "simulation_visualization", "ddpg_total_timesteps"]
+    }
+  }
+}

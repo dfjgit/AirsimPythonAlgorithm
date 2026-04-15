@@ -2,17 +2,12 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
-from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 import visualize_training_data
-
-
-def _workspace_root_for_tmp() -> Path:
-    return Path.cwd()
 
 
 class VisualizeTrainingDataCollisionTests(unittest.TestCase):
@@ -20,8 +15,7 @@ class VisualizeTrainingDataCollisionTests(unittest.TestCase):
     def test_analyze_algorithm_comparison_requests_collision_rate_plots(self, analyzer_cls):
         analyzer = analyzer_cls.return_value
 
-        root = _workspace_root_for_tmp() / ".tmp_visualize_training_data_collision_tests" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("visualize_training_data_collision_tests")
         try:
             project_root = root
             (project_root / "multirotor" / "DDPG_Weight" / "airsim_training_logs").mkdir(parents=True)

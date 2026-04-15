@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+def _deep_merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
 class SystemConfig:
     def __init__(self, config_file: Optional[str] = None):
         base_dir = Path(__file__).resolve().parent.parent
@@ -56,13 +66,53 @@ class SystemConfig:
         cls,
         legacy_drones_file: Optional[str] = None,
         legacy_apf_file: Optional[str] = None,
+        shared_system_config_file: Optional[str] = None,
     ) -> "SystemConfig":
         instance = cls.__new__(cls)
         base_dir = Path(__file__).resolve().parent.parent
-        instance.config_file = base_dir / "__legacy_only_system_config__.json"
+        instance.config_file = (
+            Path(shared_system_config_file)
+            if shared_system_config_file
+            else base_dir / "system_config.json"
+        )
         instance.legacy_drones_file = Path(legacy_drones_file) if legacy_drones_file else base_dir / "drones_config.json"
         instance.legacy_apf_file = Path(legacy_apf_file) if legacy_apf_file else base_dir / "apf_algorithm_config.json"
-        instance.config = instance._load_config()
+        if instance.config_file.exists():
+            instance.config = instance._load_json(instance.config_file)
+        else:
+            instance.config = {"drones": {}, "environment": {}}
+
+        drones_payload: Dict[str, Any] = {}
+        if instance.legacy_drones_file.exists():
+            drones_payload = instance._load_json(instance.legacy_drones_file)
+            if isinstance(drones_payload.get("drones"), dict):
+                instance.config["drones"] = deepcopy(drones_payload["drones"])
+            if isinstance(drones_payload.get("training"), dict):
+                instance.config["training"] = deepcopy(drones_payload["training"])
+
+        if instance.legacy_apf_file.exists():
+            apf_payload = instance._load_json(instance.legacy_apf_file)
+            legacy_environment = None
+            if isinstance(apf_payload.get("env_config"), dict):
+                legacy_environment = apf_payload["env_config"]
+            elif isinstance(apf_payload.get("environment"), dict):
+                legacy_environment = apf_payload["environment"]
+            if legacy_environment:
+                current_environment = instance.config.get("environment", {})
+                if not isinstance(current_environment, dict):
+                    current_environment = {}
+                instance.config["environment"] = _deep_merge_dict(current_environment, legacy_environment)
+
+            if isinstance(apf_payload.get("algorithm"), dict):
+                current_algorithm = instance.config.get("algorithm", {})
+                if not isinstance(current_algorithm, dict):
+                    current_algorithm = {}
+                instance.config["algorithm"] = _deep_merge_dict(current_algorithm, apf_payload["algorithm"])
+
+        if "drones" not in instance.config or not isinstance(instance.config.get("drones"), dict):
+            instance.config["drones"] = {}
+        if "environment" not in instance.config or not isinstance(instance.config.get("environment"), dict):
+            instance.config["environment"] = {}
         return instance
 
     def get_all_drones(self):

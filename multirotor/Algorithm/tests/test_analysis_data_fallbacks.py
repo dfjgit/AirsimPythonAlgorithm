@@ -2,25 +2,20 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from two_stage_analysis_suite_builder import _build_stage02_normalized_frame
 from visualize_scan_csv import RunData, _select_representative_episodes
 
 
-def _workspace_root_for_tmp() -> Path:
-    return Path.cwd()
-
-
 class AnalysisDataFallbackTests(unittest.TestCase):
     def test_representative_episode_labels_use_chinese_descriptions(self):
-        root = _workspace_root_for_tmp() / ".tmp_analysis_data_fallbacks" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("analysis_data_fallbacks")
         try:
             output_dir = root / "out"
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -60,8 +55,7 @@ class AnalysisDataFallbackTests(unittest.TestCase):
             shutil.rmtree(root, ignore_errors=True)
 
     def test_run_data_uses_scan_metrics_when_training_metrics_are_placeholder_constants(self):
-        root = _workspace_root_for_tmp() / ".tmp_analysis_data_fallbacks" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("analysis_data_fallbacks")
         try:
             output_dir = root / "out"
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -102,8 +96,7 @@ class AnalysisDataFallbackTests(unittest.TestCase):
             shutil.rmtree(root, ignore_errors=True)
 
     def test_stage02_voltage_normalization_uses_episode_battery_drop_before_reset_row(self):
-        root = _workspace_root_for_tmp() / ".tmp_analysis_data_fallbacks" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("analysis_data_fallbacks")
         try:
             training_csv = root / "training.csv"
             scan_csv = root / "scan.csv"

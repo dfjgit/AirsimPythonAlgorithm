@@ -1,4 +1,8 @@
-﻿@echo off
+@echo off
+if /i "%AIRSIM_UI_LANG%"=="zh" (
+    call "%~dp0运行系统-固定权重.bat" %*
+    exit /b %ERRORLEVEL%
+)
 chcp 65001 >nul 2>&1
 cls
 

@@ -14,16 +14,19 @@ from collections import deque
 try:
     from multirotor.Algorithm.battery_data import BatteryStatus
     from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
+    from multirotor.runtime_logging import should_emit_detail_feedback
 except ImportError:
     try:
         from Algorithm.battery_data import BatteryStatus
         from Algorithm.system_config import SystemConfig, load_environment_rules
+        from runtime_logging import should_emit_detail_feedback
     except ImportError:
         import sys
 
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from multirotor.Algorithm.battery_data import BatteryStatus
         from multirotor.Algorithm.system_config import SystemConfig, load_environment_rules
+        from multirotor.runtime_logging import should_emit_detail_feedback
 
 try:
     from configs.crazyflie_reward_config import CrazyflieRewardConfig
@@ -241,6 +244,10 @@ class SimpleWeightEnv(gym.Env):
 
     def _step_log(self, message: str) -> None:
         if self.verbose_step_logs:
+            print(message)
+
+    def _detail_feedback(self, message: str) -> None:
+        if should_emit_detail_feedback():
             print(message)
 
     def _first_reset_logic(self):
@@ -1138,7 +1145,7 @@ class SimpleWeightEnv(gym.Env):
             )
             penalty = warning_penalty + ratio * (danger_penalty - warning_penalty)
 
-        print(
+        self._detail_feedback(
             f"🚧 障碍物接近惩罚: name={nearest_name or 'Unknown'}, "
             f"distance={nearest_distance:.2f}m, penalty=-{penalty:.2f}"
         )
@@ -1184,7 +1191,7 @@ class SimpleWeightEnv(gym.Env):
                 - float(self.reward_shaping_cfg["collision_hotspot_warning_penalty"])
             )
 
-        print(
+        self._detail_feedback(
             f"📍 热点区避让惩罚: center=("
             f"{self.reward_shaping_cfg['collision_hotspot_center_x']:.2f},"
             f"{self.reward_shaping_cfg['collision_hotspot_center_z']:.2f}), "
@@ -1230,7 +1237,7 @@ class SimpleWeightEnv(gym.Env):
         if penalty <= 0.0:
             return 0.0
 
-        print(
+        self._detail_feedback(
             f"🧱 热点通道惩罚: dx={dx:.2f}m, dz={dz:.2f}m, penalty=-{penalty:.2f}"
         )
         return penalty
@@ -1309,19 +1316,19 @@ class SimpleWeightEnv(gym.Env):
                     self._last_collision_object_name = object_name or "Unknown"
                     self._last_collision_penetration = penetration
                     self._last_collision_position = self._format_position(self._get_runtime_position())
-                    print(
+                    self._detail_feedback(
                         f"⚠️ 检测到真实碰撞事件: object={object_name or 'Unknown'}, "
                         f"penetration={penetration:.3f}m, count={self.collision_count}"
                     )
                 elif is_new_event and not strong_hit:
                     if is_ignored_object:
-                        print(
+                        self._detail_feedback(
                             f"ℹ️ 忽略地面碰撞事件: object={object_name or 'Unknown'}, "
                             f"penetration={penetration:.3f}m, height={current_height:.2f}m, "
                             f"streak={self._ground_collision_streak}, step={self.step_count}"
                         )
                     else:
-                        print(
+                        self._detail_feedback(
                             f"ℹ️ 忽略碰撞事件: object={object_name or 'Unknown'}, "
                             f"penetration={penetration:.3f}m, step={self.step_count}"
                         )
@@ -1331,7 +1338,7 @@ class SimpleWeightEnv(gym.Env):
                 return
             self._ground_collision_streak = 0
         except Exception as e:
-            print(f"[Warning] 读取AirSim碰撞状态失败，启用距离兜底: {e}")
+            self._detail_feedback(f"[Warning] 读取AirSim碰撞状态失败，启用距离兜底: {e}")
 
         # 2) 兜底：仅在极近距离才记碰撞（避免把正常编队/避障当碰撞）
         try:
@@ -1349,12 +1356,12 @@ class SimpleWeightEnv(gym.Env):
                     self._last_collision_object_name = "NEAR_DRONE"
                     self._last_collision_penetration = 0.0
                     self._last_collision_position = self._format_position(self._get_runtime_position())
-                    print(
+                    self._detail_feedback(
                         f"⚠️ 极近距离兜底碰撞: min_dist={min_dist:.3f}m, "
                         f"count={self.collision_count}"
                     )
         except Exception as e:
-            print(f"[Warning] 距离兜底碰撞检测失败: {e}")
+            self._detail_feedback(f"[Warning] 距离兜底碰撞检测失败: {e}")
 
     def _get_state(self):
         """获取当前状态（18维）"""
@@ -1473,7 +1480,7 @@ class SimpleWeightEnv(gym.Env):
         if reset_reason == "达到时长上限":
             if max_scan_ratio >= healthy_time_limit_threshold:
                 bonus = self.reward_shaping_cfg["time_limit_completion_bonus"]
-                print(
+                self._detail_feedback(
                     f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 奖励+{bonus:.2f}"
                 )
                 return reward + bonus
@@ -1482,7 +1489,7 @@ class SimpleWeightEnv(gym.Env):
                 penalty += self.reward_shaping_cfg["poor_progress_penalty"] * (
                     1.0 - progress_scale
                 )
-            print(
+            self._detail_feedback(
                 f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
             )
             return reward - penalty
@@ -1502,7 +1509,7 @@ class SimpleWeightEnv(gym.Env):
         elif reset_reason == "出圈":
             penalty += self.reward_shaping_cfg["out_of_range_terminal_penalty"]
 
-        print(
+        self._detail_feedback(
             f"⚖️  终止奖励修正: 原因={reset_reason}, 最大全局扫描={max_scan_ratio:.2f}%, 惩罚-{penalty:.2f}"
         )
         adjusted_reward = reward - penalty
@@ -1610,7 +1617,7 @@ class SimpleWeightEnv(gym.Env):
                     ) / (1.0 - self.boundary_cfg["danger_ratio"])
                     penalty = self.boundary_cfg["danger_penalty"] * danger_level
                     reward -= penalty
-                    print(
+                    self._detail_feedback(
                         f"⚠️  危险区警告: 距离边界{distance_ratio * 100:.0f}%, 惩罚-{penalty:.2f}"
                     )
                 elif distance_ratio > self.boundary_cfg["warning_ratio"]:
@@ -1623,7 +1630,7 @@ class SimpleWeightEnv(gym.Env):
                     )
                     penalty = self.boundary_cfg["warning_penalty"] * warning_level
                     reward -= penalty
-                    print(
+                    self._detail_feedback(
                         f"💡 接近边界: 距离边界{distance_ratio * 100:.0f}%, 惩罚-{penalty:.2f}"
                     )
                 else:
@@ -1655,7 +1662,7 @@ class SimpleWeightEnv(gym.Env):
                                     * alignment
                                 )
                                 reward += center_reward
-                                print(f"🎯 朝向中心飞行: 奖励+{center_reward:.2f}")
+                                self._detail_feedback(f"🎯 朝向中心飞行: 奖励+{center_reward:.2f}")
 
             # 6. Obstacle proximity penalty
             reward -= self._apply_obstacle_proximity_penalty(runtime_data)
@@ -1681,12 +1688,12 @@ class SimpleWeightEnv(gym.Env):
                     * self.reward_shaping_cfg["battery_reward_scale"]
                 )
                 reward += battery_reward
-                print(
+                self._detail_feedback(
                     f"🔋 电量奖励: +{battery_reward:.2f} (电量{current_voltage:.2f}V在最优范围)"
                 )
             elif current_voltage < self.reward_config.battery_low_threshold:
                 reward -= self.reward_config.battery_low_penalty
-                print(
+                self._detail_feedback(
                     f"🔋 电量惩罚: -{self.reward_config.battery_low_penalty:.2f} (电量{current_voltage:.2f}V过低)"
                 )
 

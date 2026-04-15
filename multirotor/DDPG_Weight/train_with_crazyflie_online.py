@@ -162,6 +162,17 @@ def _should_use_weighted_training(real_weighting_config) -> bool:
     return bool(getattr(real_weighting_config, "enable_real_weighting", True))
 
 
+def _env_int(name: str) -> int | None:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(f"[!] 忽略无效的环境变量 {name}={raw_value}")
+        return None
+
+
 def _compute_weighted_training_target(total_timesteps: int, current_steps: int) -> int:
     return int(total_timesteps) + max(0, int(current_steps))
 
@@ -797,6 +808,9 @@ def main():
     total_timesteps = _get_config_value(
         args.total_timesteps, config, "total_timesteps", 500
     )
+    quick_total_timesteps = _env_int("AIRSIM_QUICK_DDPG_TIMESTEPS")
+    if quick_total_timesteps is not None:
+        total_timesteps = quick_total_timesteps
     step_duration = _get_config_value(args.step_duration, config, "step_duration", 5.0)
     reward_config = _get_config_value(args.reward_config, config, "reward_config", None)
     save_dir = _get_config_value(args.save_dir, config, "save_dir", "models")

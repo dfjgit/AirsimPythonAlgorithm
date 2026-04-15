@@ -8,14 +8,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from four_group_benchmark_analyzer import generate_four_group_benchmark_report
+from _test_temp_paths import make_temp_dir
+from four_group_benchmark_analyzer import _localized_text, generate_four_group_benchmark_report
 
 
 class FourGroupBenchmarkAnalyzerTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / "_tmp_four_group_benchmark_analyzer"
-        shutil.rmtree(self.root, ignore_errors=True)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root = make_temp_dir("four_group_benchmark_analyzer")
         self.input_csv = self.root / "four_group_eval_episodes.csv"
         self.output_dir = self.root / "analysis_results" / "four_group_benchmark"
 
@@ -78,6 +77,26 @@ class FourGroupBenchmarkAnalyzerTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_localized_text_uses_chinese_when_ui_lang_is_zh(self):
+        original_lang = os.environ.get("AIRSIM_UI_LANG")
+        os.environ["AIRSIM_UI_LANG"] = "zh"
+        try:
+            self.assertEqual(_localized_text("中文", "English"), "中文")
+        finally:
+            if original_lang is None:
+                os.environ.pop("AIRSIM_UI_LANG", None)
+            else:
+                os.environ["AIRSIM_UI_LANG"] = original_lang
+
+    def test_localized_text_uses_english_by_default(self):
+        original_lang = os.environ.get("AIRSIM_UI_LANG")
+        os.environ.pop("AIRSIM_UI_LANG", None)
+        try:
+            self.assertEqual(_localized_text("中文", "English"), "English")
+        finally:
+            if original_lang is not None:
+                os.environ["AIRSIM_UI_LANG"] = original_lang
 
     def test_generate_four_group_benchmark_report_writes_expected_outputs(self):
         generated = generate_four_group_benchmark_report(

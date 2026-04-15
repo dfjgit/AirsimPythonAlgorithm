@@ -25,6 +25,79 @@ from family_analysis import generate_family_reports
 from four_group_benchmark_analyzer import generate_four_group_benchmark_report
 
 
+def _localized_text(zh_text: str, en_text: str) -> str:
+    return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
+
+
+def _env_int(name: str) -> int | None:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
+def _env_seed_list(name: str) -> list[int] | None:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return None
+    values: list[int] = []
+    for part in raw_value.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        try:
+            values.append(int(text))
+        except ValueError:
+            return None
+    return values or None
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name, "").strip().lower()
+    if not raw_value:
+        return bool(default)
+    if raw_value in {"1", "true", "yes", "y", "on", "enable", "enabled"}:
+        return True
+    if raw_value in {"0", "false", "no", "n", "off", "disable", "disabled"}:
+        return False
+    return bool(default)
+
+
+def _env_drone_names(name: str) -> list[str] | None:
+    count = _env_int(name)
+    if count is None or count <= 0:
+        return None
+    return [f"UAV{i}" for i in range(1, count + 1)]
+
+
+def _benchmark_stage_plan_lines() -> list[str]:
+    if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh":
+        return [
+            "本阶段将依次在 Unity/AirSim 中评测以下四组：",
+            "  [1] fixed APF（固定策略基线，不参加训练）",
+            "  [2] random APF（随机策略基线，不参加训练）",
+            "  [3] DDPG+APF（使用已训练模型，冻结策略）",
+            "  [4] Pure DQN（使用已训练模型，冻结策略）",
+        ]
+    return [
+        "This stage evaluates the following four groups in Unity/AirSim:",
+        "  [1] fixed APF (fixed-policy baseline, no training stage)",
+        "  [2] random APF (random-policy baseline, no training stage)",
+        "  [3] DDPG+APF (trained model, frozen policy)",
+        "  [4] Pure DQN (trained model, frozen policy)",
+    ]
+
+
+def _benchmark_phase_header(algorithm_type: str, seed: int) -> str:
+    return _localized_text(
+        f"[four-group] 开始仿真评测 {algorithm_type} | seed={seed}",
+        f"[four-group] evaluating {algorithm_type} | seed={seed}",
+    )
+
+
 def choose_first_existing_model(candidates: Iterable[str | Path]) -> Optional[Path]:
     for candidate in candidates:
         path = Path(candidate)
@@ -86,9 +159,13 @@ def summarize_episode_metrics(
         "seed": int(seed),
         "episode": int(episode),
         "total_reward": float(total_reward),
+        "reward": float(total_reward),
+        "length": float(episode_elapsed_time),
+        "episode_elapsed_time": float(episode_elapsed_time),
         "success_flag": int((float(final_global_scan_ratio) / 100.0) >= float(target_scan_ratio)),
         "final_global_scan_ratio": float(final_global_scan_ratio),
         "final_global_avg_entropy": float(final_global_avg_entropy),
+        "global_scanned_cells": int(global_scanned_count),
         "scan_efficiency": float(global_scanned_count) / elapsed,
         "avg_scan_cells_per_second": float(global_scanned_count) / elapsed,
         "avg_scan_cells_per_volt_drop": float(global_scanned_count) / voltage_drop,
@@ -154,7 +231,7 @@ def _make_server_kwargs(
         "stage_index": 1,
         "is_resume": False,
         "source_model": algorithm_type,
-        "enable_visualization": False,
+        "enable_visualization": _env_flag("AIRSIM_QUICK_VISUALIZATION", True),
     }
 
 
@@ -173,8 +250,10 @@ def _run_apf_algorithm(
     from multirotor.DDPG_Weight.envs.simple_weight_env import SimpleWeightEnv
 
     experiment_id = f"{algorithm_type}_seed_{seed}"
+    quick_drone_names = _env_drone_names("AIRSIM_QUICK_DRONES")
     server = MultiDroneAlgorithmServer(
         config_file=str(system_config_path),
+        drone_names=quick_drone_names,
         control_mode="apf",
         apf_weight_mode="fixed",
         **_make_server_kwargs(
@@ -295,6 +374,9 @@ def _run_dqn_algorithm(
 
     drones_config = DronesConfig()
     drone_names = drones_config.get_training_drones("dqn")
+    quick_drone_names = _env_drone_names("AIRSIM_QUICK_DRONES")
+    if quick_drone_names:
+        drone_names = quick_drone_names
     experiment_id = f"pure_dqn_seed_{seed}"
     server = MultiDroneAlgorithmServer(
         config_file=str(system_config_path),
@@ -408,13 +490,15 @@ def run_four_group_benchmark(
     output_root.mkdir(parents=True, exist_ok=True)
 
     paper_cfg = _read_paper_benchmark_config(system_config_path)
-    resolved_seeds = [int(seed) for seed in (seeds or paper_cfg.get("seeds", []))]
+    quick_seeds = _env_seed_list("AIRSIM_QUICK_SEEDS")
+    resolved_seeds = [int(seed) for seed in (seeds or quick_seeds or paper_cfg.get("seeds", []))]
     if not resolved_seeds:
         raise ValueError("No seeds configured for four-group benchmark")
+    quick_eval_episodes = _env_int("AIRSIM_QUICK_BENCHMARK_EPISODES")
     resolved_eval_episodes = int(
         eval_episodes_per_seed
         if eval_episodes_per_seed is not None
-        else paper_cfg.get("eval_episodes_per_seed", 10)
+        else quick_eval_episodes if quick_eval_episodes is not None else paper_cfg.get("eval_episodes_per_seed", 10)
     )
 
     ddpg_candidates: List[Optional[Path]] = [Path(ddpg_model_path) if ddpg_model_path else None]
@@ -444,7 +528,10 @@ def run_four_group_benchmark(
     registry = load_benchmark_registry(registry_path) if registry_path else load_benchmark_registry()
 
     rows: List[Dict[str, object]] = []
+    for line in _benchmark_stage_plan_lines():
+        print(line)
     for seed in resolved_seeds:
+        print(_benchmark_phase_header("fixed_apf", seed))
         rows.extend(
             _run_apf_algorithm(
                 algorithm_type="fixed_apf",
@@ -455,6 +542,7 @@ def run_four_group_benchmark(
                 output_dir=output_root,
             )
         )
+        print(_benchmark_phase_header("random_apf", seed))
         rows.extend(
             _run_apf_algorithm(
                 algorithm_type="random_apf",
@@ -465,6 +553,7 @@ def run_four_group_benchmark(
                 output_dir=output_root,
             )
         )
+        print(_benchmark_phase_header("ddpg_apf", seed))
         rows.extend(
             _run_apf_algorithm(
                 algorithm_type="ddpg_apf",
@@ -475,6 +564,7 @@ def run_four_group_benchmark(
                 output_dir=output_root,
             )
         )
+        print(_benchmark_phase_header("pure_dqn", seed))
         rows.extend(
             _run_dqn_algorithm(
                 seed=seed,

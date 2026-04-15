@@ -1,4 +1,8 @@
-﻿﻿@echo off
+@echo off
+if /i "%AIRSIM_UI_LANG%"=="zh" (
+    call "%~dp0训练权重DDPG-真实环境.bat" %*
+    exit /b %ERRORLEVEL%
+)
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul 2>&1
 cls

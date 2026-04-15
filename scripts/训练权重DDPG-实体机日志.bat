@@ -1,16 +1,16 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul 2>&1
 cls
 
 echo ============================================================
-echo DDPG权重训练(Crazyflie日志-离线)
+echo DDPG权重训练（Crazyflie日志离线）
 echo ============================================================
 echo.
-echo 本脚本将使用Crazyflie日志数据进行离线训练
+echo 本脚本将使用 Crazyflie 日志数据进行离线训练
 echo.
 echo 重要提示:
-echo   1. 需在JSON配置中提供 log_path(.json/.csv)
-echo   2. 日志仅用于离线训练，不控制实体机
+echo   1. 需在 JSON 配置中提供 log_path（.json/.csv）
+echo   2. 日志仅用于离线训练，不会控制实体无人机
 echo   3. 模型将保存到 multirotor\DDPG_Weight\models\
 echo.
 echo 训练参数将从 JSON 配置文件读取
@@ -40,12 +40,12 @@ pause >nul
 echo.
 
 REM 激活虚拟环境(如果存在)
-echo [1/3] 激活Python虚拟环境...
+echo [1/3] 激活 Python 虚拟环境...
 if exist "%~dp0..\myvenv\Scripts\activate.bat" (
     call "%~dp0..\myvenv\Scripts\activate.bat"
     echo [OK] 虚拟环境已激活
 ) else (
-    echo [!] 虚拟环境不存在，使用系统Python
+    echo [!] 虚拟环境不存在，将使用系统 Python
 )
 echo.
 
@@ -54,7 +54,7 @@ echo [2/3] 检查训练脚本...
 if exist "%~dp0..\multirotor\DDPG_Weight\train_with_crazyflie_logs.py" (
     echo [OK] 训练脚本已找到
 ) else (
-    echo [!] 错误: 训练脚本不存在
+    echo [错误] 训练脚本不存在
     pause
     exit /b 1
 )
@@ -65,11 +65,19 @@ echo [3/3] 开始训练...
 echo.
 cd /d "%~dp0..\multirotor\DDPG_Weight"
 python train_with_crazyflie_logs.py --config "%CONFIG_PATH%" %*
+set "TRAIN_EXIT_CODE=%ERRORLEVEL%"
 
 echo.
-echo ============================================================
-echo 训练结束
-echo ============================================================
+if %TRAIN_EXIT_CODE% neq 0 (
+    echo ============================================================
+    echo [X] 训练失败，错误码: %TRAIN_EXIT_CODE%
+    echo ============================================================
+) else (
+    echo ============================================================
+    echo 训练完成
+    echo ============================================================
+)
 echo.
 echo 按任意键退出...
 pause >nul
+exit /b %TRAIN_EXIT_CODE%

@@ -44,6 +44,8 @@ class UnifiedTrainingAnalyzer:
     """Load DDPG/DQN CSV logs and generate unified comparison outputs."""
 
     ALGO_STYLE_MAP = {
+        "fixed_apf": {"color": "#6C757D", "linestyle": "-"},
+        "random_apf": {"color": "#8D99AE", "linestyle": "--"},
         "ddpg_apf": {"color": "#F4A261", "linestyle": "-"},
         "pure_dqn": {"color": "#2A9D8F", "linestyle": "--"},
         "hrl_dqn_apf": {"color": "#3A86FF", "linestyle": "-."},
@@ -51,6 +53,8 @@ class UnifiedTrainingAnalyzer:
     }
 
     ALGO_NAME_MAP = {
+        "fixed_apf": "固定 APF 基线",
+        "random_apf": "随机 APF 基线",
         "hrl_dqn_apf": "双层融合训练 (HRL+APF)",
         "pure_dqn": "纯 DQN 移动控制",
         "ddpg_apf": "DDPG 权重自适应 (APF)",
@@ -347,6 +351,10 @@ class UnifiedTrainingAnalyzer:
 
     def _infer_algorithm_from_path(self, csv_file: Path) -> str:
         path_str = str(csv_file).lower()
+        if "fixed_apf" in path_str:
+            return "fixed_apf"
+        if "random_apf" in path_str:
+            return "random_apf"
         if "hrl" in path_str or "hierarchical" in path_str:
             return "hrl_dqn_apf"
         if "dqn" in path_str:

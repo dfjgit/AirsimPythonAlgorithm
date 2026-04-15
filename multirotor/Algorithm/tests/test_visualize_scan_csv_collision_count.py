@@ -2,24 +2,18 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
-from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from visualize_scan_csv import PLOT_PIPELINE, RunData, plot_collision_count_trend
-
-
-def _workspace_root_for_tmp() -> Path:
-    return Path.cwd()
 
 
 class CollisionCountTrendPlotTests(unittest.TestCase):
     def test_plot_collision_count_trend_writes_png(self):
-        root = _workspace_root_for_tmp() / ".tmp_collision_count_trend_tests" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("collision_count_trend_tests")
         try:
             output_dir = root / "out"
             output_dir.mkdir(parents=True, exist_ok=True)

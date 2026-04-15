@@ -234,22 +234,33 @@ python multirotor/Algorithm/benchmark_registry_helper.py scaffold --algorithm-ty
 
 当前版本新增了两条“实验工作流”主线，用于把训练、归档、分析和继续训练建议串成统一入口。
 
-### 1. 论文对比分析实验工作流
+快速配置补充说明：
+
+- `start.bat` 中支持快速配置的入口，默认值来源与仿真时间预估口径见 [docs/START_QUICK_CONFIG_ZH.md](docs/START_QUICK_CONFIG_ZH.md)
+- `start.bat` / `start_en.bat` 默认以“用户模式”输出运行日志，可在主菜单按 `T` 临时切到详细模式
+
+### 1. 四组统一仿真对比阶段
 
 入口：
-- `start.bat` 中的 `M`
+- `start.bat` 中的 `M`（四组统一仿真对比阶段）
 - `python multirotor/Algorithm/paper_workflow_orchestrator.py --workflow comparison`
 
 用途：
-- 组织 `ddpg_apf` 与 `pure_dqn` 的 stage01 对比实验
-- 自动串联训练、归档、对比分析和继续训练建议
+- 作为四组论文实验的总入口，统一衔接训练、四组仿真评测和分析
+- 组织 `ddpg_apf` 与 `pure_dqn` 的 stage01 训练，并为 `fixed_apf`、`random_apf`、`ddpg_apf`、`pure_dqn` 四组评测准备输入
+- 自动串联训练、归档、四组评测、分析和继续训练建议
 
 当前流程：
-1. 运行 `ddpg_apf` stage01 训练
-2. 运行 `pure_dqn` stage01 训练
-3. 归档两类模型与日志
-4. 生成 comparison workflow 对应的分析产物
-5. 给出是否继续进入 `stage02_finetune` 的建议
+1. 运行 `fixed_apf` 与 `random_apf` 的 APF 基线多轮仿真
+2. 运行 `ddpg_apf` stage01 训练
+3. 运行 `pure_dqn` stage01 训练
+4. 在 Unity/AirSim 中运行四组最终统一仿真评测（冻结策略），覆盖 `fixed_apf`、`random_apf`、`ddpg_apf`、`pure_dqn`
+5. 生成 comparison workflow 对应的分析产物
+6. 给出是否继续进入 `stage02_finetune` 的建议
+
+补充说明：
+- `ddpg_apf` 与 `pure_dqn` 会先完成训练，再进入四组仿真评测
+- `fixed_apf` 与 `random_apf` 不参加训练阶段，但会直接进入四组仿真评测
 
 产物目录：
 - `analysis_results/workflows/comparison/<experiment_id>/...`

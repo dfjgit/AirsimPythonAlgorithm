@@ -10,7 +10,9 @@ from Algorithm.drones_config import DronesConfig
 from Crazyswarm.crazyflie_operate import CrazyflieOperate
 from AirsimServer.data_pack import DataPacks, PackType
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from runtime_logging import configure_runtime_logging
+
+configure_runtime_logging()
 logger = logging.getLogger("UnitySocketServer")
 
 

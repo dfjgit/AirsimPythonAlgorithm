@@ -2,11 +2,15 @@ import os
 import shutil
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from four_group_benchmark_runner import (
+    _benchmark_stage_plan_lines,
+    _make_server_kwargs,
     build_apf_action_vector,
     candidate_project_roots,
     choose_first_existing_model,
@@ -16,9 +20,7 @@ from four_group_benchmark_runner import (
 
 class FourGroupBenchmarkRunnerHelperTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / "_tmp_four_group_benchmark_runner"
-        shutil.rmtree(self.root, ignore_errors=True)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root = make_temp_dir("four_group_benchmark_runner")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -83,6 +85,44 @@ class FourGroupBenchmarkRunnerHelperTests(unittest.TestCase):
         self.assertEqual(row["collision_termination_flag"], 0)
         self.assertAlmostEqual(row["avg_scan_cells_per_second"], 6.2)
         self.assertIn("avg_scan_cells_per_volt_drop", row)
+
+    def test_benchmark_stage_plan_lines_use_chinese_when_ui_lang_is_zh(self):
+        with patch.dict(os.environ, {"AIRSIM_UI_LANG": "zh"}, clear=False):
+            lines = _benchmark_stage_plan_lines()
+
+        self.assertIn("本阶段将依次在 Unity/AirSim 中评测以下四组：", lines[0])
+        self.assertIn("fixed APF（固定策略基线，不参加训练）", lines[1])
+        self.assertIn("random APF（随机策略基线，不参加训练）", lines[2])
+        self.assertIn("DDPG+APF（使用已训练模型，冻结策略）", lines[3])
+        self.assertIn("Pure DQN（使用已训练模型，冻结策略）", lines[4])
+
+    def test_benchmark_stage_plan_lines_use_english_by_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            lines = _benchmark_stage_plan_lines()
+
+        self.assertIn("This stage evaluates the following four groups in Unity/AirSim:", lines[0])
+
+    def test_make_server_kwargs_defaults_visualization_to_enabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            kwargs = _make_server_kwargs(
+                seed=1,
+                run_kind="test",
+                experiment_id="exp",
+                algorithm_type="fixed_apf",
+            )
+
+        self.assertTrue(kwargs["enable_visualization"])
+
+    def test_make_server_kwargs_honors_quick_visualization_override(self):
+        with patch.dict(os.environ, {"AIRSIM_QUICK_VISUALIZATION": "0"}, clear=True):
+            kwargs = _make_server_kwargs(
+                seed=1,
+                run_kind="test",
+                experiment_id="exp",
+                algorithm_type="fixed_apf",
+            )
+
+        self.assertFalse(kwargs["enable_visualization"])
 
 
 if __name__ == "__main__":

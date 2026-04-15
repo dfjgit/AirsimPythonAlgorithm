@@ -11,12 +11,21 @@ if exist "%ROOT%\..\..\myvenv\Scripts\python.exe" set "PYTHON_EXE=%ROOT%\..\..\m
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 
-echo ============================================================
-echo Generating family comparison reports
-echo Input:    %EVAL_CSV%
-echo Registry: %REGISTRY%
-echo Output:   %OUT%
-echo ============================================================
+if /i "%AIRSIM_UI_LANG%"=="zh" (
+    echo ============================================================
+    echo 正在生成 Family 维度对比分析
+    echo 输入文件: %EVAL_CSV%
+    echo 注册表: %REGISTRY%
+    echo 输出目录: %OUT%
+    echo ============================================================
+) else (
+    echo ============================================================
+    echo Generating family comparison reports
+    echo Input:    %EVAL_CSV%
+    echo Registry: %REGISTRY%
+    echo Output:   %OUT%
+    echo ============================================================
+)
 
 "%PYTHON_EXE%" "%ROOT%\multirotor\Algorithm\family_analysis.py" --eval-csv "%EVAL_CSV%" --registry "%REGISTRY%" --out "%OUT%" %*
 exit /b %ERRORLEVEL%

@@ -2,11 +2,10 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
-from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from paper_workflow_archive import (
     archive_comparison_stage_outputs,
     archive_directory_tree,
@@ -17,10 +16,7 @@ from paper_workflow_archive import (
 
 class PaperWorkflowArchiveTests(unittest.TestCase):
     def setUp(self):
-        base = Path(os.getcwd()) / "pwf_tmp"
-        base.mkdir(exist_ok=True)
-        self.root = base / uuid.uuid4().hex[:8]
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root = make_temp_dir("paper_workflow_archive")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)

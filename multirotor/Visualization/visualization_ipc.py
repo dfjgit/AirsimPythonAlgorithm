@@ -10,6 +10,19 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from multirotor.runtime_logging import should_emit_detail_feedback
+except ImportError:
+    try:
+        from runtime_logging import should_emit_detail_feedback
+    except ImportError:
+        def should_emit_detail_feedback() -> bool:  # type: ignore[no-redef]
+            return True
+
+
+def _should_print_ipc_debug() -> bool:
+    return should_emit_detail_feedback()
+
 
 def _send_frame(conn: socket.socket, payload: bytes) -> None:
     header = struct.pack("!I", len(payload))
@@ -146,7 +159,7 @@ class VisualizationIPCServer:
                 current_time = _time.time()
                 if not hasattr(self, '_last_snapshot_log_time'):
                     self._last_snapshot_log_time = 0
-                if current_time - self._last_snapshot_log_time > 5.0:
+                if _should_print_ipc_debug() and current_time - self._last_snapshot_log_time > 5.0:
                     self._last_snapshot_log_time = current_time
                     snap_keys = list(snapshot.keys())
                     print(f"[IPC服务端] 📤 发送snapshot，字段数: {len(snap_keys)}，字段列表: {snap_keys}")
@@ -163,5 +176,6 @@ class VisualizationIPCServer:
                     self._client = None
             except Exception as e:
                 # 非 socket 异常通常来自快照构造/序列化，不应直接断开可视化连接。
-                print(f"[IPC服务端] ⚠️ 快照发送异常: {e}")
+                if _should_print_ipc_debug():
+                    print(f"[IPC服务端] ⚠️ 快照发送异常: {e}")
                 _time.sleep(min(0.05, period))

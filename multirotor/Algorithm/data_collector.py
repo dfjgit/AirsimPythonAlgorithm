@@ -335,7 +335,7 @@ class DataCollector:
                 logger.error(f"关闭训练数据文件失败: {str(e)}")
     
     def _flush_training_data(self):
-        """???????????????"""
+        """将当前 episode 的训练数据刷盘并重置缓存。"""
         if self.training_csv_writer and self.last_episode >= 0 and self.current_episode_length > 0:
             try:
                 elapsed_time = time.time() - self.global_start_time
@@ -487,14 +487,14 @@ class DataCollector:
                 self.training_csv_writer.writerow(training_row)
                 self.training_csv_file.flush()
                 logger.info(
-                    f"??? Episode {self.last_episode} ???? (??: {self.current_episode_reward:.2f}, ??: {self.current_episode_length})"
+                    f"结束 Episode {self.last_episode} 并保存（奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length}）"
                 )
                 self.last_episode = -1
                 self.current_episode_length = 0
                 self.current_episode_elapsed_time = 0.0
                 self.current_episode_weights = []
             except Exception as e:
-                logger.error(f"????????: {e}")
+                logger.error(f"训练数据刷盘失败: {e}")
 
     def _capture_external_terminal_meta_locked(self):
         """从 external_data 中抓取并锁存终止元数据，避免 episode 切换时被下一轮覆盖。"""
@@ -1203,7 +1203,7 @@ class DataCollector:
                             ]
                             self.training_csv_writer.writerow(training_row)
                             self.training_csv_file.flush()
-                            logger.info(f"??? Episode {self.last_episode} ???? (??: {self.current_episode_reward:.2f}, ??: {self.current_episode_length})")
+                            logger.info(f"结束 Episode {self.last_episode} 并保存（奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length}）")
 
                         self.last_episode = current_episode
                         self.current_episode_elapsed_time = episode_elapsed_time

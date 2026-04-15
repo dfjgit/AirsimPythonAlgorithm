@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,10 @@ from training_analyzer import UnifiedTrainingAnalyzer
 
 LOGGER = logging.getLogger("training_data_visualizer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+def _localized_text(zh_text: str, en_text: str) -> str:
+    return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
 
 
 def _resolve_scan_dir(dir_path: Path) -> list[Path]:
@@ -61,7 +66,7 @@ def _build_scan_inputs(args: argparse.Namespace, project_root: Path) -> list[Pat
 
 def _analyze_scan_csvs(scan_files: list[Path], out_root: Path, snapshots: int) -> int:
     if not scan_files:
-        LOGGER.warning("未找到可分析的 scan_data CSV 文件。")
+        LOGGER.warning(_localized_text("未找到可分析的 scan_data CSV 文件。", "No scan_data CSV files were found for analysis."))
         return 1
 
     ensure_dir(out_root)
@@ -71,13 +76,13 @@ def _analyze_scan_csvs(scan_files: list[Path], out_root: Path, snapshots: int) -
         ensure_dir(run_dir)
         training_csv = paired_training_csv(scan_csv)
         run = RunData(scan_path=scan_csv, training_path=training_csv, output_dir=run_dir)
-        LOGGER.info("Analyzing %s", scan_csv.name)
+        LOGGER.info(_localized_text("正在分析 %s", "Analyzing %s"), scan_csv.name)
         for plot_fn, plot_name in PLOT_PIPELINE:
             safe_plot(plot_fn, run, plot_name=plot_name)
         safe_plot(plot_entropy_hist_snapshots, run, snapshots, plot_name="entropy_hist_snapshots")
         safe_plot(plot_selected_episode_trajectories, run, plot_name="selected_episode_trajectories")
         write_manifest(run)
-        LOGGER.info("Finished %s -> %s", scan_csv.name, run_dir)
+        LOGGER.info(_localized_text("分析完成 %s -> %s", "Finished %s -> %s"), scan_csv.name, run_dir)
     return failures
 
 
@@ -85,6 +90,8 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
     compare_dirs = [
         project_root / "multirotor" / "DDPG_Weight" / "airsim_training_logs",
         project_root / "multirotor" / "DQN_Movement" / "logs" / "dqn_scan_data",
+        project_root / "analysis_results" / "apf_baseline_sim" / "fixed_apf",
+        project_root / "analysis_results" / "apf_baseline_sim" / "random_apf",
     ]
     analyzer = UnifiedTrainingAnalyzer(output_dir=str(out_root))
     analyzer.load_data([str(p) for p in compare_dirs])
@@ -190,7 +197,7 @@ def _analyze_algorithm_comparison(project_root: Path, out_root: Path) -> int:
         min_training_episodes=20,
         report_prefix="recent_window_algorithm_comparison",
     )
-    LOGGER.info("Finished algorithm comparison -> %s", out_root)
+    LOGGER.info(_localized_text("算法对比分析完成 -> %s", "Finished algorithm comparison -> %s"), out_root)
     return 0
 
 
@@ -219,11 +226,16 @@ def main() -> int:
         out_root = project_root / out_root
 
     if args.show:
-        LOGGER.info("当前分析器使用离线 Agg 后端，--show 参数将被忽略。")
+        LOGGER.info(_localized_text("当前分析器使用离线 Agg 后端，--show 参数将被忽略。", "The offline Agg backend is active; --show will be ignored."))
 
     if args.json:
-        LOGGER.warning("visualize_training_data.py 已统一为 CSV 离线分析入口，JSON 分析已弃用。")
-        LOGGER.warning("请优先使用对应的 scan_data_*.csv 文件。")
+        LOGGER.warning(
+            _localized_text(
+                "visualize_training_data.py 已统一为 CSV 离线分析入口，JSON 分析已弃用。",
+                "visualize_training_data.py now uses CSV-only offline analysis; JSON analysis is deprecated.",
+            )
+        )
+        LOGGER.warning(_localized_text("请优先使用对应的 scan_data_*.csv 文件。", "Please use the corresponding scan_data_*.csv files instead."))
 
     if args.compare or args.compare_algorithms or args.compare_algorithms_full:
         compare_out = out_root / "algorithm_comparison"
@@ -232,7 +244,12 @@ def main() -> int:
 
     scan_files = _build_scan_inputs(args, project_root)
     if not scan_files:
-        LOGGER.info("提示: 使用 --auto 自动扫描，或使用 --csv/--dir 指定 scan_data CSV。")
+        LOGGER.info(
+            _localized_text(
+                "提示: 使用 --auto 自动扫描，或使用 --csv/--dir 指定 scan_data CSV。",
+                "Tip: use --auto to scan logs automatically, or specify scan_data CSV files with --csv/--dir.",
+            )
+        )
         return 1
 
     return _analyze_scan_csvs(scan_files, out_root, args.snapshots)

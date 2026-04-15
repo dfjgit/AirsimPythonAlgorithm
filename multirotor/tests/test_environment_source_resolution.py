@@ -1,6 +1,6 @@
 import json
+import shutil
 import sys
-import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -21,17 +21,17 @@ if "msgpack" not in sys.modules:
     sys.modules["msgpack"] = types.ModuleType("msgpack")
 
 from multirotor.AlgorithmServer import MultiDroneAlgorithmServer
+from multirotor.Algorithm._test_temp_paths import make_temp_dir
 from multirotor.Algorithm.scanner_config_data import ScannerConfigData
 from multirotor.Algorithm.system_config import SystemConfig, overlay_environment_rules
 
 
 class EnvironmentSourceResolutionTests(unittest.TestCase):
     def setUp(self):
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.root = Path(self.tempdir.name)
+        self.root = make_temp_dir("env_source_resolution")
 
     def tearDown(self):
-        self.tempdir.cleanup()
+        shutil.rmtree(self.root, ignore_errors=True)
 
     def test_overlay_environment_rules_prefers_system_config(self):
         system_path = self.root / "system_config.json"
@@ -96,6 +96,42 @@ class EnvironmentSourceResolutionTests(unittest.TestCase):
 
         self.assertEqual(config.env_config["termination"]["target_scan_ratio"], 0.42)
         self.assertEqual(config.env_config["battery"]["low_threshold"], 3.55)
+
+    def test_algorithm_server_default_system_config_path_loads_shared_environment(self):
+        system_path = self.root / "system_config.json"
+        system_path.write_text(
+            json.dumps(
+                {
+                    "drones": {
+                        "UAV1": {"enabled": True, "type": "virtual", "isCrazyflieMirror": False},
+                    },
+                    "algorithm": {
+                        "repulsionCoefficient": 2.0,
+                        "entropyCoefficient": 2.0,
+                        "distanceCoefficient": 2.0,
+                        "leaderRangeCoefficient": 1.5,
+                        "directionRetentionCoefficient": 0.5,
+                    },
+                    "environment": {
+                        "termination": {"target_scan_ratio": 0.36},
+                        "battery": {"low_threshold": 3.52, "optimal_min": 3.7, "optimal_max": 4.1},
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        server = MultiDroneAlgorithmServer.__new__(MultiDroneAlgorithmServer)
+        server.config_path = str(system_path)
+        server.system_config_path = None
+        server._config_file_provided = False
+
+        config = server._load_config()
+
+        self.assertEqual(config.env_config["termination"]["target_scan_ratio"], 0.36)
+        self.assertEqual(config.env_config["battery"]["low_threshold"], 3.52)
 
 
 if __name__ == "__main__":

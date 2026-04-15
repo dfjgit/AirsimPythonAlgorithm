@@ -32,7 +32,7 @@ from Algorithm.drones_config import DronesConfig
 # 导入可视化器
 try:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    from Visualization import HierarchicalTrainingVisualizer
+from Visualization import HierarchicalTrainingVisualizer
     HAS_VISUALIZER = True
 except ImportError:
     HAS_VISUALIZER = False
@@ -108,6 +108,12 @@ def train_hrl(enable_visualization=True):
     config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "hierarchical_dqn_config.json")
     with open(config_path, 'r', encoding='utf-8') as f:
         config = json.load(f)
+    quick_total_timesteps = os.environ.get("AIRSIM_QUICK_HRL_TIMESTEPS", "").strip()
+    if quick_total_timesteps:
+        try:
+            config['training']['total_timesteps'] = int(quick_total_timesteps)
+        except ValueError:
+            print(f"  ⚠️  忽略无效的 AIRSIM_QUICK_HRL_TIMESTEPS={quick_total_timesteps}")
 
     # 2. 创建高层训练环境
     # 注意: 这里 server=None 仅用于演示或纯离线逻辑测试。

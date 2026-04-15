@@ -3,11 +3,11 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir, suite_temp_root
 from paper_workflow_state import (
     create_experiment_root,
     initialize_workflow_state,
@@ -19,9 +19,8 @@ from paper_workflow_state import (
 
 class PaperWorkflowStateTests(unittest.TestCase):
     def setUp(self):
-        self.temp_root = Path.cwd() / ".paper_workflow_state_tmp"
-        self.tempdir = self.temp_root / uuid.uuid4().hex
-        self.tempdir.mkdir(parents=True, exist_ok=True)
+        self.temp_root = suite_temp_root("paper_workflow_state")
+        self.tempdir = make_temp_dir("paper_workflow_state")
         self.root = self.tempdir
 
     def tearDown(self):

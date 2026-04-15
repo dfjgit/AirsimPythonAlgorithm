@@ -1,4 +1,8 @@
-﻿@echo off
+@echo off
+if /i "%AIRSIM_UI_LANG%"=="zh" (
+    call "%~dp0测试移动DQN.bat" %*
+    exit /b %ERRORLEVEL%
+)
 chcp 65001 >nul
 cls
 

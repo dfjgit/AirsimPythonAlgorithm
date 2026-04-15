@@ -2,7 +2,6 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -10,6 +9,7 @@ from unittest.mock import Mock, call
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 import paper_workflow_orchestrator
 from paper_workflow_orchestrator import PaperWorkflowOrchestrator
 
@@ -19,9 +19,7 @@ RECOMMENDATIONS = {"ddpg_apf": {"decision": "寤鸿缁", "reasons": ["r
 
 class PaperWorkflowOrchestratorTests(unittest.TestCase):
     def setUp(self):
-        workspace_base = Path.cwd()
-        self.root = workspace_base / f".tmp_paper_workflow_{uuid.uuid4().hex}"
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root = make_temp_dir("paper_workflow")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -54,6 +52,7 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         orchestrator.run_comparison_workflow(exp_root)
 
         expected_commands = [
+            call(["cmd.exe", "/d", "/c", "scripts\\Run_APF_Baseline_Simulation.bat"], cwd=self.root),
             call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"], cwd=self.root),
             call(["cmd.exe", "/d", "/c", "scripts\\Train_DQN_Movement_Real_Environment.bat"], cwd=self.root),
             call(["cmd.exe", "/d", "/c", "scripts\\Run_Four_Group_Benchmark.bat"], cwd=self.root),
@@ -76,6 +75,7 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["status"], "completed")
         self.assertEqual(state["current_phase"], "stage02_decision")
         self.assertEqual(state["recommendations"], RECOMMENDATIONS)
+        self.assertEqual(state["steps"]["apf_baseline_sim"]["status"], "completed")
         self.assertEqual(state["steps"]["stage01_ddpg"]["status"], "completed")
         self.assertEqual(state["steps"]["stage01_dqn"]["status"], "completed")
         self.assertEqual(state["steps"]["frozen_benchmark"]["status"], "completed")
@@ -94,8 +94,8 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
 
         state = orchestrator.load_state(exp_root)
         self.assertEqual(state["status"], "failed")
-        self.assertEqual(state["current_phase"], "stage01_ddpg")
-        self.assertEqual(state["steps"]["stage01_ddpg"]["status"], "failed")
+        self.assertEqual(state["current_phase"], "apf_baseline_sim")
+        self.assertEqual(state["steps"]["apf_baseline_sim"]["status"], "failed")
         archive_runner.assert_not_called()
         recommendation_runner.assert_not_called()
 
@@ -394,6 +394,42 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(recorded["workflow_type"], "comparison")
         self.assertEqual(recorded["alias"], "cli-run")
         self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+
+    def test_main_comparison_workflow_prints_chinese_status_when_ui_lang_is_zh(self):
+        recorded = {}
+        expected_exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "cli-zh"
+
+        class FakeOrchestrator:
+            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+                return expected_exp_root
+
+            def run_comparison_workflow(self, exp_root: Path) -> None:
+                recorded["run_exp_root"] = exp_root
+
+        stdout = StringIO()
+
+        def orchestrator_factory(*, workspace_root: Path):
+            return FakeOrchestrator()
+
+        original_lang = os.environ.get("AIRSIM_UI_LANG")
+        os.environ["AIRSIM_UI_LANG"] = "zh"
+        try:
+            with redirect_stdout(stdout):
+                exit_code = paper_workflow_orchestrator.main(
+                    ["--workflow", "comparison", "--workspace-root", str(self.root), "--alias", "cli-zh"],
+                    orchestrator_factory=orchestrator_factory,
+                )
+        finally:
+            if original_lang is None:
+                os.environ.pop("AIRSIM_UI_LANG", None)
+            else:
+                os.environ["AIRSIM_UI_LANG"] = original_lang
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+        output = stdout.getvalue()
+        self.assertIn("四组统一仿真对比阶段已启动", output)
+        self.assertIn("四组统一仿真对比阶段已完成", output)
 
     def test_main_virtual_real_two_stage_workflow_defaults_to_online_refine_mode(self):
         recorded = {}

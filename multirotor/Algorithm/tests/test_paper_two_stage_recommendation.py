@@ -2,12 +2,11 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
-from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from _test_temp_paths import make_temp_dir
 from paper_two_stage_recommendation import (
     CAUTION_DECISION,
     CONTINUE_DECISION,
@@ -18,9 +17,7 @@ from paper_two_stage_recommendation import (
 
 class PaperTwoStageRecommendationTests(unittest.TestCase):
     def setUp(self):
-        workspace_root = Path(__file__).parents[3].resolve()
-        self.root = workspace_root / "tmp_paper_two_stage_recommendation" / uuid.uuid4().hex
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root = make_temp_dir("paper_two_stage_recommendation")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)

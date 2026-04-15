@@ -160,23 +160,23 @@ class DroneController:
     def takeoff(
         self, vehicle_name: Optional[str] = None, timeout_sec: int = 30
     ) -> bool:
-        """????????API?"""
+        """无人机起飞，带状态确认与补偿爬升逻辑。"""
         vehicle_name = vehicle_name or self.default_vehicle
         try:
             self._update_vehicle_state(vehicle_name)
             state = self._get_or_create_state(vehicle_name)
             if not state["api_enabled"]:
-                logger.error(f"???{vehicle_name}API??????????")
+                logger.error(f"无人机{vehicle_name}未启用 API 控制，无法起飞")
                 return False
 
             pos = state.get("position", (0.0, 0.0, 0.0))
             altitude = -float(pos[2]) if pos is not None else 0.0
             if state["flying"] and altitude > 0.8:
-                logger.warning(f"???{vehicle_name}???????")
+                logger.warning(f"无人机{vehicle_name}已经在空中，无需重复起飞")
                 return True
             if state["flying"] and altitude <= 0.8:
                 logger.warning(
-                    f"???{vehicle_name}???? flying=True ????? alt={altitude:.2f}m, ?????????"
+                    f"无人机{vehicle_name}状态异常：flying=True 但高度过低 alt={altitude:.2f}m，准备重新起飞"
                 )
                 self._update_state_field(vehicle_name, "flying", False)
 
@@ -193,11 +193,11 @@ class DroneController:
                 pos = state.get("position", (0.0, 0.0, 0.0))
                 altitude = -float(pos[2]) if pos is not None else 0.0
                 if state.get("flying", False) and float(pos[2]) < -0.8:
-                    logger.info(f"???{vehicle_name}????")
+                    logger.info(f"无人机{vehicle_name}起飞成功")
                     return True
                 if altitude > 1.2:
                     logger.warning(
-                        f"???{vehicle_name}???????? flying={state.get('flying', False)}, pos={pos}"
+                        f"无人机{vehicle_name}高度已达标但状态未更新 flying={state.get('flying', False)}, pos={pos}"
                     )
                     self._update_state_field(vehicle_name, "flying", True)
                     return True
@@ -217,11 +217,11 @@ class DroneController:
                             )
                         issued_fallback_climb = True
                         logger.warning(
-                            f"???{vehicle_name}???????????? moveToZAsync({target_altitude_z})"
+                            f"无人机{vehicle_name}起飞未离地，补发 moveToZAsync({target_altitude_z})"
                         )
                     except Exception as exc:
                         logger.warning(
-                            f"???{vehicle_name}??????? moveToZAsync ???? {exc}"
+                            f"无人机{vehicle_name}补发爬升指令 moveToZAsync 失败: {exc}"
                         )
                 time.sleep(0.1)
 
@@ -232,16 +232,16 @@ class DroneController:
             if final_altitude > 0.8:
                 self._update_state_field(vehicle_name, "flying", True)
                 logger.warning(
-                    f"???{vehicle_name}?????? alt={final_altitude:.2f}m, ???????"
+                    f"无人机{vehicle_name}起飞确认超时，但高度已达标 alt={final_altitude:.2f}m，按成功处理"
                 )
                 return True
             logger.warning(
-                f"???{vehicle_name}??????timeout={timeout_sec}s, "
+                f"无人机{vehicle_name}起飞超时 timeout={timeout_sec}s, "
                 f"flying={final_state.get('flying', False)}, pos={final_pos}"
             )
             return False
         except Exception as e:
-            logger.error(f"???{vehicle_name}??????: {str(e)}")
+            logger.error(f"无人机{vehicle_name}起飞失败: {str(e)}")
             return False
 
     def land(self, vehicle_name: Optional[str] = None, timeout_sec: int = 30) -> bool:

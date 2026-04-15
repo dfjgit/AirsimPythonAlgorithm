@@ -1,41 +1,64 @@
 @echo off
 chcp 65001 >nul
+setlocal EnableExtensions
+set "AIRSIM_UI_LANG=en"
+if not defined AIRSIM_RUNTIME_LOG_MODE set "AIRSIM_RUNTIME_LOG_MODE=user"
+set "START_PYTHON_EXE=python"
+if exist "%~dp0myvenv\Scripts\python.exe" set "START_PYTHON_EXE=%~dp0myvenv\Scripts\python.exe"
+if exist "%~dp0.venv\Scripts\python.exe" set "START_PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
 :menu
 cls
 echo ============================================================
-echo    AirSim UAV Simulation System - Main Menu
+echo    AirSim UAV Simulation Platform - Console
 echo ============================================================
 echo.
-echo === System Operation ===
-echo   [1] Run System (Fixed Weights)[⭐Available!]
-echo   [2] Run System (DDPG Weight Prediction) [⭐Available!]
-echo   [3] Run System (DQN Model) [Under Development]
+echo === System Operations ===
+echo   [1] Launch System (Fixed Weights)
+echo   [2] Launch System (DDPG Weight Prediction)
+echo   [3] Launch System (DQN Control, Reserved)
 echo.
-echo === DDPG Weight APF Training ===
-echo   [4] Train DDPG Weights (Real AirSim Environment) [⭐Available!]
-echo   [E] Train DDPG Weights (Single-Episode Crazyflie Online) [⭐New!]
+echo === DDPG+APF Training ===
+echo   [4] Launch DDPG+APF Training (AirSim, New Model)
+echo   [E] Run DDPG+APF Training (Single-Episode Crazyflie Online)
 echo.
-echo === DQN Movement Control Training ===
-echo   [5] Train DQN Movement (Real AirSim Environment)[⭐Available!]
-echo   [H] Train Hierarchical DQN (Offline/Mock Mode)
-echo   [F] Train Hierarchical DQN (AirSim Fusion Mode) [⭐New!]
-echo   [D] Test DQN Movement Model [⭐Available!]
+echo === DQN Control Training ===
+echo   [5] Launch DQN Control Training (AirSim, New Model)
+echo   [H] Launch Hierarchical DQN Training (Offline / Mock)
+echo   [F] Launch Hierarchical DQN Training (AirSim Fusion)
+echo   [D] Validate DQN Control Model
 echo.
-echo === Data Analysis ===
-echo   [A] Training Data Visualization [⭐Available!]
-echo   [B] Algorithm Comparison (DDPG vs DQN) [⭐Available!]
+echo === Analysis ===
+echo   [A] Generate Visualization Outputs
+echo   [B] Generate DDPG vs DQN Comparison
 echo.
-echo === Cleanup ===
-echo   [C] Delete training outputs (models/logs/analysis)
+echo === Experiment Workflows ===
+echo   [M] Four-Group Unified Simulation Comparison
+echo   [N] Virtual-Real Two-Stage Workflow
 echo.
-echo === System Information ===
-echo   [6] View System Information
+echo === Four-Group Experiments ===
+echo   [G] Run Four-Group Unified Simulation Comparison / Benchmark
+echo   [I] Generate Four-Group Main Analysis
+echo   [J] Generate Family Comparison Analysis
+echo   [K] Run Paper Multi-Seed Training (DDPG+APF)
+echo   [L] Run Paper Multi-Seed Training (Pure DQN)
+echo.
+echo === Maintenance ===
+echo   [C] Clean Up Training and Analysis Outputs
+echo.
+echo === Platform Information ===
+echo   [6] View Platform Information
+if /i "%AIRSIM_RUNTIME_LOG_MODE%"=="detail" (
+echo   Current Runtime Log Mode: Detail Mode
+) else (
+echo   Current Runtime Log Mode: User Mode
+)
+echo   [T] Toggle Runtime Log Mode (Current Session)
 echo   [0] Exit
 echo.
 echo ============================================================
 echo.
 
-set /p choice=Please enter an option (0-6,A-F,C,H,E): 
+set /p choice=Select an option (0-6,A-N,C,D,E,F,G,H,I,J,K,L,M,T):
 
 if /i "%choice%"=="1" goto run_normal
 if /i "%choice%"=="2" goto run_dqn
@@ -48,40 +71,101 @@ if /i "%choice%"=="F" goto train_hierarchical_airsim
 if /i "%choice%"=="d" goto test_movement_dqn
 if /i "%choice%"=="a" goto data_visualization
 if /i "%choice%"=="b" goto compare_algorithms
+if /i "%choice%"=="g" goto four_group_benchmark
+if /i "%choice%"=="i" goto analyze_four_group_benchmark
+if /i "%choice%"=="j" goto analyze_family_comparisons
+if /i "%choice%"=="k" goto train_paper_ddpg_seeds
+if /i "%choice%"=="l" goto train_paper_dqn_seeds
+if /i "%choice%"=="m" goto comparison_workflow
+if /i "%choice%"=="n" goto virtual_real_two_stage_workflow
+if /i "%choice%"=="t" goto toggle_runtime_log_mode
 if /i "%choice%"=="c" goto cleanup_menu
 if /i "%choice%"=="6" goto info
 if /i "%choice%"=="0" goto end
 
 echo.
-echo Invalid option, please select again
+echo Invalid selection. Please try again.
 timeout /t 2 >nul
 goto menu
+
+:toggle_runtime_log_mode
+if /i "%AIRSIM_RUNTIME_LOG_MODE%"=="detail" (
+    set "AIRSIM_RUNTIME_LOG_MODE=user"
+    echo.
+    echo Switched to User Mode.
+) else (
+    set "AIRSIM_RUNTIME_LOG_MODE=detail"
+    echo.
+    echo Switched to Detail Mode.
+)
+echo.
+call :wait_for_continue
+if /i "%AIRSIM_TEST_EXIT_AFTER_TOGGLE%"=="1" goto end
+goto menu
+
+:wait_for_continue
+if /i "%AIRSIM_TEST_NO_PAUSE%"=="1" exit /b 0
+pause
+exit /b 0
+
+:clear_quick_overrides
+for %%V in (
+    AIRSIM_QUICK_DRONES
+    AIRSIM_QUICK_DDPG_TIMESTEPS
+    AIRSIM_QUICK_DQN_TIMESTEPS
+    AIRSIM_QUICK_HRL_TIMESTEPS
+    AIRSIM_QUICK_APF_BASELINE_EPISODES
+    AIRSIM_QUICK_BENCHMARK_EPISODES
+    AIRSIM_QUICK_VISUALIZATION
+    AIRSIM_QUICK_SEEDS
+) do set "%%V="
+exit /b 0
+
+:collect_quick_config
+set "QC_PROFILE=%~1"
+if "%QC_PROFILE%"=="" exit /b 0
+call :clear_quick_overrides
+set "QC_FILE=%TEMP%\airsim_quick_config_%RANDOM%_%RANDOM%.env"
+if exist "%QC_FILE%" del /f /q "%QC_FILE%" >nul 2>nul
+"%START_PYTHON_EXE%" "%~dp0scripts\start_quick_config_helper.py" --schema "%~dp0scripts\start_quick_config_schema.json" --profile "%QC_PROFILE%" --output "%QC_FILE%" --lang en
+set "QC_EXIT=%ERRORLEVEL%"
+if exist "%QC_FILE%" (
+    for /f "usebackq tokens=1,* delims==" %%A in ("%QC_FILE%") do set "%%A=%%B"
+    del /f /q "%QC_FILE%" >nul 2>nul
+)
+exit /b %QC_EXIT%
 
 :run_normal
 cls
 echo ============================================================
-echo Start System - Fixed Weights Mode
+echo System Operations (Fixed Weights)
 echo ============================================================
 echo.
+call :collect_quick_config "run_fixed"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Run_System_Fixed_Weights.bat
 goto menu
 
 :run_dqn
 cls
 echo ============================================================
-echo Start System - DDPG Weight Prediction Mode
+echo System Operations (DDPG Weight Prediction)
 echo ============================================================
 echo.
+call :collect_quick_config "run_ddpg"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Run_System_DDPG_Weights.bat
 goto menu
 
 :run_dqn_movement
 cls
 echo ============================================================
-echo Run System - DQN Model
+echo System Operations (DQN Control)
 echo ============================================================
 echo.
-echo [Tip] This feature is under development, coming soon...
+echo [Tip] This entry is not yet available. Please use the training or evaluation options instead.
 echo.
 pause
 goto menu
@@ -89,52 +173,67 @@ goto menu
 :train_weight_airsim
 cls
 echo ============================================================
-echo DDPG Weight APF Training (Real AirSim Environment)
+echo DDPG+APF Training (AirSim, New Model)
 echo ============================================================
 echo.
+call :collect_quick_config "ddpg_train"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Train_DDPG_Weights_Real_Environment.bat
 goto menu
 
 :train_weight_crazyflie_online_single
 cls
 echo ============================================================
-echo DDPG Weight APF Training (Single-Episode Crazyflie Online)
+echo DDPG+APF Training (Single-Episode Crazyflie Online)
 echo ============================================================
 echo.
+call :collect_quick_config "ddpg_single_episode"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Train_DDPG_Weights_Crazyflie_Online_Single_Episode_EN.bat
 goto menu
 
 :train_movement_airsim
 cls
 echo ============================================================
-echo DQN Movement Control Training (Real AirSim Environment)
+echo DQN Control Training (AirSim, New Model)
 echo ============================================================
 echo.
+call :collect_quick_config "dqn_train"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Train_DQN_Movement_Real_Environment.bat
 goto menu
 
 :train_hierarchical_dqn
 cls
 echo ============================================================
-echo Hierarchical Reinforcement Learning (HRL) - Offline Mode
+echo Hierarchical DQN Training (Offline / Mock)
 echo ============================================================
 echo.
+call :collect_quick_config "hrl_train"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Train_Hierarchical_DQN.bat
 goto menu
 
 :train_hierarchical_airsim
 cls
 echo ============================================================
-echo Hierarchical Reinforcement Learning (HRL) - AirSim Fusion Mode
+echo Hierarchical DQN Training (AirSim Fusion)
 echo ============================================================
 echo.
+call :collect_quick_config "hrl_train"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
 call scripts\Train_Hierarchical_With_AirSim.bat
 goto menu
 
 :test_movement_dqn
 cls
 echo ============================================================
-echo Test DQN Movement Model
+echo DQN Control Model Validation
 echo ============================================================
 echo.
 call scripts\Test_DQN_Movement.bat
@@ -143,7 +242,7 @@ goto menu
 :data_visualization
 cls
 echo ============================================================
-echo Training Data Visualization
+echo Visualization Output Generation
 echo ============================================================
 echo.
 call scripts\Data_Visualization_Analysis.bat
@@ -152,13 +251,13 @@ goto menu
 :compare_algorithms
 cls
 echo ============================================================
-echo Algorithm Comparison (DDPG vs DQN)
+echo DDPG vs DQN Comparison
 echo ============================================================
 echo.
-echo [Tip] This feature will compare the training effects of DDPG and DQN algorithms
+echo [Tip] This task generates a comparison report from the available training outputs.
 echo.
 if not exist "myvenv\Scripts\activate.bat" (
-    echo [Error] Python virtual environment does not exist
+    echo [Error] Python virtual environment was not found.
     pause
     goto menu
 )
@@ -166,34 +265,152 @@ call myvenv\Scripts\activate.bat
 python "multirotor\Algorithm\visualize_training_data.py" --auto --compare-algorithms --out analysis_results
 if %ERRORLEVEL% EQU 0 (
     echo.
-    echo [Success] Algorithm comparison analysis completed!
-    echo [Results] Please check analysis_results\algorithm_comparison_ddpg_vs_dqn\ directory
+    echo [Success] Comparison analysis completed.
+    echo [Output] See analysis_results\algorithm_comparison_ddpg_vs_dqn\
 ) else (
     echo.
-    echo [Failed] Algorithm comparison analysis failed, please check if there is enough training data
+    echo [Failed] Comparison analysis did not complete. Please verify the available training data.
 )
 echo.
 pause
 goto menu
 
+:comparison_workflow
+cls
+echo ============================================================
+echo Four-Group Unified Simulation Comparison
+echo ============================================================
+echo.
+echo This workflow runs the following stages in order:
+echo   [1] APF baseline multi-episode simulation (fixed APF / random APF)
+echo   [2] DDPG+APF stage01 training
+echo   [3] Pure DQN stage01 training
+echo   [4] Final four-group unified simulation benchmark
+echo   [5] Comparison analysis and stage02 recommendation
+echo.
+echo Notes:
+echo   - fixed APF and random APF do not enter a training stage.
+echo   - They first run multi-episode baseline simulation before the final unified comparison.
+echo   - Configurable items:
+echo     * Drone count (default 3)
+echo     * APF baseline simulation episodes
+echo     * Benchmark episodes per seed
+echo     * DDPG training steps
+echo     * DQN training steps
+echo.
+set /p workflow_confirm=Type Y to continue, or any other key to return to the main menu:
+if /i not "%workflow_confirm%"=="Y" goto menu
+echo.
+call :collect_quick_config "comparison_workflow"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
+call scripts\Run_Paper_Workflow.bat --workflow comparison
+set "WORKFLOW_EXIT=%ERRORLEVEL%"
+if not "%WORKFLOW_EXIT%"=="0" (
+    echo.
+    echo [Error] Four-Group Unified Simulation Comparison failed. Exit code: %WORKFLOW_EXIT%
+    echo [Tip] Please review the first error shown above before trying again.
+    echo.
+    pause
+)
+goto menu
+
+:virtual_real_two_stage_workflow
+cls
+echo ============================================================
+echo Virtual-Real Two-Stage Workflow
+echo ============================================================
+echo.
+echo Quick-configurable items:
+echo   * Drone count (default 3)
+echo   * DDPG training steps (simulation-time estimate shown)
+echo.
+call :collect_quick_config "two_stage_workflow"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
+call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
+set "WORKFLOW_EXIT=%ERRORLEVEL%"
+if not "%WORKFLOW_EXIT%"=="0" (
+    echo.
+    echo [Error] Virtual-Real Two-Stage Workflow failed. Exit code: %WORKFLOW_EXIT%
+    echo [Tip] Please review the first error shown above before trying again.
+    echo.
+    pause
+)
+goto menu
+
+:four_group_benchmark
+cls
+echo ============================================================
+echo Four-Group Unified Simulation Comparison / Benchmark
+echo ============================================================
+echo.
+call :collect_quick_config "four_group_benchmark"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
+call scripts\Run_Four_Group_Benchmark.bat
+goto menu
+
+:analyze_four_group_benchmark
+cls
+echo ============================================================
+echo Four-Group Main Analysis
+echo ============================================================
+echo.
+call scripts\Analyze_Four_Group_Benchmark.bat
+goto menu
+
+:analyze_family_comparisons
+cls
+echo ============================================================
+echo Family Comparison Analysis
+echo ============================================================
+echo.
+call scripts\Analyze_Family_Comparisons.bat
+goto menu
+
+:train_paper_ddpg_seeds
+cls
+echo ============================================================
+echo Paper Multi-Seed Training (DDPG+APF)
+echo ============================================================
+echo.
+call :collect_quick_config "paper_ddpg_seeds"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
+powershell -ExecutionPolicy Bypass -File "scripts\Run_Paper_Training_Seeds.ps1" -Algorithm ddpg_apf
+goto menu
+
+:train_paper_dqn_seeds
+cls
+echo ============================================================
+echo Paper Multi-Seed Training (Pure DQN)
+echo ============================================================
+echo.
+call :collect_quick_config "paper_dqn_seeds"
+if errorlevel 2 goto menu
+if errorlevel 1 goto menu
+powershell -ExecutionPolicy Bypass -File "scripts\Run_Paper_Training_Seeds.ps1" -Algorithm pure_dqn
+goto menu
+
 :cleanup_menu
 cls
 echo ============================================================
-echo Delete Training Outputs (Models/Logs/Analysis)
+echo Maintenance - Output Cleanup
 echo ============================================================
 echo.
-echo [1] Delete DDPG Models (multirotor\DDPG_Weight\models)
-echo [2] Delete DDPG Logs (logs + airsim_training_logs + crazyflie_logs)
-echo [3] Delete DQN Models (multirotor\DQN_Movement\models)
-echo [4] Delete DQN Logs (logs + dqn_scan_data + scripts\logs)
-echo [5] Delete Analysis Results (analysis_results)
+echo [1] Clean Up DDPG Model Files
+echo [2] Clean Up DDPG Training Logs
+echo [3] Clean Up DQN Model Files
+echo [4] Clean Up DQN Training Logs
+echo [5] Clean Up Analysis Outputs
 echo.
-echo [8] Delete ALL of the above
+echo [8] Clean Up All Outputs Above
 echo [9] Back to Main Menu
 echo.
 echo ============================================================
 echo.
-set /p cleanup_choice=Please enter an option (1-5, 8-9):
+set /p cleanup_choice=Select a maintenance option (1-5, 8-9):
 
 if "%cleanup_choice%"=="1" goto cleanup_ddpg_models
 if "%cleanup_choice%"=="2" goto cleanup_ddpg_logs
@@ -204,7 +421,7 @@ if "%cleanup_choice%"=="8" goto cleanup_all
 if "%cleanup_choice%"=="9" goto menu
 
 echo.
-echo Invalid option, please select again
+echo Invalid selection. Please try again.
 timeout /t 2 >nul
 goto cleanup_menu
 
@@ -361,7 +578,7 @@ goto cleanup_menu
 :info
 cls
 echo ============================================================
-echo    System Information
+echo    Platform Information
 echo ============================================================
 echo.
 echo Project Structure:
@@ -414,8 +631,9 @@ goto menu
 :end
 cls
 echo ============================================================
-echo Thank you for using AirSim UAV Simulation System!
+echo Thank you for using AirSim UAV Simulation Platform!
 echo ============================================================
 echo.
 timeout /t 2 >nul
-exit
+endlocal
+exit /b 0

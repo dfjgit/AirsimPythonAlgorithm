@@ -9,15 +9,14 @@ import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from benchmark_registry import load_benchmark_registry
-from family_analysis import generate_family_reports
+from family_analysis import _localized_text, generate_family_reports
 
 
 class FamilyAnalysisTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / "_tmp_family_analysis"
-        shutil.rmtree(self.root, ignore_errors=True)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root = make_temp_dir("family_analysis")
         self.registry_path = self.root / "benchmark_registry.json"
         self.output_dir = self.root / "out"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -139,6 +138,26 @@ class FamilyAnalysisTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_localized_text_uses_chinese_when_ui_lang_is_zh(self):
+        original_lang = os.environ.get("AIRSIM_UI_LANG")
+        os.environ["AIRSIM_UI_LANG"] = "zh"
+        try:
+            self.assertEqual(_localized_text("中文", "English"), "中文")
+        finally:
+            if original_lang is None:
+                os.environ.pop("AIRSIM_UI_LANG", None)
+            else:
+                os.environ["AIRSIM_UI_LANG"] = original_lang
+
+    def test_localized_text_uses_english_by_default(self):
+        original_lang = os.environ.get("AIRSIM_UI_LANG")
+        os.environ.pop("AIRSIM_UI_LANG", None)
+        try:
+            self.assertEqual(_localized_text("中文", "English"), "English")
+        finally:
+            if original_lang is not None:
+                os.environ["AIRSIM_UI_LANG"] = original_lang
 
     def test_generate_family_reports_filters_registered_members(self):
         registry = load_benchmark_registry(self.registry_path)

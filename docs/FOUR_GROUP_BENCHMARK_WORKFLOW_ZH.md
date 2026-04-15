@@ -8,6 +8,16 @@
 - family 横向对比分析
 - 现有 DDPG/DQN 训练链兼容保留
 
+在批处理菜单中，`start.bat` 的 `M` 选项作为“四组统一仿真对比阶段”，会先串联可训练算法的 stage01 训练，再进入四组仿真评测（冻结策略）与分析流程。
+当前执行顺序为：
+
+1. `fixed_apf` 基线多轮仿真
+2. `random_apf` 基线多轮仿真
+3. `ddpg_apf` stage01 训练
+4. `pure_dqn` stage01 训练
+5. 四组最终统一仿真评测（冻结策略）
+6. 对比分析与 `stage02` 建议
+
 四组算法固定为：
 
 - `fixed_apf`
@@ -31,9 +41,9 @@ DQN:
 powershell -File .\scripts\Run_Paper_Training_Seeds.ps1 -Algorithm pure_dqn -Seeds 20260413,20260414,20260415 -StageName stage01 -StageIndex 1
 ```
 
-## 3. 冻结评测阶段
+## 3. 仿真评测阶段（冻结策略）
 
-统一冻结评测入口：
+统一仿真评测入口：
 
 ```bat
 scripts\Run_Four_Group_Benchmark.bat
@@ -42,9 +52,14 @@ scripts\Run_Four_Group_Benchmark.bat
 这个入口会：
 
 - 读取 `multirotor/system_config.json` 中的 `paper_benchmark`
-- 按 seeds 和 episode 数运行四组评测
+- 在 Unity/AirSim 中按 seeds 和 episode 数运行四组评测
 - 生成 `analysis_results/four_group_benchmark/four_group_eval_episodes.csv`
 - 继续生成四组主结果图表和 family 比较结果
+
+说明：
+
+- `ddpg_apf` 与 `pure_dqn` 会先经过训练阶段，再进入该评测阶段
+- `fixed_apf` 与 `random_apf` 不参加训练阶段，但会直接进入该仿真评测阶段
 
 ## 4. 四组主结果分析
 

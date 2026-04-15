@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,10 @@ from paper_workflow_archive import (
 )
 from paper_workflow_recommendation import recommend_comparison_stage02
 from paper_workflow_state import create_experiment_root, initialize_workflow_state, load_workflow_state, save_workflow_state
+
+
+def _localized_text(zh_text: str, en_text: str) -> str:
+    return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
 
 
 class PaperWorkflowOrchestrator:
@@ -83,6 +88,11 @@ class PaperWorkflowOrchestrator:
         self._mark_step(exp_root, phase, "completed")
 
     def run_comparison_workflow(self, exp_root: Path) -> None:
+        self._run_stage(
+            exp_root,
+            "apf_baseline_sim",
+            ["cmd.exe", "/d", "/c", "scripts\\Run_APF_Baseline_Simulation.bat"],
+        )
         self._run_stage(
             exp_root,
             "stage01_ddpg",
@@ -311,15 +321,20 @@ def main(argv: list[str] | None = None, *, orchestrator_factory=create_default_o
     exp_root = orchestrator.create_or_resume_experiment(workflow_type=args.workflow, alias=args.alias)
 
     if args.workflow == "comparison":
-        print(f"[paper-workflow] comparison experiment: {exp_root}")
+        print(_localized_text(f"[paper-workflow] 四组统一仿真对比阶段已启动: {exp_root}", f"[paper-workflow] comparison experiment: {exp_root}"))
         orchestrator.run_comparison_workflow(exp_root)
-        print(f"[paper-workflow] completed: {exp_root}")
+        print(_localized_text(f"[paper-workflow] 四组统一仿真对比阶段已完成: {exp_root}", f"[paper-workflow] completed: {exp_root}"))
         return 0
 
     if args.workflow == "virtual_real_two_stage":
-        print(f"[paper-workflow] virtual-real two-stage experiment: {exp_root} (refine_mode={args.refine_mode})")
+        print(
+            _localized_text(
+                f"[paper-workflow] 虚实两阶段实验已启动: {exp_root} (refine_mode={args.refine_mode})",
+                f"[paper-workflow] virtual-real two-stage experiment: {exp_root} (refine_mode={args.refine_mode})",
+            )
+        )
         orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode=args.refine_mode)
-        print(f"[paper-workflow] completed: {exp_root}")
+        print(_localized_text(f"[paper-workflow] 虚实两阶段实验已完成: {exp_root}", f"[paper-workflow] completed: {exp_root}"))
         return 0
 
     parser.error(f"Unsupported workflow: {args.workflow}")

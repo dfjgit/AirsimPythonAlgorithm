@@ -3,22 +3,14 @@ import shutil
 import subprocess
 import sys
 import unittest
-import uuid
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from _test_temp_paths import make_temp_dir
 from visualize_scan_csv import PLOT_PIPELINE, RunData, plot_collision_stability
-
-
-def _workspace_root_for_tmp() -> Path:
-    this_file = Path(__file__).resolve()
-    for parent in this_file.parents:
-        if parent.name == ".worktrees":
-            return parent.parent
-    return Path.cwd()
 
 
 class CollisionStabilityPlotTests(unittest.TestCase):
@@ -41,8 +33,7 @@ class CollisionStabilityPlotTests(unittest.TestCase):
         )
 
     def test_plot_collision_stability_writes_png(self):
-        root = _workspace_root_for_tmp() / ".tmp_collision_stability_tests" / uuid.uuid4().hex
-        root.mkdir(parents=True, exist_ok=False)
+        root = make_temp_dir("collision_stability_tests")
         try:
             output_dir = root / "out"
             output_dir.mkdir(parents=True, exist_ok=True)

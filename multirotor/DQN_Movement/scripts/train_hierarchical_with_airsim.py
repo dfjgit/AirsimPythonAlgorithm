@@ -113,6 +113,12 @@ def train_hrl_with_airsim(enable_visualization=True):
     hrl_config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "hierarchical_dqn_config.json")
     with open(hrl_config_path, 'r', encoding='utf-8') as f:
         hrl_config = json.load(f)
+    quick_total_timesteps = os.environ.get("AIRSIM_QUICK_HRL_TIMESTEPS", "").strip()
+    if quick_total_timesteps:
+        try:
+            hrl_config['training']['total_timesteps'] = int(quick_total_timesteps)
+        except ValueError:
+            print(f"  ⚠️  忽略无效的 AIRSIM_QUICK_HRL_TIMESTEPS={quick_total_timesteps}")
 
     config_file = os.path.join(os.path.dirname(__file__), "..", "..", "system_config.json")
 

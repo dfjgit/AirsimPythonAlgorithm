@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -10,6 +11,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+
+def _localized_text(zh_text: str, en_text: str) -> str:
+    return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
 
 
 def configure_plot_fonts():
@@ -40,13 +45,13 @@ def _write_boxplot(frame: pd.DataFrame, metric: str, output_path: Path, title: s
     plot_frame = frame[["algorithm_type", metric]].dropna()
     plt.figure(figsize=(9, 5))
     if plot_frame.empty:
-        plt.text(0.5, 0.5, "No data", ha="center", va="center")
+        plt.text(0.5, 0.5, _localized_text("暂无数据", "No data"), ha="center", va="center")
         plt.axis("off")
     else:
         plot_frame.boxplot(column=metric, by="algorithm_type", grid=False)
         plt.suptitle("")
         plt.title(title)
-        plt.xlabel("algorithm_type")
+        plt.xlabel(_localized_text("算法类型", "algorithm_type"))
         plt.ylabel(metric)
     plt.tight_layout()
     plt.savefig(output_path, dpi=160)
@@ -73,8 +78,8 @@ def _write_reset_reason_stacked_bar(frame: pd.DataFrame, output_path: Path) -> N
     counts = pd.crosstab(reason_frame["algorithm_type"], reason_frame["reset_reason"])
     normalized = counts.div(counts.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
     normalized.plot(kind="bar", stacked=True, figsize=(10, 5), colormap="tab20")
-    plt.title("Reset Reason Distribution")
-    plt.ylabel("ratio")
+    plt.title(_localized_text("重置原因分布", "Reset Reason Distribution"))
+    plt.ylabel(_localized_text("占比", "ratio"))
     plt.tight_layout()
     plt.savefig(output_path, dpi=160)
     plt.close()
@@ -156,19 +161,19 @@ def generate_four_group_benchmark_report(
         eval_frame,
         "final_global_scan_ratio",
         output_dir / "scan_ratio_boxplot.png",
-        "Final Global Scan Ratio",
+        _localized_text("最终全局扫描率", "Final Global Scan Ratio"),
     )
     _write_boxplot(
         eval_frame,
         "final_global_avg_entropy",
         output_dir / "entropy_boxplot.png",
-        "Final Global Avg Entropy",
+        _localized_text("最终全局平均熵", "Final Global Avg Entropy"),
     )
     _write_bar(
         summary,
         "scan_efficiency_mean",
         output_dir / "efficiency_bar.png",
-        "Mean Scan Efficiency",
+        _localized_text("平均扫描效率", "Mean Scan Efficiency"),
     )
 
     safety_summary = summary.copy()
@@ -180,7 +185,7 @@ def generate_four_group_benchmark_report(
         safety_summary,
         "safety_score",
         output_dir / "safety_bar.png",
-        "Safety Score",
+        _localized_text("安全性评分", "Safety Score"),
     )
     _write_reset_reason_stacked_bar(
         eval_frame,
@@ -195,9 +200,16 @@ def generate_four_group_benchmark_report(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate four-group benchmark summary tables and plots.")
-    parser.add_argument("--eval-csv", type=str, required=True, help="Input evaluation CSV path.")
-    parser.add_argument("--out", type=str, required=True, help="Output directory.")
+    parser = argparse.ArgumentParser(
+        description=_localized_text("生成四组评测汇总表与图表。", "Generate four-group benchmark summary tables and plots.")
+    )
+    parser.add_argument(
+        "--eval-csv",
+        type=str,
+        required=True,
+        help=_localized_text("输入评测 CSV 路径。", "Input evaluation CSV path."),
+    )
+    parser.add_argument("--out", type=str, required=True, help=_localized_text("输出目录。", "Output directory."))
     args = parser.parse_args()
     generate_four_group_benchmark_report(
         eval_csv_path=args.eval_csv,

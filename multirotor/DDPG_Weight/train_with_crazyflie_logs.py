@@ -109,6 +109,17 @@ def _get_config_value(cli_value, config: dict, key: str, default):
     return default
 
 
+def _env_int(name: str) -> int | None:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(f"[!] 忽略无效的环境变量 {name}={raw_value}")
+        return None
+
+
 def _format_duration(seconds: float) -> str:
     """
     格式化时间持续时间为可读字符串
@@ -225,6 +236,9 @@ def main():
     # 从命令行/配置中解析训练超参数
     # 规则：命令行优先，其次配置文件，最后默认值
     total_timesteps = _get_config_value(args.total_timesteps, config, "total_timesteps", 2000)
+    quick_total_timesteps = _env_int("AIRSIM_QUICK_DDPG_TIMESTEPS")
+    if quick_total_timesteps is not None:
+        total_timesteps = quick_total_timesteps
     reward_config = _get_config_value(args.reward_config, config, "reward_config", None)
     save_dir = _get_config_value(args.save_dir, config, "save_dir", "models")
     continue_model = _get_config_value(args.continue_model, config, "continue_model", None)

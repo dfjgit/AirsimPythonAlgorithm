@@ -199,6 +199,36 @@ def _apply_global_seed(seed: int | None) -> None:
         pass
 
 
+def _env_int(name: str) -> int | None:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(f"[!] 忽略无效的环境变量 {name}={raw_value}")
+        return None
+
+
+def _env_flag(name: str):
+    raw_value = os.environ.get(name, "").strip().lower()
+    if not raw_value:
+        return None
+    if raw_value in {"1", "true", "yes", "y", "on", "enable", "enabled"}:
+        return True
+    if raw_value in {"0", "false", "no", "n", "off", "disable", "disabled"}:
+        return False
+    print(f"[!] 忽略无效的环境变量 {name}={raw_value}")
+    return None
+
+
+def _env_drone_names(name: str) -> list[str] | None:
+    count = _env_int(name)
+    if count is None or count <= 0:
+        return None
+    return [f"UAV{i}" for i in range(1, count + 1)]
+
+
 def _save_final_weights(server, path: str) -> None:
     """
     保存各无人机最后的权重系数到JSON文件
@@ -754,9 +784,15 @@ def main():
 
     # 解析训练参数
     drone_names = _get_config_value(None, config, "drone_names", DEFAULT_DRONE_NAMES)
+    quick_drone_names = _env_drone_names("AIRSIM_QUICK_DRONES")
+    if quick_drone_names:
+        drone_names = quick_drone_names
     total_timesteps = int(
         _get_config_value(args.total_timesteps, config, "total_timesteps", DEFAULT_TOTAL_TIMESTEPS)
     )
+    quick_total_timesteps = _env_int("AIRSIM_QUICK_DDPG_TIMESTEPS")
+    if quick_total_timesteps is not None:
+        total_timesteps = quick_total_timesteps
     step_duration = float(
         _get_config_value(None, config, "step_duration", DEFAULT_STEP_DURATION)
     )
@@ -768,6 +804,9 @@ def main():
             None, config, "enable_visualization", DEFAULT_ENABLE_VISUALIZATION
         )
     )
+    quick_enable_visualization = _env_flag("AIRSIM_QUICK_VISUALIZATION")
+    if quick_enable_visualization is not None:
+        enable_visualization = quick_enable_visualization
     safety_limit = bool(
         _get_config_value(None, config, "safety_limit", True)
     )  # 权重变化安全限制
@@ -944,7 +983,7 @@ def main():
         )
         os.makedirs(_tmp_vis_log_dir, exist_ok=True)
 
-        if HAS_EXT_VIS and os.environ.get("NO_VIS", "0") != "1":
+        if HAS_EXT_VIS and enable_visualization and os.environ.get("NO_VIS", "0") != "1":
             try:
                 ipc_server = VisualizationIPCServer(
                     snapshot_provider=server.get_visualization_snapshot,

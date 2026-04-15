@@ -92,6 +92,9 @@ print(f"    - 启用的无人机: {drones_config.get_enabled_drones()}")
 
 # 获取 DQN 训练使用的无人机列表
 drone_names = drones_config.get_training_drones('dqn')
+quick_drone_names = _quick_drone_names()
+if quick_drone_names:
+    drone_names = quick_drone_names
 print(f"  ✓ DQN训练使用的无人机: {drone_names}")
 
 if not drone_names:
@@ -123,6 +126,24 @@ def _env_int(name, default=None):
         return default
 
 
+def _env_flag(name, default=None):
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "y", "on", "enable", "enabled"}:
+        return True
+    if value in {"0", "false", "no", "n", "off", "disable", "disabled"}:
+        return False
+    return default
+
+
+def _quick_drone_names():
+    count = _env_int("AIRSIM_QUICK_DRONES")
+    if count is None or count <= 0:
+        return None
+    return [f"UAV{i}" for i in range(1, count + 1)]
+
+
 def _apply_global_seed(seed):
     if seed is None:
         return
@@ -152,6 +173,8 @@ else:
     )
 _apply_global_seed(train_seed)
 print(f"  ✓ 随机种子: {train_seed if train_seed is not None else '未指定'}")
+enable_visualization = bool(_env_flag("AIRSIM_QUICK_VISUALIZATION", True))
+print(f"  ✓ 仿真可视化窗口: {'启用' if enable_visualization else '禁用'}")
 
 
 pretrained_candidates = [
@@ -231,7 +254,7 @@ vis_log_path = None
 # 统一使用 DQN_Movement/logs 作为运行日志根目录
 _tmp_vis_log_dir = dqn_runtime_log_dir
 
-if HAS_EXT_VIS and os.environ.get('NO_VIS', '0') != '1':
+if HAS_EXT_VIS and enable_visualization and os.environ.get('NO_VIS', '0') != '1':
     try:
         ipc_server = VisualizationIPCServer(
             snapshot_provider=server.get_visualization_snapshot,
@@ -665,6 +688,9 @@ total_timesteps = int(
         dqn_config['training']['total_timesteps']
     )
 )
+quick_total_timesteps = _env_int("AIRSIM_QUICK_DQN_TIMESTEPS")
+if quick_total_timesteps is not None:
+    total_timesteps = quick_total_timesteps
 progress_callback = AirSimProgressCallback(
     total_timesteps=total_timesteps,
     print_freq=500,

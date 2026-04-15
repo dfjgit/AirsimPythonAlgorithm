@@ -2,24 +2,23 @@ import os
 import shutil
 import sys
 import unittest
-import uuid
-from pathlib import Path
+import importlib.util
 
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from _test_temp_paths import make_temp_dir
 from paper_two_stage_analysis import build_two_stage_summary
 
 
 class PaperTwoStageAnalysisTests(unittest.TestCase):
     def setUp(self):
-        workspace_root = Path(__file__).parents[3].resolve()
-        self.root = workspace_root / f"tmp_paper_two_stage_{uuid.uuid4().hex}"
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root = make_temp_dir("paper_two_stage_analysis")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
+    @unittest.skipUnless(importlib.util.find_spec("tabulate") is not None, "tabulate is required for markdown export")
     def test_build_two_stage_summary_writes_before_after_csv_and_markdown(self):
         sim_csv = self.root / "sim.csv"
         refine_csv = self.root / "refine.csv"
