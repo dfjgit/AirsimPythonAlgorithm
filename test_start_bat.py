@@ -29,6 +29,62 @@ class StartBatTests(unittest.TestCase):
         combined_output = f"{completed.stdout}\n{completed.stderr}"
         return completed, combined_output
 
+    def test_start_bat_is_ascii_wrapper(self):
+        script = Path(__file__).resolve().parent / "start.bat"
+        data = script.read_bytes()
+        self.assertTrue(
+            all(byte in (9, 10, 13) or byte < 128 for byte in data),
+            msg="start.bat should stay ASCII-only so cmd parsing does not depend on UTF-8 menu text",
+        )
+
+    def test_start_bat_wrapper_repairs_mixed_line_endings_before_launch(self):
+        repo_root = Path(__file__).resolve().parent
+        temp_root = repo_root / ".codex_tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        workspace_root = temp_root / f"start_wrapper_{uuid.uuid4().hex}"
+        (workspace_root / "scripts").mkdir(parents=True, exist_ok=True)
+
+        shutil.copy2(repo_root / "start.bat", workspace_root / "start.bat")
+        shutil.copy2(repo_root / "start_main.bat", workspace_root / "start_main.bat")
+        shutil.copy2(
+            repo_root / "scripts" / "Start_Batch_Bootstrap.ps1",
+            workspace_root / "scripts" / "Start_Batch_Bootstrap.ps1",
+        )
+
+        main_file = workspace_root / "start_main.bat"
+        lines = main_file.read_text(encoding="utf-8").splitlines()
+        with main_file.open("wb") as handle:
+            for idx, line in enumerate(lines, 1):
+                handle.write(line.encode("utf-8"))
+                handle.write(b"\n" if idx in {21, 24, 27, 30, 35, 40, 44, 47, 60, 61} else b"\r\n")
+
+        env = dict(os.environ)
+        env["AIRSIM_TEST_NO_PAUSE"] = "1"
+        env["AIRSIM_TEST_EXIT_AFTER_TOGGLE"] = "1"
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", str(workspace_root / "start.bat")],
+            input="0\r\n",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(workspace_root),
+            env=env,
+            timeout=12,
+        )
+        combined_output = f"{completed.stdout}\n{completed.stderr}"
+
+        self.assertEqual(completed.returncode, 0, msg=combined_output)
+        self.assertIn("AirSim", combined_output)
+        self.assertIn("控制台", combined_output)
+        self.assertNotIn("not recognized as an internal or external command", combined_output)
+
+        repaired = main_file.read_bytes()
+        self.assertEqual(repaired.count(b"\n") - repaired.count(b"\r\n"), 0)
+
+        shutil.rmtree(workspace_root, ignore_errors=True)
+        shutil.rmtree(temp_root, ignore_errors=True)
+
     def test_start_bat_menu_exits_without_cmd_parse_errors(self):
         completed, combined_output = self._run_start_bat()
         self.assertEqual(completed.returncode, 0, msg=combined_output)
