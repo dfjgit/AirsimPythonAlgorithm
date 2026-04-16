@@ -15,11 +15,29 @@ from paper_workflow_archive import (
     collect_dqn_stage_outputs,
 )
 from paper_workflow_recommendation import recommend_comparison_stage02
-from paper_workflow_state import create_experiment_root, initialize_workflow_state, load_workflow_state, save_workflow_state
+from paper_workflow_state import (
+    create_experiment_root,
+    initialize_workflow_state,
+    list_resumable_experiments,
+    load_workflow_state,
+    save_workflow_state,
+)
 
 
 def _localized_text(zh_text: str, en_text: str) -> str:
     return zh_text if os.environ.get("AIRSIM_UI_LANG", "").lower() == "zh" else en_text
+
+
+def _json_safe(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 class PaperWorkflowOrchestrator:
@@ -41,13 +59,37 @@ class PaperWorkflowOrchestrator:
         self.two_stage_recommendation_runner = two_stage_recommendation_runner
         self.two_stage_analysis_runner = two_stage_analysis_runner
 
-    def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+    def find_latest_resumable_experiment(self, *, workflow_type: str) -> dict | None:
+        resumable = list_resumable_experiments(self.workflow_root, workflow_type=workflow_type)
+        return resumable[0] if resumable else None
+
+    def create_or_resume_experiment(
+        self,
+        *,
+        workflow_type: str,
+        alias: str = "",
+        resume_latest: bool = False,
+        experiment_root: Path | None = None,
+    ) -> Path:
+        if experiment_root is not None:
+            return Path(experiment_root)
+        if resume_latest:
+            latest = self.find_latest_resumable_experiment(workflow_type=workflow_type)
+            if latest is not None:
+                return Path(latest["experiment_root"])
         exp_root = create_experiment_root(base_root=self.workflow_root, workflow_type=workflow_type, alias=alias)
         initialize_workflow_state(exp_root, workflow_type=workflow_type, alias=alias)
         return exp_root
 
     def load_state(self, exp_root: Path) -> dict:
         return load_workflow_state(exp_root)
+
+    def _step_status(self, exp_root: Path, phase: str) -> str:
+        state = load_workflow_state(exp_root)
+        return str(state.get("steps", {}).get(phase, {}).get("status") or "")
+
+    def _is_step_completed(self, exp_root: Path, phase: str) -> bool:
+        return self._step_status(exp_root, phase) == "completed"
 
     def _mark_step(self, exp_root: Path, phase: str, status: str) -> dict:
         state = load_workflow_state(exp_root)
@@ -69,6 +111,16 @@ class PaperWorkflowOrchestrator:
         save_workflow_state(exp_root, state)
         return state
 
+    def _complete_step(self, exp_root: Path, phase: str, *, recommendations=None) -> dict:
+        state = load_workflow_state(exp_root)
+        state["current_phase"] = phase
+        state["status"] = "completed"
+        if recommendations is not None:
+            state["recommendations"] = recommendations
+        state.setdefault("steps", {})[phase] = {"status": "completed"}
+        save_workflow_state(exp_root, state)
+        return state
+
     def _run_stage(self, exp_root: Path, phase: str, command: list[str], archive_kwargs: dict | None = None) -> None:
         self._mark_step(exp_root, phase, "running")
         try:
@@ -81,68 +133,74 @@ class PaperWorkflowOrchestrator:
             raise RuntimeError(f"Command {command} failed with exit code {exit_code}")
         if archive_kwargs:
             try:
-                self.archive_runner(self.workspace_root, exp_root, **archive_kwargs)
+                archive_outputs = self.archive_runner(self.workspace_root, exp_root, **archive_kwargs)
             except Exception as exc:
                 self._fail_step(exp_root, phase, exc)
                 raise
+            state = load_workflow_state(exp_root)
+            state.setdefault("artifacts", {})[phase] = _json_safe(archive_outputs)
+            save_workflow_state(exp_root, state)
         self._mark_step(exp_root, phase, "completed")
 
     def run_comparison_workflow(self, exp_root: Path) -> None:
         apf_output_root = exp_root / "artifacts" / "apf_baseline_sim"
-        self._run_stage(
-            exp_root,
-            "apf_baseline_sim",
-            [
-                "cmd.exe",
-                "/d",
-                "/c",
-                "scripts\\Run_APF_Baseline_Simulation.bat",
-                "--out",
-                str(apf_output_root),
-                "--raw-log-dir",
-                str(apf_output_root / "logs"),
-                "--experiment-id",
-                exp_root.name,
-                "--stage-name",
-                "stage00_apf_baseline",
-                "--stage-index",
-                "0",
-            ],
-        )
-        self._run_stage(
-            exp_root,
-            "stage01_ddpg",
-            ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
-            {"algorithm": "ddpg_apf", "stage_bucket": "stage01"},
-        )
-        self._run_stage(
-            exp_root,
-            "stage01_dqn",
-            ["cmd.exe", "/d", "/c", "scripts\\Train_DQN_Movement_Real_Environment.bat"],
-            {"algorithm": "pure_dqn", "stage_bucket": "stage01"},
-        )
-        self._run_stage(
-            exp_root,
-            "frozen_benchmark",
-            ["cmd.exe", "/d", "/c", "scripts\\Run_Four_Group_Benchmark.bat"],
-        )
-        self._run_stage(
-            exp_root,
-            "training_comparison",
-            ["python", "multirotor\\Algorithm\\visualize_training_data.py", "--auto", "--out", "analysis_results"],
-        )
+        if not self._is_step_completed(exp_root, "apf_baseline_sim"):
+            self._run_stage(
+                exp_root,
+                "apf_baseline_sim",
+                [
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    "scripts\\Run_APF_Baseline_Simulation.bat",
+                    "--out",
+                    str(apf_output_root),
+                    "--raw-log-dir",
+                    str(apf_output_root / "logs"),
+                    "--experiment-id",
+                    exp_root.name,
+                    "--stage-name",
+                    "stage00_apf_baseline",
+                    "--stage-index",
+                    "0",
+                ],
+            )
+        if not self._is_step_completed(exp_root, "stage01_ddpg"):
+            self._run_stage(
+                exp_root,
+                "stage01_ddpg",
+                ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
+                {"algorithm": "ddpg_apf", "stage_bucket": "stage01"},
+            )
+        if not self._is_step_completed(exp_root, "stage01_dqn"):
+            self._run_stage(
+                exp_root,
+                "stage01_dqn",
+                ["cmd.exe", "/d", "/c", "scripts\\Train_DQN_Movement_Real_Environment.bat"],
+                {"algorithm": "pure_dqn", "stage_bucket": "stage01"},
+            )
+        if not self._is_step_completed(exp_root, "frozen_benchmark"):
+            self._run_stage(
+                exp_root,
+                "frozen_benchmark",
+                ["cmd.exe", "/d", "/c", "scripts\\Run_Four_Group_Benchmark.bat"],
+            )
+        if not self._is_step_completed(exp_root, "training_comparison"):
+            self._run_stage(
+                exp_root,
+                "training_comparison",
+                ["python", "multirotor\\Algorithm\\visualize_training_data.py", "--auto", "--out", "analysis_results"],
+            )
+        if self._is_step_completed(exp_root, "stage02_decision"):
+            self._complete_step(exp_root, "stage02_decision")
+            return
         self._mark_step(exp_root, "stage02_decision", "running")
         try:
             recommendations = self.recommendation_runner()
         except Exception as exc:
             self._fail_step(exp_root, "stage02_decision", exc)
             raise
-        state = load_workflow_state(exp_root)
-        state["recommendations"] = recommendations
-        state["current_phase"] = "stage02_decision"
-        state["status"] = "completed"
-        state.setdefault("steps", {})["stage02_decision"] = {"status": "completed"}
-        save_workflow_state(exp_root, state)
+        self._complete_step(exp_root, "stage02_decision", recommendations=recommendations)
 
     def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
         refine_commands = {
@@ -153,40 +211,50 @@ class PaperWorkflowOrchestrator:
             self._fail_step(exp_root, "real_weighted_refine", f"Unsupported refine_mode: {refine_mode}")
             raise ValueError(f"Unsupported refine_mode: {refine_mode}")
 
-        self._run_stage(
-            exp_root,
-            "sim_pretrain",
-            ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
-            {"phase_bucket": "sim_pretrain", "refine_mode": ""},
-        )
+        if not self._is_step_completed(exp_root, "sim_pretrain"):
+            self._run_stage(
+                exp_root,
+                "sim_pretrain",
+                ["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Real_Environment.bat"],
+                {"phase_bucket": "sim_pretrain", "refine_mode": ""},
+            )
 
-        self._run_stage(
-            exp_root,
-            "real_weighted_refine",
-            refine_commands[refine_mode],
-            {"phase_bucket": "real_weighted_refine", "refine_mode": refine_mode},
-        )
+        if not self._is_step_completed(exp_root, "real_weighted_refine"):
+            self._run_stage(
+                exp_root,
+                "real_weighted_refine",
+                refine_commands[refine_mode],
+                {"phase_bucket": "real_weighted_refine", "refine_mode": refine_mode},
+            )
 
-        self._mark_step(exp_root, "two_stage_analysis", "running")
-        try:
-            analysis_outputs = self.two_stage_analysis_runner(exp_root, refine_mode=refine_mode)
-        except Exception as exc:
-            self._fail_step(exp_root, "two_stage_analysis", exc)
-            raise
-        self._mark_step(exp_root, "two_stage_analysis", "completed")
+        analysis_outputs = None
+        if self._is_step_completed(exp_root, "two_stage_analysis"):
+            state = load_workflow_state(exp_root)
+            analysis_outputs = state.get("artifacts", {}).get("two_stage_analysis", {})
+        else:
+            self._mark_step(exp_root, "two_stage_analysis", "running")
+            try:
+                analysis_outputs = self.two_stage_analysis_runner(exp_root, refine_mode=refine_mode)
+            except Exception as exc:
+                self._fail_step(exp_root, "two_stage_analysis", exc)
+                raise
+            state = load_workflow_state(exp_root)
+            state.setdefault("artifacts", {})["two_stage_analysis"] = _json_safe(analysis_outputs)
+            save_workflow_state(exp_root, state)
+            self._mark_step(exp_root, "two_stage_analysis", "completed")
 
+        if self._is_step_completed(exp_root, "real_weighted_refine_decision"):
+            self._complete_step(exp_root, "real_weighted_refine_decision")
+            return
+
+        summary_csv = Path(analysis_outputs["summary_csv"])
         self._mark_step(exp_root, "real_weighted_refine_decision", "running")
         try:
-            recommendation = self.two_stage_recommendation_runner(analysis_outputs["summary_csv"])
+            recommendation = self.two_stage_recommendation_runner(summary_csv)
         except Exception as exc:
             self._fail_step(exp_root, "real_weighted_refine_decision", exc)
             raise
-        state = load_workflow_state(exp_root)
-        state["recommendations"] = recommendation
-        state["current_phase"] = "real_weighted_refine_decision"
-        state["status"] = "completed"
-        state.setdefault("steps", {})["real_weighted_refine_decision"] = {"status": "completed"}
-        save_workflow_state(exp_root, state)
+        self._complete_step(exp_root, "real_weighted_refine_decision", recommendations=recommendation)
 
 
 def _repo_root_from_module() -> Path:
@@ -326,6 +394,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional experiment alias used in the workflow experiment directory name.",
     )
+    parser.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Resume the latest unfinished experiment for the selected workflow instead of creating a new one.",
+    )
+    parser.add_argument(
+        "--query-latest-resumable",
+        action="store_true",
+        help="Print the latest unfinished experiment metadata for the selected workflow and exit.",
+    )
     return parser
 
 
@@ -334,7 +412,18 @@ def main(argv: list[str] | None = None, *, orchestrator_factory=create_default_o
     args = parser.parse_args(argv)
     workspace_root = Path(args.workspace_root).resolve()
     orchestrator = orchestrator_factory(workspace_root=workspace_root)
-    exp_root = orchestrator.create_or_resume_experiment(workflow_type=args.workflow, alias=args.alias)
+    if args.query_latest_resumable:
+        latest = orchestrator.find_latest_resumable_experiment(workflow_type=args.workflow)
+        if latest is not None:
+            state = latest["state"]
+            print(f"{latest['experiment_root']}|{state.get('status', '')}|{state.get('current_phase', '')}")
+        return 0
+
+    exp_root = orchestrator.create_or_resume_experiment(
+        workflow_type=args.workflow,
+        alias=args.alias,
+        resume_latest=bool(args.resume_latest),
+    )
 
     if args.workflow == "comparison":
         print(_localized_text(f"[paper-workflow] 四组统一仿真对比阶段已启动: {exp_root}", f"[paper-workflow] comparison experiment: {exp_root}"))

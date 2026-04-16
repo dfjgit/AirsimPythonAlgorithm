@@ -11,7 +11,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 from multirotor.Algorithm.Vector3 import Vector3
 from multirotor.Visualization.base_visualizer import BaseVisualizer
-from multirotor.Visualization.panels.environment_panel import EnvironmentPanel
+from multirotor.Visualization.panels.entropy_overview_panel import EntropyOverviewPanel
+from multirotor.Visualization.panels.entropy_trend_panel import EntropyTrendPanel
 from multirotor.Visualization.panels.training_stats_panel import TrainingStatsPanel
 from multirotor.Visualization.panels.reward_curve_panel import RewardCurvePanel
 from multirotor.Visualization.panels.weight_panel import WeightPanel
@@ -29,6 +30,7 @@ class DDPGTrainingVisualizer(BaseVisualizer):
 
     def __init__(self, server=None, env=None):
         super().__init__(server=server, env=env, window_title="DDPG 训练实时可视化")
+        self.configure_side_panel_layout(380, 380, min_center_width=440)
 
         self.episode_rewards = deque(maxlen=100)
         self.episode_lengths = deque(maxlen=100)
@@ -64,33 +66,34 @@ class DDPGTrainingVisualizer(BaseVisualizer):
         """Use a fixed dashboard layout so panel size matches content density."""
         side_margin = 10
         row_gap = 10
-        column_width = min(self.left_panel_width, self.right_panel_width) - 2 * side_margin
+        left_column_width = self.left_panel_width - 2 * side_margin
+        right_column_width = self.right_panel_width - 2 * side_margin
         left_x = side_margin
         right_x = self.SCREEN_WIDTH - self.right_panel_width + side_margin
 
         left_heights = self._scale_panel_heights(
-            [170, 250, 290, 310],
-            min_heights=[120, 160, 180, 150],
+            [145, 205, 175, 225],
+            min_heights=[135, 190, 165, 210],
             row_gap=row_gap,
             outer_margin=10,
         )
         right_heights = self._scale_panel_heights(
-            [210, 260, 580],
-            min_heights=[150, 220, 240],
+            [180, 280, 220],
+            min_heights=[170, 265, 210],
             row_gap=row_gap,
             outer_margin=10,
         )
 
         left_panels = [
-            EnvironmentPanel(width=column_width, height=left_heights[0]),
-            TrainingStatsPanel(width=column_width, height=left_heights[1]),
-            ResetInfoPanel(width=column_width, height=left_heights[2]),
-            BatteryPanel(width=column_width, height=left_heights[3]),
+            EntropyOverviewPanel(width=left_column_width, height=left_heights[0]),
+            TrainingStatsPanel(width=left_column_width, height=left_heights[1]),
+            ResetInfoPanel(width=left_column_width, height=left_heights[2]),
+            BatteryPanel(width=left_column_width, height=left_heights[3]),
         ]
         right_panels = [
-            RewardCurvePanel(width=column_width, height=right_heights[0]),
-            WeightPanel(width=column_width, height=right_heights[1]),
-            WeightHistoryPanel(width=column_width, height=right_heights[2]),
+            RewardCurvePanel(width=right_column_width, height=right_heights[0]),
+            EntropyTrendPanel(width=right_column_width, height=right_heights[1]),
+            WeightPanel(width=right_column_width, height=right_heights[2]),
         ]
 
         self._register_fixed_column(left_panels, left_x, row_gap)
@@ -312,6 +315,8 @@ class DDPGTrainingVisualizer(BaseVisualizer):
                 elif hasattr(self.server, public_name):
                     value = getattr(self.server, public_name)
                     data[public_name] = list(value) if public_name == "reset_history" else value
+
+        data.update(self.get_entropy_visualization_data())
 
         return data
 

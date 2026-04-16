@@ -26,6 +26,10 @@ from multirotor.Visualization.ddpg_training_visualizer import DDPGTrainingVisual
 from multirotor.Visualization.dqn_movement_visualizer import (
     DQNMovementTrainingVisualizer,
 )
+from multirotor.Visualization.panels.entropy_overview_panel import (
+    EntropyOverviewPanel,
+)
+from multirotor.Visualization.runtime_visualizer import RuntimeVisualizer
 from multirotor.Algorithm.Vector3 import Vector3
 
 
@@ -63,6 +67,83 @@ class BaseVisualizerLayoutTests(unittest.TestCase):
         )
         self.assertLessEqual(panel_bottom, visualizer.SCREEN_HEIGHT - 10)
 
+    def test_runtime_visualizer_replaces_environment_panel_with_entropy_panels(self):
+        with patch.dict(os.environ, {"VIS_DESKTOP_SIZE": "1366x768"}, clear=False):
+            visualizer = RuntimeVisualizer(server=None)
+            visualizer.setup_panels()
+
+        panel_names = set(visualizer.panel_manager.panels)
+
+        self.assertNotIn("environment", panel_names)
+        self.assertIn("battery", panel_names)
+        self.assertIn("entropy_overview", panel_names)
+        self.assertIn("entropy_trend", panel_names)
+        self.assertIn("training_stats", panel_names)
+        self.assertIn("reward_curve", panel_names)
+        self.assertIn("reset_info", panel_names)
+        self.assertEqual(len(panel_names), 7)
+        self.assertEqual(visualizer.left_panel_width, 380)
+        self.assertEqual(visualizer.right_panel_width, 380)
+        self.assertEqual(visualizer.panel_manager.panels["entropy_overview"].width, 360)
+        self.assertGreaterEqual(
+            visualizer.panel_manager.panels["entropy_overview"].height, 135
+        )
+        self.assertGreaterEqual(
+            visualizer.panel_manager.panels["entropy_trend"].height, 250
+        )
+        self.assertGreaterEqual(
+            visualizer.panel_manager.panels["training_stats"].height, 190
+        )
+        self.assertGreaterEqual(
+            visualizer.panel_manager.panels["reset_info"].height, 165
+        )
+        self.assertGreaterEqual(
+            visualizer.panel_manager.panels["weight"].height, 200
+        )
+
+    def test_ddpg_and_dqn_visualizers_replace_environment_panel_with_entropy_panels(self):
+        with patch.dict(os.environ, {"VIS_DESKTOP_SIZE": "1366x768"}, clear=False):
+            ddpg_visualizer = DDPGTrainingVisualizer(server=None, env=None)
+            ddpg_visualizer.setup_panels()
+            dqn_visualizer = DQNMovementTrainingVisualizer(env=None, server=None)
+            dqn_visualizer.setup_panels()
+
+        ddpg_panels = set(ddpg_visualizer.panel_manager.panels)
+        dqn_panels = set(dqn_visualizer.panel_manager.panels)
+
+        self.assertNotIn("environment", ddpg_panels)
+        self.assertIn("battery", ddpg_panels)
+        self.assertNotIn("weight_history", ddpg_panels)
+        self.assertIn("entropy_overview", ddpg_panels)
+        self.assertIn("entropy_trend", ddpg_panels)
+        self.assertNotIn("environment", dqn_panels)
+        self.assertIn("battery", dqn_panels)
+        self.assertIn("entropy_overview", dqn_panels)
+        self.assertIn("entropy_trend", dqn_panels)
+        self.assertEqual(len(ddpg_panels), 7)
+        self.assertEqual(len(dqn_panels), 7)
+        self.assertEqual(ddpg_visualizer.left_panel_width, 380)
+        self.assertEqual(ddpg_visualizer.right_panel_width, 380)
+        self.assertEqual(dqn_visualizer.left_panel_width, 380)
+        self.assertEqual(dqn_visualizer.right_panel_width, 380)
+        self.assertEqual(ddpg_visualizer.panel_manager.panels["entropy_overview"].width, 360)
+        self.assertEqual(dqn_visualizer.panel_manager.panels["entropy_overview"].width, 360)
+        self.assertGreaterEqual(
+            ddpg_visualizer.panel_manager.panels["entropy_trend"].height, 250
+        )
+        self.assertGreaterEqual(
+            dqn_visualizer.panel_manager.panels["entropy_trend"].height, 250
+        )
+        self.assertGreaterEqual(
+            ddpg_visualizer.panel_manager.panels["training_stats"].height, 190
+        )
+        self.assertGreaterEqual(
+            ddpg_visualizer.panel_manager.panels["reset_info"].height, 165
+        )
+        self.assertGreaterEqual(
+            ddpg_visualizer.panel_manager.panels["weight"].height, 200
+        )
+
 
 class DDPGTrainingVisualizerDataTests(unittest.TestCase):
     def test_episode_elapsed_time_is_exposed_for_training_panel(self):
@@ -82,6 +163,72 @@ class DDPGTrainingVisualizerDataTests(unittest.TestCase):
         data = visualizer.get_visualization_data()
 
         self.assertEqual(data["current_episode_time"], 12.5)
+
+    def test_runtime_visualizer_exposes_training_reset_and_entropy_data(self):
+        server = SimpleNamespace(
+            current_training_stats={
+                "episode_count": 4,
+                "total_steps": 22,
+                "current_episode_steps": 5,
+                "current_episode_reward": 17.5,
+                "reward_history": [10.0, 12.0, 14.0],
+                "episode_reward_history": [10.0, 12.0, 14.0],
+            },
+            training_stats={},
+            get_entropy_history=lambda limit=600: [(1.0, 95.0), (2.0, 82.0)],
+            get_scan_progress_history=lambda limit=600: [
+                (1.0, 2.5, 40, 1600),
+                (2.0, 6.25, 100, 1600),
+            ],
+            get_entropy_distribution=lambda limit=1: [(2.0, [1, 2, 3], [0.2, 0.7, 1.0])],
+            entropy_bins=[0, 5, 10, 15],
+            drone_names=[],
+            algorithms={},
+            _last_reset_reason="碰撞重置",
+            _last_reset_time=123.0,
+            _last_collision_object_name="Obstacle",
+            _last_collision_penetration_depth=0.12,
+            _reset_history=[{"timestamp": 123.0, "reason": "碰撞重置"}],
+        )
+        visualizer = RuntimeVisualizer(server=server)
+
+        data = visualizer.get_visualization_data()
+
+        self.assertEqual(data["episode_count"], 4)
+        self.assertEqual(data["last_reset_reason"], "碰撞重置")
+        self.assertEqual(data["entropy_history"], [(1.0, 95.0), (2.0, 82.0)])
+        self.assertEqual(data["scan_progress_history"][1][2], 100)
+        self.assertEqual(data["entropy_distribution"][0][1], [1, 2, 3])
+
+
+class EntropyOverviewPanelLayoutTests(unittest.TestCase):
+    def test_entropy_overview_panel_splits_distribution_into_two_lines_with_bottom_padding(self):
+        import pygame
+
+        pygame.init()
+        pygame.font.init()
+        panel = EntropyOverviewPanel(width=360, height=145)
+        try:
+            panel._init_fonts()
+
+            layout = panel._compute_layout(
+                {
+                    "total": 1613,
+                    "avg": 81.6,
+                    "min": 0.0,
+                    "max": 100.0,
+                    "scanned": 28,
+                    "scan_ratio": 1.7,
+                    "low": 28,
+                    "medium": 2,
+                    "high": 1583,
+                }
+            )
+
+            self.assertEqual(len(layout["distribution_lines"]), 2)
+            self.assertGreaterEqual(layout["bottom_padding"], 10)
+        finally:
+            pygame.quit()
 
     @patch(
         "multirotor.Visualization.ddpg_training_visualizer.load_latest_ddpg_visualization_snapshot"
@@ -635,6 +782,57 @@ class AlgorithmServerTrainingStatsTests(unittest.TestCase):
         self.assertEqual(snapshot["training_stats"]["total_steps"], 14)
         self.assertEqual(snapshot["current_training_stats"]["episode_count"], 3)
         self.assertEqual(snapshot["current_training_stats"]["total_steps"], 14)
+
+    def test_visualization_snapshot_includes_entropy_history_and_scan_progress_history(self):
+        import AlgorithmServer as algorithm_server_module
+
+        server = algorithm_server_module.MultiDroneAlgorithmServer.__new__(
+            algorithm_server_module.MultiDroneAlgorithmServer
+        )
+        server._training_stats_lock = threading.Lock()
+        server.current_training_stats = {}
+        server.data_collector = SimpleNamespace(
+            external_data={},
+            external_data_lock=threading.Lock(),
+        )
+        server._vis_snapshot_cache = None
+        server._vis_snapshot_cache_time = 0.0
+        server._last_reset_time = 0.0
+        server.drone_names = []
+        server.control_mode = "apf"
+        server.config_data = SimpleNamespace(
+            scanRadius=1.0, moveSpeed=1.0, updateInterval=0.05
+        )
+        server.grid_lock = threading.Lock()
+        server.grid_data = SimpleNamespace(cells=[])
+        server.data_lock = threading.Lock()
+        server.unity_runtime_data = {}
+        server._last_reset_reason = ""
+        server._last_collision_object_name = ""
+        server._last_collision_penetration_depth = 0.0
+        server._reset_history = []
+        server.unity_socket = SimpleNamespace(received_obstacles=[])
+        server.algorithms = {}
+        server.get_all_battery_data = lambda: {}
+        server.entropy_history_lock = threading.Lock()
+        server.entropy_history = [(1.0, 92.0), (2.0, 81.0)]
+        server.scan_progress_history_lock = threading.Lock()
+        server.scan_progress_history = [
+            (1.0, 3.0, 48, 1600),
+            (2.0, 8.0, 128, 1600),
+        ]
+        server.entropy_dist_history_lock = threading.Lock()
+        server.entropy_dist_history = [(2.0, [1, 3, 5], [0.1, 0.6, 1.0])]
+        server.entropy_bins = [0, 5, 10, 15]
+
+        snapshot = algorithm_server_module.MultiDroneAlgorithmServer.get_visualization_snapshot(
+            server
+        )
+
+        self.assertEqual(snapshot["entropy_history"], [(1.0, 92.0), (2.0, 81.0)])
+        self.assertEqual(snapshot["scan_progress_history"][1][1], 8.0)
+        self.assertEqual(snapshot["entropy_distribution"][0][1], [1, 3, 5])
+        self.assertEqual(snapshot["entropy_bins"], [0, 5, 10, 15])
 
     def test_visualization_snapshot_uses_prebuilt_runtime_and_grid_snapshots(self):
         import AlgorithmServer as algorithm_server_module

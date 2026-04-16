@@ -104,6 +104,10 @@ class SnapshotServerProxy:
         self.last_collision_object_name = ""
         self.last_collision_penetration_depth = 0.0
         self.reset_history = []  # 重置历史
+        self.entropy_history = []
+        self.scan_progress_history = []
+        self.entropy_distribution = []
+        self.entropy_bins = []
 
         # 创建算法代理（用于DDPGTrainingVisualizer访问权重）
         self.algorithm_proxy = AlgorithmProxy()
@@ -218,6 +222,11 @@ def _apply_snapshot(proxy: SnapshotServerProxy, snap: Dict[str, Any]) -> None:
             proxy.current_training_stats["episode_reward_history"] = list(
                 previous_stats.get("episode_reward_history", [])
             )
+
+    proxy.entropy_history = list(snap.get("entropy_history") or [])
+    proxy.scan_progress_history = list(snap.get("scan_progress_history") or [])
+    proxy.entropy_distribution = list(snap.get("entropy_distribution") or [])
+    proxy.entropy_bins = list(snap.get("entropy_bins") or [])
 
     current_stats = proxy.current_training_stats or {}
     fallback_stats = proxy.training_stats or {}

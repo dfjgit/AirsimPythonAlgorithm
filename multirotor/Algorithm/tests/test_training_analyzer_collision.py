@@ -128,6 +128,38 @@ class TrainingAnalyzerCollisionTests(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_load_data_excludes_incomplete_training_rows(self):
+        root = Path(__file__).resolve().parent / "_tmp_training_analyzer_collision_incomplete"
+        try:
+            shutil.rmtree(root, ignore_errors=True)
+            data_dir = root / "data"
+            out_dir = root / "out"
+            data_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                {
+                    "episode": [1, 2, 3],
+                    "reward": [1.0, 2.0, 999.0],
+                    "length": [10, 10, 10],
+                    "reset_reason": ["达到时长上限", "达到时长上限", ""],
+                    "collision_count_final": [0, 0, 0],
+                    "scan_efficiency": [0.1, 0.2, 9.9],
+                    "episode_complete": [1, 1, 0],
+                    "algorithm_type": ["ddpg_apf", "ddpg_apf", "ddpg_apf"],
+                }
+            ).to_csv(data_dir / "ddpg_training_incomplete.csv", index=False)
+
+            analyzer = UnifiedTrainingAnalyzer(output_dir=str(out_dir))
+            analyzer.load_data([str(data_dir)])
+
+            training_runs = [run for run in analyzer.runs if run["type"] == "training"]
+            self.assertEqual(len(training_runs), 1)
+            loaded = training_runs[0]["data"]
+            self.assertEqual(loaded["episode"].tolist(), [1, 2])
+            self.assertEqual(loaded["reward"].tolist(), [1.0, 2.0])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

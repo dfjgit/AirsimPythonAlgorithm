@@ -16,7 +16,8 @@ from collections import deque, Counter
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from multirotor.Visualization.base_visualizer import BaseVisualizer
-from multirotor.Visualization.panels.environment_panel import EnvironmentPanel
+from multirotor.Visualization.panels.entropy_overview_panel import EntropyOverviewPanel
+from multirotor.Visualization.panels.entropy_trend_panel import EntropyTrendPanel
 from multirotor.Visualization.panels.training_stats_panel import TrainingStatsPanel
 from multirotor.Visualization.panels.reward_curve_panel import RewardCurvePanel
 from multirotor.Visualization.panels.battery_panel import BatteryPanel
@@ -138,6 +139,7 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
             env=env,
             window_title="DQN移动训练可视化"
         )
+        self.configure_side_panel_layout(380, 380, min_center_width=440)
         
         # 训练统计
         self.episode_count = 0
@@ -158,30 +160,49 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         self.recent_actions = deque(maxlen=1000)  # 最近1000个动作
     
     def setup_panels(self):
-        """注册DQN移动训练专用面板"""
-        # 环境状态面板
-        env_panel = EnvironmentPanel(width=350, height=180)
-        self.panel_manager.register_panel(env_panel, position='auto')
-        
-        # 训练统计面板
-        training_panel = TrainingStatsPanel(width=370, height=280)
-        self.panel_manager.register_panel(training_panel, position='auto')
+        """注册DQN移动训练专用面板。"""
+        side_margin = 10
+        row_gap = 10
+        left_column_width = self.left_panel_width - 2 * side_margin
+        right_column_width = self.right_panel_width - 2 * side_margin
+        left_x = side_margin
+        right_x = self.SCREEN_WIDTH - self.right_panel_width + side_margin
 
-        # 当前动作输出面板 (新增)
-        action_out_panel = ActionOutputPanel(width=370, height=260)
-        self.panel_manager.register_panel(action_out_panel, position='auto')
-        
-        # 奖励曲线面板
-        reward_panel = RewardCurvePanel(width=370, height=200)
-        self.panel_manager.register_panel(reward_panel, position='auto')
-        
-        # 动作分布面板
-        action_panel = ActionDistributionPanel(width=370, height=250)
-        self.panel_manager.register_panel(action_panel, position='auto')
-        
-        # 电量面板
-        battery_panel = BatteryPanel(width=370, height=260)
-        self.panel_manager.register_panel(battery_panel, position='auto')
+        left_heights = self._scale_panel_heights(
+            [145, 200, 165, 225],
+            min_heights=[135, 185, 155, 210],
+            row_gap=row_gap,
+            outer_margin=10,
+        )
+        right_heights = self._scale_panel_heights(
+            [180, 280, 220],
+            min_heights=[170, 265, 210],
+            row_gap=row_gap,
+            outer_margin=10,
+        )
+
+        left_panels = [
+            EntropyOverviewPanel(width=left_column_width, height=left_heights[0]),
+            TrainingStatsPanel(width=left_column_width, height=left_heights[1]),
+            ActionOutputPanel(width=left_column_width, height=left_heights[2]),
+            BatteryPanel(width=left_column_width, height=left_heights[3]),
+        ]
+        right_panels = [
+            RewardCurvePanel(width=right_column_width, height=right_heights[0]),
+            EntropyTrendPanel(width=right_column_width, height=right_heights[1]),
+            ActionDistributionPanel(width=right_column_width, height=right_heights[2]),
+        ]
+
+        self._register_fixed_column(left_panels, left_x, row_gap)
+        self._register_fixed_column(right_panels, right_x, row_gap)
+
+    def _register_fixed_column(self, panels, x: int, row_gap: int):
+        y = 10
+        for panel in panels:
+            self.panel_manager.register_panel(panel, position="top_left")
+            panel.x = x
+            panel.y = y
+            y += panel.height + row_gap
     
     def get_visualization_data(self) -> Dict[str, Any]:
         """收集DQN移动训练可视化数据"""
@@ -235,6 +256,8 @@ class DQNMovementTrainingVisualizer(BaseVisualizer):
         battery_data = self.get_battery_data()
         if battery_data:
             data['battery_data'] = battery_data
+
+        data.update(self.get_entropy_visualization_data())
 
         return data
     

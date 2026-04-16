@@ -54,6 +54,8 @@ class BasePanel(ABC):
         self._font = None
         self._small_font = None
         self._title_font = None
+        self._strong_font = None
+        self._strong_small_font = None
 
     def _init_fonts(self):
         if self._font is None:
@@ -62,10 +64,14 @@ class BasePanel(ABC):
                 self._font = pygame.font.SysFont(font_names, 14)
                 self._small_font = pygame.font.SysFont(font_names, 12)
                 self._title_font = pygame.font.SysFont(font_names, 18, bold=True)
+                self._strong_font = pygame.font.SysFont(font_names, 14, bold=True)
+                self._strong_small_font = pygame.font.SysFont(font_names, 12, bold=True)
             except Exception:
                 self._font = pygame.font.Font(None, 14)
                 self._small_font = pygame.font.Font(None, 12)
                 self._title_font = pygame.font.Font(None, 18)
+                self._strong_font = pygame.font.Font(None, 14)
+                self._strong_small_font = pygame.font.Font(None, 12)
 
     @abstractmethod
     def draw(self, screen: pygame.Surface, data: Dict[str, Any]):

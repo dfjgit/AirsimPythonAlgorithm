@@ -169,6 +169,8 @@ class UnifiedTrainingAnalyzer:
                     env = df["env_type"].iloc[0] if "env_type" in df.columns else "unknown"
                     data_type = "training" if "training" in csv_file.name else "scan"
                     normalized = self._normalize_metrics(df, data_type)
+                    if normalized.empty:
+                        continue
                     resolved_meta = self._resolve_registry_meta(algo, env)
 
                     self.runs.append(
@@ -372,6 +374,12 @@ class UnifiedTrainingAnalyzer:
         normalized = df.copy()
         if data_type != "training":
             return normalized
+
+        if "episode_complete" in normalized.columns:
+            episode_complete = pd.to_numeric(normalized["episode_complete"], errors="coerce").fillna(1)
+            normalized = normalized[episode_complete != 0].copy()
+            if normalized.empty:
+                return normalized
 
         if "length" in normalized.columns:
             lengths = pd.to_numeric(normalized["length"], errors="coerce").replace(0, np.nan)

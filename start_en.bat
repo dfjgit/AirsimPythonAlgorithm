@@ -124,6 +124,7 @@ exit /b 0
 :collect_quick_config
 set "QC_PROFILE=%~1"
 if "%QC_PROFILE%"=="" exit /b 0
+if /i "%AIRSIM_TEST_SKIP_QUICK_CONFIG%"=="1" exit /b 0
 call :clear_quick_overrides
 set "QC_FILE=%TEMP%\airsim_quick_config_%RANDOM%_%RANDOM%.env"
 if exist "%QC_FILE%" del /f /q "%QC_FILE%" >nul 2>nul
@@ -134,6 +135,95 @@ if exist "%QC_FILE%" (
     del /f /q "%QC_FILE%" >nul 2>nul
 )
 exit /b %QC_EXIT%
+
+:query_latest_workflow
+set "WORKFLOW_QUERY_TYPE=%~1"
+set "WORKFLOW_QUERY_RESULT="
+set "WORKFLOW_QUERY_STATUS="
+set "WORKFLOW_QUERY_PHASE="
+set "WORKFLOW_QUERY_FILE=%TEMP%\airsim_workflow_query_%RANDOM%_%RANDOM%.txt"
+if "%WORKFLOW_QUERY_TYPE%"=="" exit /b 0
+if exist "%WORKFLOW_QUERY_FILE%" del /f /q "%WORKFLOW_QUERY_FILE%" >nul 2>nul
+if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+    <nul "%START_PYTHON_EXE%" "%~dp0multirotor\Algorithm\paper_workflow_orchestrator.py" --workflow %WORKFLOW_QUERY_TYPE% --query-latest-resumable --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%" > "%WORKFLOW_QUERY_FILE%"
+) else (
+    <nul "%START_PYTHON_EXE%" "%~dp0multirotor\Algorithm\paper_workflow_orchestrator.py" --workflow %WORKFLOW_QUERY_TYPE% --query-latest-resumable > "%WORKFLOW_QUERY_FILE%"
+)
+if exist "%WORKFLOW_QUERY_FILE%" (
+    for /f "usebackq tokens=1,2,* delims=|" %%A in ("%WORKFLOW_QUERY_FILE%") do (
+        set "WORKFLOW_QUERY_RESULT=%%A"
+        set "WORKFLOW_QUERY_STATUS=%%B"
+        set "WORKFLOW_QUERY_PHASE=%%C"
+    )
+    del /f /q "%WORKFLOW_QUERY_FILE%" >nul 2>nul
+)
+exit /b 0
+
+:run_paper_workflow
+set "WORKFLOW_RUN_TYPE=%~1"
+set "WORKFLOW_RUN_MODE=%~2"
+if "%WORKFLOW_RUN_TYPE%"=="" exit /b 1
+if defined AIRSIM_TEST_PAPER_WORKFLOW_CAPTURE_FILE (
+    >> "%AIRSIM_TEST_PAPER_WORKFLOW_CAPTURE_FILE%" echo %WORKFLOW_RUN_TYPE%^|%WORKFLOW_RUN_MODE%
+    exit /b 0
+)
+if /i "%WORKFLOW_RUN_MODE%"=="resume" (
+    if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --resume-latest --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%"
+    ) else (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --resume-latest
+    )
+) else (
+    if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%"
+    ) else (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE%
+    )
+)
+exit /b %ERRORLEVEL%
+
+:prompt_workflow_action
+set /p workflow_action=Select an action ^(C/N/Q^):
+exit /b 0
+
+:select_workflow_action
+if defined AIRSIM_TEST_WORKFLOW_ACTION (
+    set "workflow_action=%AIRSIM_TEST_WORKFLOW_ACTION%"
+) else (
+    call :prompt_workflow_action
+)
+exit /b 0
+
+:resolve_workflow_mode_en
+set "WORKFLOW_MODE=new"
+set "workflow_action="
+set "workflow_confirm="
+call :query_latest_workflow "%~1"
+if not defined WORKFLOW_QUERY_RESULT goto resolve_workflow_mode_en_confirm
+echo Unfinished workflow detected:
+echo   Path: %WORKFLOW_QUERY_RESULT%
+if defined WORKFLOW_QUERY_STATUS echo   Status: %WORKFLOW_QUERY_STATUS%
+if defined WORKFLOW_QUERY_PHASE echo   Current phase: %WORKFLOW_QUERY_PHASE%
+echo.
+echo Available actions:
+echo   [C] Resume the latest workflow
+echo   [N] Start a new workflow from scratch
+echo   [Q] Return to the main menu
+call :select_workflow_action
+if /i "%workflow_action%"=="Q" exit /b 1
+if /i "%workflow_action%"=="C" set "WORKFLOW_MODE=resume"
+if /i "%workflow_action%"=="C" exit /b 0
+if /i "%workflow_action%"=="N" set "WORKFLOW_MODE=new"
+if /i "%workflow_action%"=="N" exit /b 0
+echo.
+echo Invalid selection. Please try again.
+timeout /t 2 >nul
+exit /b 2
+
+:resolve_workflow_mode_en_confirm
+set /p workflow_confirm=Type Y to continue, or any other key to return to the main menu:
+if /i not "%workflow_confirm%"=="Y" exit /b 1
+exit /b 0
 
 :run_normal
 cls
@@ -298,13 +388,14 @@ echo     * Benchmark episodes per seed
 echo     * DDPG training steps
 echo     * DQN training steps
 echo.
-set /p workflow_confirm=Type Y to continue, or any other key to return to the main menu:
-if /i not "%workflow_confirm%"=="Y" goto menu
+call :resolve_workflow_mode_en "comparison"
+if errorlevel 2 goto comparison_workflow
+if errorlevel 1 goto menu
 echo.
 call :collect_quick_config "comparison_workflow"
 if errorlevel 2 goto menu
 if errorlevel 1 goto menu
-call scripts\Run_Paper_Workflow.bat --workflow comparison
+call :run_paper_workflow "comparison" "%WORKFLOW_MODE%"
 set "WORKFLOW_EXIT=%ERRORLEVEL%"
 if not "%WORKFLOW_EXIT%"=="0" (
     echo.
@@ -313,6 +404,7 @@ if not "%WORKFLOW_EXIT%"=="0" (
     echo.
     pause
 )
+if /i "%AIRSIM_TEST_EXIT_AFTER_WORKFLOW%"=="1" goto end
 goto menu
 
 :virtual_real_two_stage_workflow
@@ -325,10 +417,13 @@ echo Quick-configurable items:
 echo   * Drone count (default 3)
 echo   * DDPG training steps (simulation-time estimate shown)
 echo.
+call :resolve_workflow_mode_en "virtual_real_two_stage"
+if errorlevel 2 goto virtual_real_two_stage_workflow
+if errorlevel 1 goto menu
 call :collect_quick_config "two_stage_workflow"
 if errorlevel 2 goto menu
 if errorlevel 1 goto menu
-call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
+call :run_paper_workflow "virtual_real_two_stage" "%WORKFLOW_MODE%"
 set "WORKFLOW_EXIT=%ERRORLEVEL%"
 if not "%WORKFLOW_EXIT%"=="0" (
     echo.
@@ -337,6 +432,7 @@ if not "%WORKFLOW_EXIT%"=="0" (
     echo.
     pause
 )
+if /i "%AIRSIM_TEST_EXIT_AFTER_WORKFLOW%"=="1" goto end
 goto menu
 
 :four_group_benchmark

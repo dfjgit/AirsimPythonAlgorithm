@@ -46,11 +46,14 @@ class DataCollector:
         self.csv_writer = None
         self.training_csv_file = None  # 新增：训练数据 CSV 文件
         self.training_csv_writer = None  # 新增：训练数据 CSV writer
+        self.interrupted_training_csv_file = None
+        self.interrupted_training_csv_writer = None
         self.global_start_time = time.time()
         self.start_time = self.global_start_time
         self.episode_start_time = self.global_start_time
         self.header_written = False  # 表头是否已写入
         self.training_header_written = False  # 新增：训练数据表头是否已写入
+        self.interrupted_training_header_written = False
         self.drone_names_list = []  # 无人机名称列表（用于确定列顺序）
         self.enable_debug_print = enable_debug_print  # 控制DEBUG打印开关
         self.experiment_id = str(experiment_id or "").strip()
@@ -191,28 +194,52 @@ class DataCollector:
             self.training_csv_file = open(training_csv_filename, 'w', newline='', encoding='utf-8')
             self.training_csv_writer = csv.writer(self.training_csv_file)
             self.training_csv_filename = training_csv_filename
+
+            interrupted_dir = data_path / "interrupted_runs"
+            interrupted_dir.mkdir(parents=True, exist_ok=True)
+            if self.experiment_id:
+                interrupted_training_csv_filename = (
+                    interrupted_dir / f"{self.training_prefix}_training_interrupted_{file_token}_{timestamp}.csv"
+                )
+            else:
+                interrupted_training_csv_filename = (
+                    interrupted_dir / f"{self.training_prefix}_training_interrupted_{timestamp}.csv"
+                )
+            self.interrupted_training_csv_file = open(interrupted_training_csv_filename, 'w', newline='', encoding='utf-8')
+            self.interrupted_training_csv_writer = csv.writer(self.interrupted_training_csv_file)
+            self.interrupted_training_csv_filename = interrupted_training_csv_filename
                     
             # 写入训练数据表头 (新增元数据字段以支持跨算法比较)
-            header = ['episode', 'reward', 'length', 'scanned_cells', 'global_scanned_cells', 'timestep', 'train_timestep_end', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
-                      'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
-                      'reset_reason', 'collision_count', 'collision_count_final', 'out_of_range_count', 'out_of_range_count_final', 'max_out_of_range_duration_sec', 'terminal_battery_voltage', 'success_flag', 'final_global_scan_ratio', 'max_global_scan_ratio', 'final_global_avg_entropy', 'min_global_avg_entropy',
-                      'collision_object_name', 'collision_penetration_depth', 'collision_position', 'recent_trajectory',
-                      'algorithm_type', 'env_type', 'control_mode',
-                      'experiment_id', 'stage_name', 'stage_index', 'is_resume', 'source_model',
-                      'seed', 'run_kind', 'primary_family', 'family_memberships', 'comparison_profiles', 'is_trainable', 'registry_version']
+            header = self._build_training_header()
             self.training_csv_writer.writerow(header)
             self.training_csv_file.flush()
             self.training_header_written = True
+            self.interrupted_training_csv_writer.writerow(header)
+            self.interrupted_training_csv_file.flush()
+            self.interrupted_training_header_written = True
             
             logger.info(f"数据采集系统初始化完成")
             logger.info(f"  - 扫描数据: {csv_filename}")
             logger.info(f"  - 训练数据: {training_csv_filename}")
+            logger.info(f"  - 中断诊断数据: {interrupted_training_csv_filename}")
         except Exception as e:
             logger.error(f"数据采集系统初始化失败: {str(e)}")
             self.csv_file = None
             self.csv_writer = None
             self.training_csv_file = None
             self.training_csv_writer = None
+            self.interrupted_training_csv_file = None
+            self.interrupted_training_csv_writer = None
+
+    def _build_training_header(self):
+        return ['episode', 'reward', 'length', 'scanned_cells', 'global_scanned_cells', 'timestep', 'train_timestep_end', 'elapsed_time', 'episode_elapsed_time', 'timestamp', 'scan_efficiency',
+                'avg_repulsion', 'avg_entropy', 'avg_distance', 'avg_leader', 'avg_direction',
+                'reset_reason', 'collision_count', 'collision_count_final', 'out_of_range_count', 'out_of_range_count_final', 'max_out_of_range_duration_sec', 'terminal_battery_voltage', 'success_flag', 'final_global_scan_ratio', 'max_global_scan_ratio', 'final_global_avg_entropy', 'min_global_avg_entropy',
+                'collision_object_name', 'collision_penetration_depth', 'collision_position', 'recent_trajectory',
+                'algorithm_type', 'env_type', 'control_mode',
+                'experiment_id', 'stage_name', 'stage_index', 'is_resume', 'source_model',
+                'seed', 'run_kind', 'primary_family', 'family_memberships', 'comparison_profiles', 'is_trainable', 'registry_version',
+                'episode_complete']
 
     def _calc_entropy_distribution(self, entropies, bin_size: int = 5, max_entropy: int = 100):
         """计算熵值直方图和CDF（用于CSV输出）"""
@@ -315,8 +342,8 @@ class DataCollector:
             self.collection_thread.join(timeout=2.0)
             logger.info("数据采集线程已停止")
             
-        # 强制写入最后一个 episode 的数据
-        self._flush_training_data()
+        # 只把完整 episode 刷入正式训练数据；中断中的 episode 单独写入诊断文件
+        self._flush_training_data(episode_complete=self._pending_episode_has_terminal_meta())
             
         # 关闭 CSV 文件
         if self.csv_file:
@@ -333,161 +360,186 @@ class DataCollector:
                 logger.info(f"训练数据文件已关闭: {self.training_csv_filename}")
             except Exception as e:
                 logger.error(f"关闭训练数据文件失败: {str(e)}")
-    
-    def _flush_training_data(self):
+        if self.interrupted_training_csv_file:
+            try:
+                self.interrupted_training_csv_file.close()
+                logger.info(f"中断诊断数据文件已关闭: {self.interrupted_training_csv_filename}")
+            except Exception as e:
+                logger.error(f"关闭中断诊断数据文件失败: {str(e)}")
+
+    def _pending_episode_has_terminal_meta(self) -> bool:
+        if self.last_episode < 0:
+            return False
+        with self.external_data_lock:
+            self._capture_external_terminal_meta_locked()
+        return int(self.last_episode) in self.terminal_episode_meta
+
+    def _build_episode_training_row(self, *, episode_complete: bool):
+        elapsed_time = time.time() - self.global_start_time
+        episode_elapsed_time = float(self.current_episode_elapsed_time)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        scan_efficiency = self.last_global_scanned_count / max(self.current_episode_length, 1)
+
+        avg_weights = [0.0] * 5
+        if self.current_episode_weights:
+            avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
+
+        with self.external_data_lock:
+            self._capture_external_terminal_meta_locked()
+            algo_type = self.external_data.get('algorithm_type', '')
+            env_type = self.external_data.get('env_type', '')
+            ctrl_mode = self.external_data.get('control_mode', '')
+            reset_reason = self.external_data.get('reset_reason', '')
+            collision_count = int(self.external_data.get('collision_count', 0))
+            out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
+            max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
+            min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', 100.0))
+            collision_object_name = self.external_data.get('collision_object_name', '')
+            collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
+            collision_position = self.external_data.get('collision_position', '')
+            recent_trajectory = self.external_data.get('recent_trajectory', '')
+            target_scan_ratio = float(self.external_data.get('target_scan_ratio', 0.0) or 0.0)
+
+        experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
+        (
+            seed,
+            run_kind,
+            primary_family,
+            family_memberships,
+            comparison_profiles,
+            is_trainable,
+            registry_version,
+        ) = self._get_benchmark_meta()
+        terminal_meta = self._consume_terminal_meta(self.last_episode)
+        scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
+        final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
+        final_global_scanned_count = int(scan_summary.get('global_scanned_count', self.last_global_scanned_count))
+        final_step = int(scan_summary.get('step', max(self.current_episode_length, 0)))
+
+        final_global_scan_ratio = float(
+            scan_summary.get(
+                'global_scan_ratio',
+                float(self.external_data.get('global_scan_ratio', 0.0) or 0.0),
+            )
+        )
+        final_global_avg_entropy = float(
+            scan_summary.get(
+                'global_avg_entropy',
+                float(self.external_data.get('global_avg_entropy', 100.0) or 100.0),
+            )
+        )
+        episode_max_global_scan_ratio = float(
+            scan_summary.get(
+                'max_global_scan_ratio',
+                (terminal_meta or {}).get('max_global_scan_ratio', max_global_scan_ratio),
+            )
+        )
+        episode_min_global_avg_entropy = float(
+            scan_summary.get(
+                'min_global_avg_entropy',
+                (terminal_meta or {}).get('min_global_avg_entropy', min_global_avg_entropy),
+            )
+        )
+
+        final_collision_count = int(
+            (terminal_meta or {}).get('collision_count', collision_count)
+        )
+        final_out_of_range_count = int(
+            (terminal_meta or {}).get('out_of_range_count', out_of_range_count)
+        )
+        episode_max_oob_duration = float(
+            scan_summary.get(
+                'max_out_of_range_duration_sec',
+                float(
+                    self.external_data.get(
+                        'max_out_of_range_duration_sec',
+                        self.external_data.get('out_of_range_duration_sec', 0.0),
+                    )
+                    or 0.0
+                ),
+            )
+        )
+
+        terminal_battery_voltage = float(
+            scan_summary.get(
+                'terminal_battery_voltage',
+                float(self.external_data.get('terminal_battery_voltage', 0.0) or 0.0),
+            )
+        )
+        success_flag = int(
+            bool(
+                episode_complete
+                and target_scan_ratio > 0.0
+                and (final_global_scan_ratio / 100.0) >= target_scan_ratio
+            )
+        )
+
+        resolved_reset_reason = (terminal_meta or {}).get('reset_reason', reset_reason)
+        if not episode_complete and not resolved_reset_reason:
+            resolved_reset_reason = "interrupted"
+
+        return [
+            self.last_episode,
+            f"{self.current_episode_reward:.2f}",
+            self.current_episode_length,
+            final_scanned_count,
+            final_global_scanned_count,
+            final_step,
+            final_step,
+            f"{elapsed_time:.2f}",
+            f"{episode_elapsed_time:.2f}",
+            timestamp,
+            f"{scan_efficiency:.2f}",
+            f"{avg_weights[0]:.3f}",
+            f"{avg_weights[1]:.3f}",
+            f"{avg_weights[2]:.3f}",
+            f"{avg_weights[3]:.3f}",
+            f"{avg_weights[4]:.3f}",
+            resolved_reset_reason,
+            final_collision_count,
+            final_collision_count,
+            final_out_of_range_count,
+            final_out_of_range_count,
+            f"{episode_max_oob_duration:.3f}",
+            f"{terminal_battery_voltage:.3f}",
+            success_flag,
+            f"{final_global_scan_ratio:.2f}%",
+            f"{episode_max_global_scan_ratio:.2f}%",
+            f"{final_global_avg_entropy:.2f}",
+            f"{episode_min_global_avg_entropy:.2f}",
+            (terminal_meta or {}).get('collision_object_name', collision_object_name),
+            f"{float((terminal_meta or {}).get('collision_penetration_depth', collision_penetration_depth)):.3f}",
+            (terminal_meta or {}).get('collision_position', collision_position),
+            (terminal_meta or {}).get('recent_trajectory', recent_trajectory),
+            algo_type,
+            env_type,
+            ctrl_mode,
+            experiment_id,
+            stage_name,
+            int(stage_index),
+            int(bool(is_resume)),
+            source_model,
+            seed,
+            run_kind,
+            primary_family,
+            family_memberships,
+            comparison_profiles,
+            is_trainable,
+            registry_version,
+            int(bool(episode_complete)),
+        ]
+
+    def _flush_training_data(self, *, episode_complete: bool = True):
         """将当前 episode 的训练数据刷盘并重置缓存。"""
         if self.training_csv_writer and self.last_episode >= 0 and self.current_episode_length > 0:
             try:
-                elapsed_time = time.time() - self.global_start_time
-                episode_elapsed_time = float(self.current_episode_elapsed_time)
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # 统一口径：扫描效率使用“格子/步(Cell/Step)”而不是“格子/秒”
-                # 这样才能与图表标题和跨算法对比含义保持一致。
-                scan_efficiency = self.last_global_scanned_count / max(self.current_episode_length, 1)
-
-                avg_weights = [0.0] * 5
-                if self.current_episode_weights:
-                    avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
-
-                with self.external_data_lock:
-                    self._capture_external_terminal_meta_locked()
-                    algo_type = self.external_data.get('algorithm_type', '')
-                    env_type = self.external_data.get('env_type', '')
-                    ctrl_mode = self.external_data.get('control_mode', '')
-                experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
-                (
-                    seed,
-                    run_kind,
-                    primary_family,
-                    family_memberships,
-                    comparison_profiles,
-                    is_trainable,
-                    registry_version,
-                ) = self._get_benchmark_meta()
-                terminal_meta = self._consume_terminal_meta(self.last_episode)
-                scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
-                final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
-                final_global_scanned_count = int(scan_summary.get('global_scanned_count', self.last_global_scanned_count))
-                final_step = int(scan_summary.get('step', max(self.current_episode_length, 0)))
-
-                final_global_scan_ratio = float(
-                    scan_summary.get(
-                        'global_scan_ratio',
-                        float(self.external_data.get('global_scan_ratio', 0.0) or 0.0),
-                    )
-                )
-                final_global_avg_entropy = float(
-                    scan_summary.get(
-                        'global_avg_entropy',
-                        float(self.external_data.get('global_avg_entropy', 100.0) or 100.0),
-                    )
-                )
-                episode_max_global_scan_ratio = float(
-                    scan_summary.get(
-                        'max_global_scan_ratio',
-                        (terminal_meta or {}).get(
-                            'max_global_scan_ratio',
-                            self.external_data.get('max_global_scan_ratio', final_global_scan_ratio),
-                        ),
-                    )
-                )
-                episode_min_global_avg_entropy = float(
-                    scan_summary.get(
-                        'min_global_avg_entropy',
-                        (terminal_meta or {}).get(
-                            'min_global_avg_entropy',
-                            self.external_data.get('min_global_avg_entropy', final_global_avg_entropy),
-                        ),
-                    )
-                )
-
-                final_collision_count = int(
-                    (terminal_meta or {}).get(
-                        'collision_count',
-                        self.external_data.get('collision_count', 0),
-                    )
-                )
-                final_out_of_range_count = int(
-                    (terminal_meta or {}).get(
-                        'out_of_range_count',
-                        self.external_data.get('out_of_range_count', 0),
-                    )
-                )
-                episode_max_oob_duration = float(
-                    scan_summary.get(
-                        'max_out_of_range_duration_sec',
-                        float(
-                            self.external_data.get(
-                                'max_out_of_range_duration_sec',
-                                self.external_data.get('out_of_range_duration_sec', 0.0),
-                            )
-                            or 0.0
-                        ),
-                    )
-                )
-
-                terminal_battery_voltage = float(
-                    scan_summary.get(
-                        'terminal_battery_voltage',
-                        float(self.external_data.get('terminal_battery_voltage', 0.0) or 0.0),
-                    )
-                )
-                target_scan_ratio = float(self.external_data.get('target_scan_ratio', 0.0) or 0.0)
-                success_flag = int(bool(target_scan_ratio > 0.0 and (final_global_scan_ratio / 100.0) >= target_scan_ratio))
-
-                training_row = [
-                    self.last_episode,
-                    f"{self.current_episode_reward:.2f}",
-                    self.current_episode_length,
-                    final_scanned_count,
-                    final_global_scanned_count,
-                    final_step,
-                    final_step,
-                    f"{elapsed_time:.2f}",
-                    f"{episode_elapsed_time:.2f}",
-                    timestamp,
-                    f"{final_global_scanned_count / max(self.current_episode_length, 1):.2f}",
-                    f"{avg_weights[0]:.3f}",
-                    f"{avg_weights[1]:.3f}",
-                    f"{avg_weights[2]:.3f}",
-                    f"{avg_weights[3]:.3f}",
-                    f"{avg_weights[4]:.3f}",
-                    (terminal_meta or {}).get('reset_reason', self.external_data.get('reset_reason', '')),
-                    final_collision_count,
-                    final_collision_count,
-                    final_out_of_range_count,
-                    final_out_of_range_count,
-                    f"{episode_max_oob_duration:.3f}",
-                    f"{terminal_battery_voltage:.3f}",
-                    success_flag,
-                    f"{final_global_scan_ratio:.2f}%",
-                    f"{episode_max_global_scan_ratio:.2f}%",
-                    f"{final_global_avg_entropy:.2f}",
-                    f"{episode_min_global_avg_entropy:.2f}",
-                    (terminal_meta or {}).get('collision_object_name', self.external_data.get('collision_object_name', '')),
-                    f"{float((terminal_meta or {}).get('collision_penetration_depth', self.external_data.get('collision_penetration_depth', 0.0))):.3f}",
-                    (terminal_meta or {}).get('collision_position', self.external_data.get('collision_position', '')),
-                    (terminal_meta or {}).get('recent_trajectory', self.external_data.get('recent_trajectory', '')),
-                    algo_type,
-                    env_type,
-                    ctrl_mode,
-                    experiment_id,
-                    stage_name,
-                    int(stage_index),
-                    int(bool(is_resume)),
-                    source_model,
-                    seed,
-                    run_kind,
-                    primary_family,
-                    family_memberships,
-                    comparison_profiles,
-                    is_trainable,
-                    registry_version,
-                ]
-                self.training_csv_writer.writerow(training_row)
-                self.training_csv_file.flush()
+                training_row = self._build_episode_training_row(episode_complete=episode_complete)
+                target_writer = self.training_csv_writer if episode_complete else self.interrupted_training_csv_writer
+                target_file = self.training_csv_file if episode_complete else self.interrupted_training_csv_file
+                target_writer.writerow(training_row)
+                target_file.flush()
                 logger.info(
-                    f"结束 Episode {self.last_episode} 并保存（奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length}）"
+                    f"{'结束' if episode_complete else '中断'} Episode {self.last_episode} 并保存（奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length}）"
                 )
                 self.last_episode = -1
                 self.current_episode_length = 0
@@ -1056,154 +1108,7 @@ class DataCollector:
 
                     if current_episode != self.last_episode:
                         if self.last_episode >= 0 and self.current_episode_length > 0:
-                            avg_weights = [0.0] * 5
-                            if self.current_episode_weights:
-                                avg_weights = np.mean(self.current_episode_weights, axis=0).tolist()
-
-                            with self.external_data_lock:
-                                self._capture_external_terminal_meta_locked()
-                                algo_type = self.external_data.get('algorithm_type', '')
-                                env_type = self.external_data.get('env_type', '')
-                                ctrl_mode = self.external_data.get('control_mode', '')
-                                reset_reason = self.external_data.get('reset_reason', '')
-                                collision_count = int(self.external_data.get('collision_count', 0))
-                                out_of_range_count = int(self.external_data.get('out_of_range_count', 0))
-                                max_global_scan_ratio = float(self.external_data.get('max_global_scan_ratio', 0.0))
-                                min_global_avg_entropy = float(self.external_data.get('min_global_avg_entropy', 100.0))
-                                collision_object_name = self.external_data.get('collision_object_name', '')
-                                collision_penetration_depth = float(self.external_data.get('collision_penetration_depth', 0.0))
-                                collision_position = self.external_data.get('collision_position', '')
-                                recent_trajectory = self.external_data.get('recent_trajectory', '')
-                            experiment_id, stage_name, stage_index, is_resume, source_model = self._get_run_stage_meta()
-                            (
-                                seed,
-                                run_kind,
-                                primary_family,
-                                family_memberships,
-                                comparison_profiles,
-                                is_trainable,
-                                registry_version,
-                            ) = self._get_benchmark_meta()
-                            terminal_meta = self._consume_terminal_meta(self.last_episode)
-                            scan_summary = self._consume_episode_scan_summary(self.last_episode) or {}
-                            elapsed_time = time.time() - self.global_start_time
-                            previous_episode_elapsed = float(self.current_episode_elapsed_time)
-                            # 统一口径：训练 CSV 中的 scan_efficiency 始终表示 Cell/Step。
-                            final_scanned_count = int(scan_summary.get('scanned_count', self.last_scanned_count))
-                            final_global_scanned_count = int(scan_summary.get('global_scanned_count', self.last_global_scanned_count))
-                            final_step = int(scan_summary.get('step', max(self.current_episode_length, 0)))
-                            scan_efficiency = final_global_scanned_count / max(self.current_episode_length, 1)
-
-                            final_global_scan_ratio = float(
-                                scan_summary.get(
-                                    'global_scan_ratio',
-                                    float(self.external_data.get('global_scan_ratio', 0.0) or 0.0),
-                                )
-                            )
-                            final_global_avg_entropy = float(
-                                scan_summary.get(
-                                    'global_avg_entropy',
-                                    float(self.external_data.get('global_avg_entropy', 100.0) or 100.0),
-                                )
-                            )
-                            episode_max_global_scan_ratio = float(
-                                scan_summary.get(
-                                    'max_global_scan_ratio',
-                                    (terminal_meta or {}).get('max_global_scan_ratio', max_global_scan_ratio),
-                                )
-                            )
-                            episode_min_global_avg_entropy = float(
-                                scan_summary.get(
-                                    'min_global_avg_entropy',
-                                    (terminal_meta or {}).get('min_global_avg_entropy', min_global_avg_entropy),
-                                )
-                            )
-
-                            final_collision_count = int(
-                                (terminal_meta or {}).get('collision_count', collision_count)
-                            )
-                            final_out_of_range_count = int(
-                                (terminal_meta or {}).get('out_of_range_count', out_of_range_count)
-                            )
-                            episode_max_oob_duration = float(
-                                scan_summary.get(
-                                    'max_out_of_range_duration_sec',
-                                    float(
-                                        self.external_data.get(
-                                            'max_out_of_range_duration_sec',
-                                            self.external_data.get('out_of_range_duration_sec', 0.0),
-                                        )
-                                        or 0.0
-                                    ),
-                                )
-                            )
-
-                            terminal_battery_voltage = float(
-                                scan_summary.get(
-                                    'terminal_battery_voltage',
-                                    float(self.external_data.get('terminal_battery_voltage', 0.0) or 0.0),
-                                )
-                            )
-                            target_scan_ratio = float(self.external_data.get('target_scan_ratio', 0.0) or 0.0)
-                            success_flag = int(
-                                bool(
-                                    target_scan_ratio > 0.0
-                                    and (final_global_scan_ratio / 100.0) >= target_scan_ratio
-                                )
-                            )
-
-                            training_row = [
-                                self.last_episode,
-                                f"{self.current_episode_reward:.2f}",
-                                self.current_episode_length,
-                                final_scanned_count,
-                                final_global_scanned_count,
-                                final_step,
-                                final_step,
-                                f"{elapsed_time:.2f}",
-                                f"{previous_episode_elapsed:.2f}",
-                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                f"{scan_efficiency:.2f}",
-                                f"{avg_weights[0]:.3f}",
-                                f"{avg_weights[1]:.3f}",
-                                f"{avg_weights[2]:.3f}",
-                                f"{avg_weights[3]:.3f}",
-                                f"{avg_weights[4]:.3f}",
-                                (terminal_meta or {}).get('reset_reason', reset_reason),
-                                final_collision_count,
-                                final_collision_count,
-                                final_out_of_range_count,
-                                final_out_of_range_count,
-                                f"{episode_max_oob_duration:.3f}",
-                                f"{terminal_battery_voltage:.3f}",
-                                success_flag,
-                                f"{final_global_scan_ratio:.2f}%",
-                                f"{episode_max_global_scan_ratio:.2f}%",
-                                f"{final_global_avg_entropy:.2f}",
-                                f"{episode_min_global_avg_entropy:.2f}",
-                                (terminal_meta or {}).get('collision_object_name', collision_object_name),
-                                f"{float((terminal_meta or {}).get('collision_penetration_depth', collision_penetration_depth)):.3f}",
-                                (terminal_meta or {}).get('collision_position', collision_position),
-                                (terminal_meta or {}).get('recent_trajectory', recent_trajectory),
-                                algo_type,
-                                env_type,
-                                ctrl_mode,
-                                experiment_id,
-                                stage_name,
-                                int(stage_index),
-                                int(bool(is_resume)),
-                                source_model,
-                                seed,
-                                run_kind,
-                                primary_family,
-                                family_memberships,
-                                comparison_profiles,
-                                is_trainable,
-                                registry_version,
-                            ]
-                            self.training_csv_writer.writerow(training_row)
-                            self.training_csv_file.flush()
-                            logger.info(f"结束 Episode {self.last_episode} 并保存（奖励: {self.current_episode_reward:.2f}, 步数: {self.current_episode_length}）")
+                            self._flush_training_data(episode_complete=True)
 
                         self.last_episode = current_episode
                         self.current_episode_elapsed_time = episode_elapsed_time

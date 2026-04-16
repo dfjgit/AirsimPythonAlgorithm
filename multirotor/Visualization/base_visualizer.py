@@ -88,8 +88,8 @@ class BaseVisualizer(ABC):
             target_height = base_height
         else:
             desktop_width, desktop_height = desktop_size
-            target_width = min(base_width, max(960, int(desktop_width * 0.92)))
-            target_height = min(base_height, max(540, int(desktop_height * 0.90)))
+            target_width = min(base_width, max(960, int(desktop_width * 1.0)))
+            target_height = min(base_height, max(540, int(desktop_height * 0.98)))
 
         scale = min(target_width / base_width, target_height / base_height)
         scale = max(scale, 0.5)
@@ -152,6 +152,41 @@ class BaseVisualizer(ABC):
             return None
 
         return None
+
+    def configure_side_panel_layout(
+        self,
+        left_panel_width: int,
+        right_panel_width: int,
+        *,
+        min_center_width: int = 480,
+    ) -> None:
+        """允许子类在已初始化后覆盖左右侧栏宽度，形成更适合各场景的布局。"""
+        requested_left = max(220, int(left_panel_width))
+        requested_right = max(220, int(right_panel_width))
+        available_for_panels = max(440, self.SCREEN_WIDTH - max(min_center_width, 320))
+        total_requested = requested_left + requested_right
+
+        if total_requested > available_for_panels:
+            scale = available_for_panels / max(total_requested, 1)
+            requested_left = max(220, int(requested_left * scale))
+            requested_right = max(220, int(requested_right * scale))
+            overflow = requested_left + requested_right - available_for_panels
+            while overflow > 0 and (requested_left > 220 or requested_right > 220):
+                if requested_right >= requested_left and requested_right > 220:
+                    requested_right -= 1
+                elif requested_left > 220:
+                    requested_left -= 1
+                overflow -= 1
+
+        self.left_panel_width = requested_left
+        self.right_panel_width = requested_right
+        self.view_width = self.SCREEN_WIDTH - self.left_panel_width - self.right_panel_width
+        self.view_height = self.SCREEN_HEIGHT
+        self.view_offset_x = self.left_panel_width
+        self.origin_x = self.view_offset_x + self.view_width // 2
+        self.origin_y = self.view_height // 2
+        self.panel_manager.left_panel_width = self.left_panel_width
+        self.panel_manager.right_panel_width = self.right_panel_width
 
     def _scale_panel_heights(
         self,
@@ -639,6 +674,51 @@ class BaseVisualizer(ABC):
             pass
         return {}
 
+    def get_entropy_visualization_data(self) -> Dict:
+        """获取熵值概览/趋势面板所需的数据。"""
+        data: Dict = {}
+        if not self.server:
+            return data
+
+        try:
+            if hasattr(self.server, "get_entropy_history"):
+                data["entropy_history"] = self.server.get_entropy_history(limit=300)
+            elif hasattr(self.server, "entropy_history"):
+                data["entropy_history"] = list(
+                    getattr(self.server, "entropy_history", [])[-300:]
+                )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.server, "get_scan_progress_history"):
+                data["scan_progress_history"] = self.server.get_scan_progress_history(limit=300)
+            elif hasattr(self.server, "scan_progress_history"):
+                data["scan_progress_history"] = list(
+                    getattr(self.server, "scan_progress_history", [])[-300:]
+                )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.server, "get_entropy_distribution"):
+                data["entropy_distribution"] = self.server.get_entropy_distribution(limit=1)
+            elif hasattr(self.server, "entropy_distribution"):
+                data["entropy_distribution"] = list(
+                    getattr(self.server, "entropy_distribution", [])[-1:]
+                )
+        except Exception:
+            pass
+
+        try:
+            bins = getattr(self.server, "entropy_bins", None)
+            if bins:
+                data["entropy_bins"] = list(bins)
+        except Exception:
+            pass
+
+        return data
+
     def get_obstacles_data(self) -> list:
         """
         获取障碍物数据(公共方法)
@@ -707,7 +787,6 @@ class BaseVisualizer(ABC):
                 self.draw_obstacles(self._cached_obstacles)  # 绘制障碍物
                 self.draw_leader(runtime_data_dict)
                 self.draw_drones(runtime_data_dict)
-                self.draw_entropy_legend()
                 
                 # 获取可视化数据并绘制面板
                 vis_data = self.get_visualization_data()

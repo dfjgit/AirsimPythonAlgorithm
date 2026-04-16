@@ -133,7 +133,7 @@ class ResetInfoPanel(BasePanel):
 
         y_offset = self.draw_title(screen, "训练重置记录", self.PURPLE)
         text_x = self.x + 15
-        y = self.y + y_offset + 5
+        y = self.y + y_offset + 4
 
         last_reason = str(data.get("last_reset_reason", "") or "")
         last_reset_time = float(data.get("last_reset_time", 0.0) or 0.0)
@@ -168,14 +168,14 @@ class ResetInfoPanel(BasePanel):
                 flash_surface.set_alpha(flash_alpha)
                 screen.blit(flash_surface, (self.x + 10, y - 5))
 
-            text = self._font.render(f"{icon} 最新: {display_reason}", True, color)
+            text = self._strong_font.render(f"{icon} 最新: {display_reason}", True, color)
             screen.blit(text, (text_x, y))
 
             if last_reset_time > 0:
                 time_text = self._small_font.render(
                     f"({self._format_time_ago(last_reset_time)})", True, self.GRAY
                 )
-                screen.blit(time_text, (text_x + 230, y + 2))
+                screen.blit(time_text, (self.x + self.width - 72, y + 2))
 
             collision_detail = self._format_collision_detail(
                 last_reason,
@@ -183,24 +183,24 @@ class ResetInfoPanel(BasePanel):
                 last_collision_penetration_depth,
             )
             if collision_detail:
-                y += 18
+                y += 16
                 detail_text = self._small_font.render(
-                    f"    {collision_detail}", True, self.LIGHT_BLUE
+                    f"{collision_detail[:26]}", True, self.LIGHT_BLUE
                 )
                 screen.blit(detail_text, (text_x, y))
 
-        y += 35
+        y += 24
         pygame.draw.line(
             screen, self.GRAY, (self.x + 10, y), (self.x + self.width - 10, y), 1
         )
-        y += 10
+        y += 8
 
         if reason_counts:
-            stats_title = self._small_font.render(
+            stats_title = self._strong_small_font.render(
                 "重置原因统计:", True, self.LIGHT_BLUE
             )
             screen.blit(stats_title, (text_x, y))
-            y += 22
+            y += 16
 
             icon_map = {
                 "时长结束": "⏱",
@@ -226,30 +226,30 @@ class ResetInfoPanel(BasePanel):
 
             for i, (category, count) in enumerate(ordered_counts):
                 stat_text = f"{icon_map.get(category, '📌')}{category}:{count}"
-                text = self._small_font.render(
+                text = self._strong_small_font.render(
                     stat_text, True, color_map.get(category, self.GRAY)
                 )
-                screen.blit(text, (stat_x + (i % 3) * 110, y + (i // 3) * 18))
+                screen.blit(text, (stat_x + (i % 2) * 100, y + (i // 2) * 16))
         else:
             no_data = self._small_font.render("暂无重置记录", True, self.GRAY)
             screen.blit(no_data, (text_x, y))
-            y += 18
+            y += 16
 
-        y += 45
+        y += 32
 
-        if reset_history:
+        if reset_history and y < self.y + self.height - 34:
             history_title = self._small_font.render("最近重置:", True, self.LIGHT_BLUE)
             screen.blit(history_title, (text_x, y))
-            y += 18
+            y += 16
 
-            recent = reset_history[-3:] if len(reset_history) >= 3 else reset_history
+            recent = reset_history[-2:] if len(reset_history) >= 2 else reset_history
             for entry in reversed(recent):
                 ts, reason, collision_object_name, collision_penetration_depth = (
                     self._parse_history_entry(entry)
                 )
                 display_reason = self._normalize_display_reason(reason)
-                if len(display_reason) > 25:
-                    display_reason = display_reason[:25] + "..."
+                if len(display_reason) > 18:
+                    display_reason = display_reason[:18] + "..."
 
                 history_text = f"  {self._get_reason_icon(reason)} {display_reason}"
                 text = self._small_font.render(history_text, True, self.GRAY)
@@ -258,15 +258,15 @@ class ResetInfoPanel(BasePanel):
                 time_text = self._small_font.render(
                     self._format_time_ago(ts), True, self.DARK_GRAY
                 )
-                screen.blit(time_text, (self.x + self.width - 70, y))
-                y += 16
+                screen.blit(time_text, (self.x + self.width - 64, y))
+                y += 14
 
                 collision_detail = self._format_collision_detail(
                     reason, collision_object_name, collision_penetration_depth
                 )
-                if collision_detail:
+                if collision_detail and y < self.y + self.height - 18:
                     detail_text = self._small_font.render(
-                        f"    {collision_detail[:34]}", True, self.DARK_GRAY
+                        f"{collision_detail[:24]}", True, self.DARK_GRAY
                     )
                     screen.blit(detail_text, (text_x, y))
-                    y += 14
+                    y += 12

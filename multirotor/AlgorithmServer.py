@@ -205,6 +205,8 @@ class MultiDroneAlgorithmServer:
         # 熵值记录
         self.entropy_history: List[Tuple[float, float]] = []
         self.entropy_history_lock = threading.Lock()
+        self.scan_progress_history: List[Tuple[float, float, int, int]] = []
+        self.scan_progress_history_lock = threading.Lock()
         self._start_time = _time.time()
         self._last_entropy_record_time = 0.0
         self.entropy_dist_history: List[Tuple[float, List[int], List[float]]] = []
@@ -2052,15 +2054,34 @@ class MultiDroneAlgorithmServer:
 
     def get_entropy_history(self, limit: int = 600) -> List[Tuple[float, float]]:
         """获取最近的熵值历史记录"""
-        with self.entropy_history_lock:
-            return list(self.entropy_history[-limit:])
+        history = list(getattr(self, "entropy_history", []) or [])
+        lock = getattr(self, "entropy_history_lock", None)
+        if lock is None:
+            return history[-limit:]
+        with lock:
+            return list(getattr(self, "entropy_history", [])[-limit:])
 
     def get_entropy_distribution(
         self, limit: int = 1
     ) -> List[Tuple[float, List[int], List[float]]]:
         """获取最近的熵值分布（直方图和CDF）"""
-        with self.entropy_dist_history_lock:
-            return list(self.entropy_dist_history[-limit:])
+        history = list(getattr(self, "entropy_dist_history", []) or [])
+        lock = getattr(self, "entropy_dist_history_lock", None)
+        if lock is None:
+            return history[-limit:]
+        with lock:
+            return list(getattr(self, "entropy_dist_history", [])[-limit:])
+
+    def get_scan_progress_history(
+        self, limit: int = 600
+    ) -> List[Tuple[float, float, int, int]]:
+        """获取最近的扫描进度历史 (elapsed, scan_ratio, scanned_count, total_count)。"""
+        history = list(getattr(self, "scan_progress_history", []) or [])
+        lock = getattr(self, "scan_progress_history_lock", None)
+        if lock is None:
+            return history[-limit:]
+        with lock:
+            return list(getattr(self, "scan_progress_history", [])[-limit:])
 
     def _calc_entropy_distribution(
         self, entropies: List[float], bin_size: int = 5, max_entropy: int = 100
@@ -2109,12 +2130,19 @@ class MultiDroneAlgorithmServer:
             total_entropy = sum(entropies)
 
         avg_entropy = total_entropy / total
+        scanned_count = sum(1 for entropy in entropies if entropy < 30)
+        scan_ratio = (scanned_count / total * 100.0) if total > 0 else 0.0
         elapsed = current_time - self._start_time
 
         with self.entropy_history_lock:
             self.entropy_history.append((elapsed, avg_entropy))
             if len(self.entropy_history) > 1800:
                 self.entropy_history = self.entropy_history[-1800:]
+
+        with self.scan_progress_history_lock:
+            self.scan_progress_history.append((elapsed, scan_ratio, scanned_count, total))
+            if len(self.scan_progress_history) > 1800:
+                self.scan_progress_history = self.scan_progress_history[-1800:]
 
         bins, hist, cdf = self._calc_entropy_distribution(entropies)
         with self.entropy_dist_history_lock:
@@ -2805,6 +2833,11 @@ class MultiDroneAlgorithmServer:
                 stats=external_training_stats if 'external_training_stats' in locals() else None,
                 fallback=self.current_training_stats,
             )
+
+        snapshot["entropy_history"] = self.get_entropy_history(limit=300)
+        snapshot["scan_progress_history"] = self.get_scan_progress_history(limit=300)
+        snapshot["entropy_distribution"] = self.get_entropy_distribution(limit=1)
+        snapshot["entropy_bins"] = list(getattr(self, "entropy_bins", []) or [])
 
         # 5. 添加重置原因和历史记录
         snapshot["last_reset_reason"] = self._last_reset_reason

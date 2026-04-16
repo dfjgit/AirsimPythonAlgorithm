@@ -20,6 +20,24 @@
 
 本版本重点完成了配置体系整合与训练稳定性修复。
 
+当前本地版本还包含以下系统级增强：
+
+- 四组统一仿真对比阶段（`M`）支持先执行 APF 基线多轮仿真，再串联 `DDPG+APF` / `Pure DQN` 的 stage01 训练、冻结评测与分析
+- APF baseline 默认轮次与 final benchmark 默认轮次已经拆分：
+  - `paper_benchmark.apf_baseline_episodes = 100`
+  - `paper_benchmark.eval_episodes_per_seed = 10`
+- APF baseline / 冻结评测原始日志已经统一改为 `apf_training_*` 前缀，避免再与 `ddpg_training_*` 混淆
+- 运行时可视化已经重构为以“残值”命名的双侧栏仪表板，支持：
+  - `当前场景残值情况`
+  - `训练状态`
+  - `训练重置记录`
+  - `电量状态`
+  - `奖励曲线`
+  - `残值采集情况`
+  - `APF权重系数` / `动作分布`
+- 电量面板支持按无人机数量自动切换为 1/2/3 列布局，目标覆盖最多 10 台无人机的展示
+- 新增保守式旧日志清理工具，用于检测并隔离“最后一轮未完成”的遗留训练 CSV
+
 配置整合：
 - 将 15 个配置文件精简为 5 个，统一入口为 `system_config.json`
 - 修正 ScannerConfigData 11 处默认值不一致问题
@@ -115,6 +133,59 @@ python multirotor/DQN_Movement/scripts/train_movement_with_airsim.py
 - 全局平均熵值
 - 权重变化
 - episode 表现
+
+补充说明：
+
+- comparison workflow 中的 APF baseline 产物位于：
+  - `analysis_results/workflows/comparison/<experiment_id>/artifacts/apf_baseline_sim/`
+- 其中：
+  - `fixed_apf/`、`random_apf/` 保存阶段汇总 CSV
+  - `logs/` 保存原始 `scan_data_*` 与 `apf_training_*` 日志
+- APF baseline 的汇总 CSV 现在会按 episode 增量刷新，中途中断时已完成回合不会全部丢失
+
+## 当前运行时可视化
+
+当前系统默认的运行时可视化不再使用旧的“环境状态”面板，而是改为更强调训练与扫描过程的仪表板布局。
+
+命名约定：
+
+- UI 里与网格扫描有关的指标统一使用“残值”表述
+- 运行时可视化中的典型面板包括：
+  - `当前场景残值情况`
+  - `残值采集情况`
+  - `训练状态`
+  - `训练重置记录`
+  - `电量状态`
+  - `奖励曲线`
+  - `APF权重系数`
+
+布局约定：
+
+- 左侧栏优先展示摘要与告警类信息
+- 右侧栏优先展示曲线和权重类信息
+- 中间区域保留热力图、Leader 与无人机运行轨迹/位置
+
+电量展示约定：
+
+- 运行时电量面板支持按无人机数量自动切换为 1 / 2 / 3 列
+- 设计目标是覆盖最多 10 台无人机的同时显示
+
+## 旧日志清理工具
+
+为避免历史训练日志中“最后一轮中断但仍残留到主 CSV”影响分析，当前版本新增了保守式清理脚本：
+
+```bash
+python multirotor/Algorithm/legacy_interrupted_log_cleanup.py --csv <training.csv> --scan-csv <scan_data.csv>
+python multirotor/Algorithm/legacy_interrupted_log_cleanup.py --dir <training_dir> --apply
+```
+
+行为说明：
+
+- 默认只分析，不改写文件
+- `--apply` 时会：
+  - 备份原始训练 CSV 为 `.bak`
+  - 将未完成的最后一轮从主训练 CSV 中移除
+  - 把被隔离的最后一轮写入 `interrupted_runs/`
 
 ## 验证与诊断工具
 

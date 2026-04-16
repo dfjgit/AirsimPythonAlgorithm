@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from _test_temp_paths import make_temp_dir
 import paper_workflow_orchestrator
 from paper_workflow_orchestrator import PaperWorkflowOrchestrator
+from paper_workflow_state import create_experiment_root, initialize_workflow_state, save_workflow_state
 
 
 RECOMMENDATIONS = {"ddpg_apf": {"decision": "寤鸿缁", "reasons": ["recent success low"]}}
@@ -148,6 +149,79 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["status"], "failed")
         self.assertEqual(state["current_phase"], "stage02_decision")
         self.assertEqual(state["steps"]["stage02_decision"]["status"], "failed")
+
+    def test_create_or_resume_experiment_reuses_latest_incomplete_when_requested(self):
+        orchestrator = self._create_orchestrator(Mock(), Mock(), Mock())
+        workflow_root = self.root / "analysis_results" / "workflows"
+        older = create_experiment_root(
+            base_root=workflow_root,
+            workflow_type="comparison",
+            alias="older",
+            now_token="2026-04-14_150000",
+        )
+        newer = create_experiment_root(
+            base_root=workflow_root,
+            workflow_type="comparison",
+            alias="newer",
+            now_token="2026-04-14_160000",
+        )
+        completed = create_experiment_root(
+            base_root=workflow_root,
+            workflow_type="comparison",
+            alias="completed",
+            now_token="2026-04-14_170000",
+        )
+        initialize_workflow_state(older, workflow_type="comparison", alias="older")
+        initialize_workflow_state(newer, workflow_type="comparison", alias="newer")
+        initialize_workflow_state(completed, workflow_type="comparison", alias="completed")
+        save_workflow_state(older, {"workflow_type": "comparison", "status": "failed"}, updated_at="2026-04-14 15:05:00")
+        save_workflow_state(newer, {"workflow_type": "comparison", "status": "running"}, updated_at="2026-04-14 16:05:00")
+        save_workflow_state(completed, {"workflow_type": "comparison", "status": "completed"}, updated_at="2026-04-14 17:05:00")
+
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="comparison", resume_latest=True)
+
+        self.assertEqual(exp_root, newer)
+
+    def test_run_comparison_workflow_skips_completed_steps_when_resuming(self):
+        command_runner = Mock(return_value=0)
+        archive_runner = Mock()
+        recommendation_runner = Mock(return_value=RECOMMENDATIONS)
+        orchestrator = self._create_orchestrator(command_runner, archive_runner, recommendation_runner)
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="comparison", alias="resume-run")
+        state = orchestrator.load_state(exp_root)
+        state["status"] = "failed"
+        state["current_phase"] = "stage01_dqn"
+        state["steps"] = {
+            "apf_baseline_sim": {"status": "completed"},
+            "stage01_ddpg": {"status": "completed"},
+            "stage01_dqn": {"status": "failed", "error": "simulated failure"},
+        }
+        save_workflow_state(exp_root, state)
+
+        orchestrator.run_comparison_workflow(exp_root)
+
+        expected_commands = [
+            call(["cmd.exe", "/d", "/c", "scripts\\Train_DQN_Movement_Real_Environment.bat"], cwd=self.root),
+            call(["cmd.exe", "/d", "/c", "scripts\\Run_Four_Group_Benchmark.bat"], cwd=self.root),
+            call(
+                ["python", "multirotor\\Algorithm\\visualize_training_data.py", "--auto", "--out", "analysis_results"],
+                cwd=self.root,
+            ),
+        ]
+        self.assertEqual(command_runner.call_args_list, expected_commands)
+        self.assertEqual(
+            archive_runner.call_args_list,
+            [call(self.root, exp_root, algorithm="pure_dqn", stage_bucket="stage01")],
+        )
+        recommendation_runner.assert_called_once()
+        resumed_state = orchestrator.load_state(exp_root)
+        self.assertEqual(resumed_state["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["apf_baseline_sim"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["stage01_ddpg"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["stage01_dqn"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["frozen_benchmark"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["training_comparison"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["stage02_decision"]["status"], "completed")
 
     def test_run_virtual_real_two_stage_workflow_updates_state_and_archives_outputs(self):
         command_runner = Mock(return_value=0)
@@ -373,6 +447,47 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
             call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="online"),
         ]
         self.assertEqual(archive_runner.call_args_list, expected_archives)
+
+    def test_run_virtual_real_two_stage_workflow_skips_completed_steps_when_resuming(self):
+        command_runner = Mock(return_value=0)
+        archive_runner = Mock()
+        two_stage_analysis_runner = Mock(return_value={"summary_csv": self.root / "summary.csv"})
+        two_stage_recommendation_runner = Mock(return_value={"decision": "ok", "reasons": ["resume"]})
+
+        orchestrator = self._create_two_stage_orchestrator(
+            command_runner=command_runner,
+            archive_runner=archive_runner,
+            analysis_runner=two_stage_analysis_runner,
+            recommendation_runner=two_stage_recommendation_runner,
+        )
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="virtual_real_two_stage", alias="resume-two-stage")
+        state = orchestrator.load_state(exp_root)
+        state["status"] = "failed"
+        state["current_phase"] = "real_weighted_refine"
+        state["steps"] = {
+            "sim_pretrain": {"status": "completed"},
+            "real_weighted_refine": {"status": "failed", "error": "simulated failure"},
+        }
+        save_workflow_state(exp_root, state)
+
+        orchestrator.run_virtual_real_two_stage_workflow(exp_root, refine_mode="online")
+
+        self.assertEqual(
+            command_runner.call_args_list,
+            [call(["cmd.exe", "/d", "/c", "scripts\\Train_DDPG_Weights_Crazyflie_Online_Single_Episode.bat"], cwd=self.root)],
+        )
+        self.assertEqual(
+            archive_runner.call_args_list,
+            [call(self.root, exp_root, phase_bucket="real_weighted_refine", refine_mode="online")],
+        )
+        two_stage_analysis_runner.assert_called_once_with(exp_root, refine_mode="online")
+        two_stage_recommendation_runner.assert_called_once_with(self.root / "summary.csv")
+        resumed_state = orchestrator.load_state(exp_root)
+        self.assertEqual(resumed_state["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["sim_pretrain"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["real_weighted_refine"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["two_stage_analysis"]["status"], "completed")
+        self.assertEqual(resumed_state["steps"]["real_weighted_refine_decision"]["status"], "completed")
     def test_main_help_prints_usage_and_exits_cleanly(self):
         stdout = StringIO()
 
@@ -391,9 +506,18 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         expected_exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "cli-run"
 
         class FakeOrchestrator:
-            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+            def create_or_resume_experiment(
+                self,
+                *,
+                workflow_type: str,
+                alias: str = "",
+                resume_latest: bool = False,
+                experiment_root: Path | None = None,
+            ) -> Path:
                 recorded["workflow_type"] = workflow_type
                 recorded["alias"] = alias
+                recorded["resume_latest"] = resume_latest
+                recorded["experiment_root"] = experiment_root
                 return expected_exp_root
 
             def run_comparison_workflow(self, exp_root: Path) -> None:
@@ -412,6 +536,8 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(recorded["workspace_root"], self.root)
         self.assertEqual(recorded["workflow_type"], "comparison")
         self.assertEqual(recorded["alias"], "cli-run")
+        self.assertFalse(recorded["resume_latest"])
+        self.assertIsNone(recorded["experiment_root"])
         self.assertEqual(recorded["run_exp_root"], expected_exp_root)
 
     def test_main_comparison_workflow_prints_chinese_status_when_ui_lang_is_zh(self):
@@ -419,7 +545,14 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         expected_exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "cli-zh"
 
         class FakeOrchestrator:
-            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+            def create_or_resume_experiment(
+                self,
+                *,
+                workflow_type: str,
+                alias: str = "",
+                resume_latest: bool = False,
+                experiment_root: Path | None = None,
+            ) -> Path:
                 return expected_exp_root
 
             def run_comparison_workflow(self, exp_root: Path) -> None:
@@ -455,9 +588,18 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         expected_exp_root = self.root / "analysis_results" / "workflows" / "virtual_real_two_stage" / "cli-two-stage"
 
         class FakeOrchestrator:
-            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+            def create_or_resume_experiment(
+                self,
+                *,
+                workflow_type: str,
+                alias: str = "",
+                resume_latest: bool = False,
+                experiment_root: Path | None = None,
+            ) -> Path:
                 recorded["workflow_type"] = workflow_type
                 recorded["alias"] = alias
+                recorded["resume_latest"] = resume_latest
+                recorded["experiment_root"] = experiment_root
                 return expected_exp_root
 
             def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
@@ -477,6 +619,8 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(recorded["workspace_root"], self.root)
         self.assertEqual(recorded["workflow_type"], "virtual_real_two_stage")
         self.assertEqual(recorded["alias"], "cli-two-stage")
+        self.assertFalse(recorded["resume_latest"])
+        self.assertIsNone(recorded["experiment_root"])
         self.assertEqual(recorded["run_exp_root"], expected_exp_root)
         self.assertEqual(recorded["refine_mode"], "online")
 
@@ -485,9 +629,18 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         expected_exp_root = self.root / "analysis_results" / "workflows" / "virtual_real_two_stage" / "cli-offline"
 
         class FakeOrchestrator:
-            def create_or_resume_experiment(self, *, workflow_type: str, alias: str = "") -> Path:
+            def create_or_resume_experiment(
+                self,
+                *,
+                workflow_type: str,
+                alias: str = "",
+                resume_latest: bool = False,
+                experiment_root: Path | None = None,
+            ) -> Path:
                 recorded["workflow_type"] = workflow_type
                 recorded["alias"] = alias
+                recorded["resume_latest"] = resume_latest
+                recorded["experiment_root"] = experiment_root
                 return expected_exp_root
 
             def run_virtual_real_two_stage_workflow(self, exp_root: Path, *, refine_mode: str) -> None:
@@ -516,5 +669,67 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(recorded["workspace_root"], self.root)
         self.assertEqual(recorded["workflow_type"], "virtual_real_two_stage")
         self.assertEqual(recorded["alias"], "cli-offline")
+        self.assertFalse(recorded["resume_latest"])
+        self.assertIsNone(recorded["experiment_root"])
         self.assertEqual(recorded["run_exp_root"], expected_exp_root)
         self.assertEqual(recorded["refine_mode"], "offline_logs")
+
+    def test_main_comparison_workflow_can_resume_latest_experiment(self):
+        recorded = {}
+        expected_exp_root = self.root / "analysis_results" / "workflows" / "comparison" / "resume-run"
+
+        class FakeOrchestrator:
+            def create_or_resume_experiment(
+                self,
+                *,
+                workflow_type: str,
+                alias: str = "",
+                resume_latest: bool = False,
+                experiment_root: Path | None = None,
+            ) -> Path:
+                recorded["workflow_type"] = workflow_type
+                recorded["alias"] = alias
+                recorded["resume_latest"] = resume_latest
+                recorded["experiment_root"] = experiment_root
+                return expected_exp_root
+
+            def run_comparison_workflow(self, exp_root: Path) -> None:
+                recorded["run_exp_root"] = exp_root
+
+        def orchestrator_factory(*, workspace_root: Path):
+            recorded["workspace_root"] = workspace_root
+            return FakeOrchestrator()
+
+        exit_code = paper_workflow_orchestrator.main(
+            ["--workflow", "comparison", "--workspace-root", str(self.root), "--resume-latest"],
+            orchestrator_factory=orchestrator_factory,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recorded["workspace_root"], self.root)
+        self.assertEqual(recorded["workflow_type"], "comparison")
+        self.assertTrue(recorded["resume_latest"])
+        self.assertIsNone(recorded["experiment_root"])
+        self.assertEqual(recorded["run_exp_root"], expected_exp_root)
+
+    def test_main_query_latest_resumable_prints_resume_metadata(self):
+        workflow_root = self.root / "analysis_results" / "workflows"
+        exp_root = create_experiment_root(
+            base_root=workflow_root,
+            workflow_type="comparison",
+            alias="resume-query",
+            now_token="2026-04-14_180000",
+        )
+        state = initialize_workflow_state(exp_root, workflow_type="comparison", alias="resume-query")
+        state["status"] = "running"
+        state["current_phase"] = "stage01_ddpg"
+        save_workflow_state(exp_root, state, updated_at="2026-04-14 18:30:00")
+
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            exit_code = paper_workflow_orchestrator.main(
+                ["--workflow", "comparison", "--workspace-root", str(self.root), "--query-latest-resumable"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), f"{exp_root}|running|stage01_ddpg")

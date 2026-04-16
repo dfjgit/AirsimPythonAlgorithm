@@ -133,6 +133,7 @@ exit /b 0
 :collect_quick_config
 set "QC_PROFILE=%~1"
 if "%QC_PROFILE%"=="" exit /b 0
+if /i "%AIRSIM_TEST_SKIP_QUICK_CONFIG%"=="1" exit /b 0
 call :clear_quick_overrides
 set "QC_FILE=%TEMP%\airsim_quick_config_%RANDOM%_%RANDOM%.env"
 if exist "%QC_FILE%" del /f /q "%QC_FILE%" >nul 2>nul
@@ -143,6 +144,123 @@ if exist "%QC_FILE%" (
     del /f /q "%QC_FILE%" >nul 2>nul
 )
 exit /b %QC_EXIT%
+
+:query_latest_workflow
+set "WORKFLOW_QUERY_TYPE=%~1"
+set "WORKFLOW_QUERY_RESULT="
+set "WORKFLOW_QUERY_STATUS="
+set "WORKFLOW_QUERY_PHASE="
+set "WORKFLOW_QUERY_FILE=%TEMP%\airsim_workflow_query_%RANDOM%_%RANDOM%.txt"
+if "%WORKFLOW_QUERY_TYPE%"=="" exit /b 0
+if exist "%WORKFLOW_QUERY_FILE%" del /f /q "%WORKFLOW_QUERY_FILE%" >nul 2>nul
+if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+    <nul "%START_PYTHON_EXE%" "%~dp0multirotor\Algorithm\paper_workflow_orchestrator.py" --workflow %WORKFLOW_QUERY_TYPE% --query-latest-resumable --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%" > "%WORKFLOW_QUERY_FILE%"
+) else (
+    <nul "%START_PYTHON_EXE%" "%~dp0multirotor\Algorithm\paper_workflow_orchestrator.py" --workflow %WORKFLOW_QUERY_TYPE% --query-latest-resumable > "%WORKFLOW_QUERY_FILE%"
+)
+if exist "%WORKFLOW_QUERY_FILE%" (
+    for /f "usebackq tokens=1,2,* delims=|" %%A in ("%WORKFLOW_QUERY_FILE%") do (
+        set "WORKFLOW_QUERY_RESULT=%%A"
+        set "WORKFLOW_QUERY_STATUS=%%B"
+        set "WORKFLOW_QUERY_PHASE=%%C"
+    )
+    del /f /q "%WORKFLOW_QUERY_FILE%" >nul 2>nul
+)
+exit /b 0
+
+:run_paper_workflow
+set "WORKFLOW_RUN_TYPE=%~1"
+set "WORKFLOW_RUN_MODE=%~2"
+if "%WORKFLOW_RUN_TYPE%"=="" exit /b 1
+if defined AIRSIM_TEST_PAPER_WORKFLOW_CAPTURE_FILE (
+    >> "%AIRSIM_TEST_PAPER_WORKFLOW_CAPTURE_FILE%" echo %WORKFLOW_RUN_TYPE%^|%WORKFLOW_RUN_MODE%
+    exit /b 0
+)
+if /i "%WORKFLOW_RUN_MODE%"=="resume" (
+    if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --resume-latest --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%"
+    ) else (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --resume-latest
+    )
+) else (
+    if defined AIRSIM_WORKFLOW_WORKSPACE_ROOT (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE% --workspace-root "%AIRSIM_WORKFLOW_WORKSPACE_ROOT%"
+    ) else (
+        call scripts\Run_Paper_Workflow.bat --workflow %WORKFLOW_RUN_TYPE%
+    )
+)
+exit /b %ERRORLEVEL%
+
+:prompt_workflow_action
+set /p workflow_action=请选择操作 ^(C/N/Q^)：
+exit /b 0
+
+:select_workflow_action
+if defined AIRSIM_TEST_WORKFLOW_ACTION (
+    set "workflow_action=%AIRSIM_TEST_WORKFLOW_ACTION%"
+) else (
+    call :prompt_workflow_action
+)
+exit /b 0
+
+:show_resume_options_zh
+echo 检测到未完成的 workflow：
+echo   路径: %WORKFLOW_QUERY_RESULT%
+echo   状态: %WORKFLOW_QUERY_STATUS%
+echo   当前阶段: %WORKFLOW_QUERY_PHASE%
+echo.
+echo 可选操作：
+echo   [C] 继续当前实验
+echo   [N] 新建实验并从头执行
+echo   [Q] 返回主菜单
+exit /b 0
+
+:confirm_new_workflow_zh
+set /p workflow_confirm=请输入 Y 继续执行，输入其它任意键返回主菜单：
+exit /b 0
+
+:show_invalid_workflow_action_zh
+echo.
+echo 当前输入无效，请重新选择。
+timeout /t 2 >nul
+exit /b 0
+
+:show_comparison_workflow_failure_zh
+echo.
+echo [错误] 四组统一仿真对比阶段执行失败，错误码：%WORKFLOW_EXIT%
+echo [提示] 请检查上方输出中的首个报错信息后再重试。
+echo.
+pause
+exit /b 0
+
+:show_two_stage_workflow_failure_zh
+echo.
+echo [错误] 虚实两阶段实验工作流执行失败，错误码：%WORKFLOW_EXIT%
+echo [提示] 请检查上方输出中的首个报错信息后再重试。
+echo.
+pause
+exit /b 0
+
+:resolve_workflow_mode_zh
+set "WORKFLOW_MODE=new"
+set "workflow_action="
+set "workflow_confirm="
+call :query_latest_workflow "%~1"
+if not defined WORKFLOW_QUERY_RESULT goto resolve_workflow_mode_zh_confirm
+call :show_resume_options_zh
+call :select_workflow_action
+if /i "%workflow_action%"=="Q" exit /b 1
+if /i "%workflow_action%"=="C" set "WORKFLOW_MODE=resume"
+if /i "%workflow_action%"=="C" exit /b 0
+if /i "%workflow_action%"=="N" set "WORKFLOW_MODE=new"
+if /i "%workflow_action%"=="N" exit /b 0
+call :show_invalid_workflow_action_zh
+exit /b 2
+
+:resolve_workflow_mode_zh_confirm
+call :confirm_new_workflow_zh
+if /i not "%workflow_confirm%"=="Y" exit /b 1
+exit /b 0
 
 :run_normal
 cls
@@ -376,21 +494,19 @@ echo     * DDPG 训练步数
 echo     * DQN 训练步数
 echo   - 执行过程中，训练脚本仍会保留各自的启动确认提示
 echo.
-set /p workflow_confirm=请输入 Y 继续执行，输入其它任意键返回主菜单：
-if /i not "%workflow_confirm%"=="Y" goto menu
+call :resolve_workflow_mode_zh "comparison"
+if errorlevel 2 goto comparison_workflow
+if errorlevel 1 goto menu
 echo.
 call :collect_quick_config "comparison_workflow"
 if errorlevel 2 goto menu
 if errorlevel 1 goto menu
-call scripts\Run_Paper_Workflow.bat --workflow comparison
+call :run_paper_workflow "comparison" "%WORKFLOW_MODE%"
 set "WORKFLOW_EXIT=%ERRORLEVEL%"
 if not "%WORKFLOW_EXIT%"=="0" (
-    echo.
-    echo [错误] 四组统一仿真对比阶段执行失败，错误码：%WORKFLOW_EXIT%
-    echo [提示] 请检查上方输出中的首个报错信息后再重试。
-    echo.
-    pause
+    call :show_comparison_workflow_failure_zh
 )
+if /i "%AIRSIM_TEST_EXIT_AFTER_WORKFLOW%"=="1" goto end
 goto menu
 
 :virtual_real_two_stage_workflow
@@ -403,18 +519,18 @@ echo 本流程支持快速配置以下参数：
 echo   * 无人机数量（默认 3）
 echo   * DDPG 训练步数（将显示仿真时间预估）
 echo.
+call :resolve_workflow_mode_zh "virtual_real_two_stage"
+if errorlevel 2 goto virtual_real_two_stage_workflow
+if errorlevel 1 goto menu
 call :collect_quick_config "two_stage_workflow"
 if errorlevel 2 goto menu
 if errorlevel 1 goto menu
-call scripts\Run_Paper_Workflow.bat --workflow virtual_real_two_stage
+call :run_paper_workflow "virtual_real_two_stage" "%WORKFLOW_MODE%"
 set "WORKFLOW_EXIT=%ERRORLEVEL%"
 if not "%WORKFLOW_EXIT%"=="0" (
-    echo.
-    echo [错误] 虚实两阶段实验工作流执行失败，错误码：%WORKFLOW_EXIT%
-    echo [提示] 请检查上方输出中的首个报错信息后再重试。
-    echo.
-    pause
+    call :show_two_stage_workflow_failure_zh
 )
+if /i "%AIRSIM_TEST_EXIT_AFTER_WORKFLOW%"=="1" goto end
 goto menu
 
 :four_group_benchmark

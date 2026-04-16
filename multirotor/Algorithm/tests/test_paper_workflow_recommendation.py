@@ -97,6 +97,34 @@ class ComparisonRecommendationTests(unittest.TestCase):
         self.assertEqual(result["decision"], "可选续训")
         self.assertIn("样本不足", result["reasons"][0])
 
+    def test_incomplete_episodes_are_excluded_from_recent_window(self):
+        training_csv = self.root / "training.csv"
+        benchmark_csv = self.root / "benchmark.csv"
+        pd.DataFrame(
+            {
+                "episode": [1, 2, 3],
+                "success_flag": [1, 1, 0],
+                "scan_efficiency": [2.0, 2.0, 0.1],
+                "collision_rate": [0.0, 0.0, 80.0],
+                "episode_complete": [1, 1, 0],
+            }
+        ).to_csv(training_csv, index=False, encoding="utf-8-sig")
+        pd.DataFrame(
+            {
+                "algorithm_type": ["ddpg_apf", "fixed_apf"],
+                "success_flag": [1, 1],
+                "final_global_scan_ratio": [31.0, 30.0],
+            }
+        ).to_csv(benchmark_csv, index=False, encoding="utf-8-sig")
+        result = recommend_comparison_stage02(
+            training_csv,
+            benchmark_csv,
+            algorithm_type="ddpg_apf",
+            recent_window=3,
+            min_recent_window=2,
+        )
+        self.assertEqual(result["decision"], "当前可结束 stage01")
+
     def test_collision_data_without_collision_rate_triggers_continue(self):
         training_csv = self.root / "training.csv"
         benchmark_csv = self.root / "benchmark.csv"
