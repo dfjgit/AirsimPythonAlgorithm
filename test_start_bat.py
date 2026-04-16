@@ -64,6 +64,32 @@ class StartBatTests(unittest.TestCase):
         _, combined_output = self._run_start_bat(extra_env={"AIRSIM_RUNTIME_LOG_MODE": "detail"})
         self.assertIn("当前运行时日志模式: 详细模式", combined_output)
 
+    def test_batch_checkout_rules_are_versioned_for_crlf(self):
+        repo_root = Path(__file__).resolve().parent
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", ".gitattributes"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(repo_root),
+            timeout=8,
+        )
+        self.assertEqual(tracked.returncode, 0, msg=tracked.stderr)
+
+        attrs = subprocess.run(
+            ["git", "check-attr", "eol", "--", "start.bat", "start_en.bat"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(repo_root),
+            timeout=8,
+        )
+        self.assertEqual(attrs.returncode, 0, msg=attrs.stderr)
+        self.assertIn("start.bat: eol: crlf", attrs.stdout)
+        self.assertIn("start_en.bat: eol: crlf", attrs.stdout)
+
     def test_start_bat_comparison_workflow_offers_resume_action_for_unfinished_run(self):
         temp_root = Path(__file__).resolve().parent / ".codex_tmp"
         temp_root.mkdir(parents=True, exist_ok=True)
