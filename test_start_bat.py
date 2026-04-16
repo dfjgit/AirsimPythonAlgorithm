@@ -36,61 +36,13 @@ class StartBatTests(unittest.TestCase):
             all(byte in (9, 10, 13) or byte < 128 for byte in data),
             msg="start.bat should stay ASCII-only so cmd parsing does not depend on UTF-8 menu text",
         )
-        self.assertIn(b'start_en_main.bat', data)
-
-    def test_start_bat_wrapper_repairs_mixed_line_endings_before_launch(self):
-        repo_root = Path(__file__).resolve().parent
-        temp_root = repo_root / ".codex_tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        workspace_root = temp_root / f"start_wrapper_{uuid.uuid4().hex}"
-        (workspace_root / "scripts").mkdir(parents=True, exist_ok=True)
-
-        shutil.copy2(repo_root / "start.bat", workspace_root / "start.bat")
-        shutil.copy2(repo_root / "start_en_main.bat", workspace_root / "start_en_main.bat")
-        shutil.copy2(
-            repo_root / "scripts" / "Start_Batch_Bootstrap.ps1",
-            workspace_root / "scripts" / "Start_Batch_Bootstrap.ps1",
-        )
-
-        main_file = workspace_root / "start_en_main.bat"
-        lines = main_file.read_text(encoding="utf-8").splitlines()
-        with main_file.open("wb") as handle:
-            for idx, line in enumerate(lines, 1):
-                handle.write(line.encode("utf-8"))
-                handle.write(b"\n" if idx in {21, 24, 27, 30, 35, 40, 44, 47, 60, 61} else b"\r\n")
-
-        env = dict(os.environ)
-        env["AIRSIM_TEST_NO_PAUSE"] = "1"
-        env["AIRSIM_TEST_EXIT_AFTER_TOGGLE"] = "1"
-        completed = subprocess.run(
-            ["cmd.exe", "/d", "/c", str(workspace_root / "start.bat")],
-            input="0\r\n",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(workspace_root),
-            env=env,
-            timeout=12,
-        )
-        combined_output = f"{completed.stdout}\n{completed.stderr}"
-
-        self.assertEqual(completed.returncode, 0, msg=combined_output)
-        self.assertIn("AirSim", combined_output)
-        self.assertIn("Console", combined_output)
-        self.assertNotIn("not recognized as an internal or external command", combined_output)
-
-        repaired = main_file.read_bytes()
-        self.assertEqual(repaired.count(b"\n") - repaired.count(b"\r\n"), 0)
-
-        shutil.rmtree(workspace_root, ignore_errors=True)
-        shutil.rmtree(temp_root, ignore_errors=True)
+        self.assertIn(b'Start_Menu_ZH.ps1', data)
 
     def test_start_bat_menu_exits_without_cmd_parse_errors(self):
         completed, combined_output = self._run_start_bat()
         self.assertEqual(completed.returncode, 0, msg=combined_output)
         self.assertIn("AirSim", combined_output)
-        self.assertIn("Console", combined_output)
+        self.assertIn("控制台", combined_output)
         self.assertNotIn(
             "not recognized as an internal or external command", combined_output
         )
@@ -101,26 +53,26 @@ class StartBatTests(unittest.TestCase):
 
     def test_start_bat_menu_mentions_four_group_paper_experiment_entry(self):
         _, combined_output = self._run_start_bat()
-        self.assertIn("[M] Four-Group Unified Simulation Comparison", combined_output)
+        self.assertIn("[M] 四组统一仿真对比阶段", combined_output)
 
     def test_start_bat_menu_uses_formal_product_copy(self):
         _, combined_output = self._run_start_bat()
-        self.assertIn("AirSim UAV Simulation Platform - Console", combined_output)
-        self.assertIn("=== Analysis ===", combined_output)
-        self.assertIn("[C] Clean Up Training and Analysis Outputs", combined_output)
+        self.assertIn("AirSim 无人机仿真平台 - 控制台", combined_output)
+        self.assertIn("=== 结果分析 ===", combined_output)
+        self.assertIn("[C] 清理训练与分析产出", combined_output)
 
     def test_start_bat_menu_shows_runtime_log_mode_toggle(self):
         _, combined_output = self._run_start_bat()
-        self.assertIn("Current Runtime Log Mode: User Mode", combined_output)
-        self.assertIn("[T] Toggle Runtime Log Mode (Current Session)", combined_output)
+        self.assertIn("当前运行时日志模式: 用户模式", combined_output)
+        self.assertIn("[T] 切换运行时日志模式（当前会话）", combined_output)
 
     def test_start_bat_can_toggle_runtime_log_mode_for_current_session(self):
         _, combined_output = self._run_start_bat("T\r\n")
-        self.assertIn("Switched to Detail Mode.", combined_output)
+        self.assertIn("已切换到详细模式。", combined_output)
 
     def test_start_bat_menu_reflects_detail_runtime_log_mode(self):
         _, combined_output = self._run_start_bat(extra_env={"AIRSIM_RUNTIME_LOG_MODE": "detail"})
-        self.assertIn("Current Runtime Log Mode: Detail Mode", combined_output)
+        self.assertIn("当前运行时日志模式: 详细模式", combined_output)
 
     def test_batch_checkout_rules_are_versioned_for_crlf(self):
         repo_root = Path(__file__).resolve().parent
@@ -197,9 +149,9 @@ class StartBatTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("Unfinished workflow detected", combined_output)
-        self.assertIn("Resume the latest workflow", combined_output)
-        self.assertNotIn("Invalid selection. Please try again.", combined_output)
+        self.assertIn("检测到未完成的 workflow", combined_output)
+        self.assertIn("继续当前实验", combined_output)
+        self.assertNotIn("当前输入无效，请重新选择。", combined_output)
         self.assertNotIn("not recognized as an internal or external command", combined_output)
         self.assertEqual(capture_file.read_text(encoding="utf-8").strip(), "comparison|resume")
         shutil.rmtree(workspace_root, ignore_errors=True)
