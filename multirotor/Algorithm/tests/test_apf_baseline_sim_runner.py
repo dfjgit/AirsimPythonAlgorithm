@@ -188,6 +188,31 @@ class APFBaselineSimRunnerTests(unittest.TestCase):
         self.assertEqual(len(fixed_training), 2)
         self.assertEqual(len(random_training), 1)
 
+    def test_run_apf_baseline_simulation_uses_system_config_baseline_episode_default(self):
+        observed_calls = []
+
+        def fake_run_apf_algorithm(*, algorithm_type, eval_episodes, **kwargs):
+            observed_calls.append((algorithm_type, eval_episodes))
+            return []
+
+        with patch("apf_baseline_sim_runner._run_apf_algorithm", side_effect=fake_run_apf_algorithm):
+            outputs = run_apf_baseline_simulation(
+                output_root=self.root / "default_outputs",
+                seeds=[20260413],
+                experiment_id="default-demo",
+                stage_name="stage00_apf_baseline",
+                stage_index=0,
+            )
+
+        self.assertEqual(
+            observed_calls,
+            [
+                ("fixed_apf", 100),
+                ("random_apf", 100),
+            ],
+        )
+        self.assertEqual(outputs, {})
+
 
 if __name__ == "__main__":
     unittest.main()

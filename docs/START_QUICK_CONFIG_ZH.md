@@ -53,7 +53,7 @@
 默认值来源：
 
 - `multirotor/system_config.json`
-- 路径：`paper_benchmark.eval_episodes_per_seed`
+- 路径：`paper_benchmark.apf_baseline_episodes`
 
 说明：
 

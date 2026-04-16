@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import types
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from _test_temp_paths import make_temp_dir
 from four_group_benchmark_runner import (
     _benchmark_stage_plan_lines,
+    _run_apf_algorithm,
     _make_server_kwargs,
     build_apf_action_vector,
     candidate_project_roots,
@@ -123,6 +125,85 @@ class FourGroupBenchmarkRunnerHelperTests(unittest.TestCase):
             )
 
         self.assertFalse(kwargs["enable_visualization"])
+
+    def test_run_apf_algorithm_uses_apf_training_prefix_for_raw_logs(self):
+        captured = {}
+
+        fake_sb3 = types.ModuleType("stable_baselines3")
+        fake_sb3.DDPG = type("FakeDDPG", (), {"load": staticmethod(lambda *args, **kwargs: object())})
+
+        class FakeDataCollector:
+            def set_external_data(self, key, value):
+                return None
+
+        class FakeAlgorithm:
+            def get_current_coefficients(self):
+                return {
+                    "repulsionCoefficient": 2.0,
+                    "entropyCoefficient": 2.0,
+                    "distanceCoefficient": 2.0,
+                    "leaderRangeCoefficient": 1.5,
+                    "directionRetentionCoefficient": 0.5,
+                    "obstacleRepulsionDistance": 15.0,
+                    "obstacleRepulsionCoefficient": 5.0,
+                }
+
+        class FakeServer:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+                self.drone_names = ["UAV1"]
+                self.algorithms = {"UAV1": FakeAlgorithm()}
+                self.config_data = types.SimpleNamespace(paper_benchmark={"random_apf": {}})
+                self.data_collector = FakeDataCollector()
+
+            def start(self):
+                return True
+
+            def start_mission(self):
+                return True
+
+            def set_experiment_meta(self, **kwargs):
+                return None
+
+            def stop(self):
+                return None
+
+        fake_algorithm_server_module = types.ModuleType("multirotor.AlgorithmServer")
+        fake_algorithm_server_module.MultiDroneAlgorithmServer = FakeServer
+
+        class FakeEnv:
+            def __init__(self, *args, **kwargs):
+                self.step_count = 0
+                self.step_duration = 5.0
+                self.term_cfg = {"target_scan_ratio": 0.25}
+
+            def reset(self, seed=None):
+                return [0.0]
+
+        fake_simple_weight_env_module = types.ModuleType("multirotor.DDPG_Weight.envs.simple_weight_env")
+        fake_simple_weight_env_module.SimpleWeightEnv = FakeEnv
+
+        with patch.dict(
+            sys.modules,
+            {
+                "stable_baselines3": fake_sb3,
+                "multirotor.AlgorithmServer": fake_algorithm_server_module,
+                "multirotor.DDPG_Weight.envs.simple_weight_env": fake_simple_weight_env_module,
+            },
+            clear=False,
+        ):
+            rows = _run_apf_algorithm(
+                algorithm_type="fixed_apf",
+                seed=20260413,
+                eval_episodes=0,
+                system_config_path=Path("multirotor/system_config.json"),
+                ddpg_model_path=None,
+                output_dir=self.root,
+                data_log_dir=self.root / "logs",
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(captured["training_prefix"], "apf")
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ class ScannerConfigData:
         }
         self.paper_benchmark = {
             "seeds": [20260413, 20260414, 20260415],
+            "apf_baseline_episodes": 100,
             "eval_episodes_per_seed": 10,
             "termination": {
                 "target_scan_ratio": 0.25,

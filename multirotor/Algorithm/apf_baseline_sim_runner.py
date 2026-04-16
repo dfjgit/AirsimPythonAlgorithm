@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -19,6 +20,19 @@ def _env_int(name: str) -> int | None:
         return int(raw_value)
     except ValueError:
         return None
+
+
+def _load_apf_baseline_default_episodes(system_config_path: Path) -> int:
+    try:
+        payload = json.loads(system_config_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return 100
+    paper_cfg = payload.get("paper_benchmark", {}) if isinstance(payload, dict) else {}
+    raw_value = paper_cfg.get("apf_baseline_episodes", 100)
+    try:
+        return max(int(raw_value), 1)
+    except (TypeError, ValueError):
+        return 100
 
 
 def write_apf_baseline_outputs(
@@ -121,8 +135,13 @@ def run_apf_baseline_simulation(
     experiment_id = experiment_id or f"apf_baseline_sim_{time.strftime('%Y%m%d_%H%M%S')}"
     default_seed = int(os.environ.get("TRAIN_SEED", "20260413"))
     resolved_seeds = [int(seed) for seed in (seeds or [default_seed])]
+    env_episode_override = _env_int("AIRSIM_QUICK_APF_BASELINE_EPISODES")
     resolved_episodes = int(
-        episodes if episodes is not None else int(os.environ.get("AIRSIM_QUICK_APF_BASELINE_EPISODES", "10"))
+        episodes
+        if episodes is not None
+        else env_episode_override
+        if env_episode_override is not None
+        else _load_apf_baseline_default_episodes(system_config_path)
     )
     raw_log_root = Path(raw_log_dir) if raw_log_dir else None
     quick_drone_count = _env_int("AIRSIM_QUICK_DRONES")
@@ -158,6 +177,7 @@ def run_apf_baseline_simulation(
             ddpg_model_path=None,
             output_dir=output_root,
             data_log_dir=raw_log_root,
+            training_prefix="apf",
             on_episode_complete=lambda row: record_episode("fixed_apf", row),
         )
         _run_apf_algorithm(
@@ -168,6 +188,7 @@ def run_apf_baseline_simulation(
             ddpg_model_path=None,
             output_dir=output_root,
             data_log_dir=raw_log_root,
+            training_prefix="apf",
             on_episode_complete=lambda row: record_episode("random_apf", row),
         )
 

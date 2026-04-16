@@ -92,6 +92,7 @@ class MultiDroneAlgorithmServer:
         is_resume: bool = False,
         source_model: str = "",
         data_log_dir: Optional[str] = None,
+        training_prefix: str = "",
     ):
         """
         初始化服务器实例
@@ -124,6 +125,7 @@ class MultiDroneAlgorithmServer:
         self.seed = int(seed) if seed not in (None, "") else None
         self.run_kind = str(run_kind or "train").strip() or "train"
         self.data_log_dir = str(data_log_dir or "").strip()
+        self.training_prefix = str(training_prefix or "").strip()
         self.registry_path = (
             Path(registry_path)
             if registry_path
@@ -240,7 +242,7 @@ class MultiDroneAlgorithmServer:
                 data_dir=dqn_data_dir,
                 collection_interval=1.0,
                 enable_debug_print=enable_data_collection_print,
-                training_prefix="dqn",
+                training_prefix=self.training_prefix or "dqn",
                 experiment_id=experiment_id,
                 stage_name=stage_name,
                 stage_index=stage_index,
@@ -253,6 +255,7 @@ class MultiDroneAlgorithmServer:
                 data_dir=self.data_log_dir or None,
                 collection_interval=1.0,
                 enable_debug_print=enable_data_collection_print,
+                training_prefix=self.training_prefix or "ddpg",
                 experiment_id=experiment_id,
                 stage_name=stage_name,
                 stage_index=stage_index,

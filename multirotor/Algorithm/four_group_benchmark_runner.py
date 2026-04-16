@@ -244,6 +244,7 @@ def _run_apf_algorithm(
     ddpg_model_path: Optional[Path],
     output_dir: Path,
     data_log_dir: Optional[Path] = None,
+    training_prefix: str = "apf",
     on_episode_complete: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> List[Dict[str, object]]:
     from stable_baselines3 import DDPG
@@ -265,6 +266,7 @@ def _run_apf_algorithm(
             algorithm_type=algorithm_type,
         ),
         data_log_dir=str(data_log_dir) if data_log_dir else None,
+        training_prefix=training_prefix,
     )
     if not server.start():
         raise RuntimeError(f"Failed to start APF benchmark server for {algorithm_type}")

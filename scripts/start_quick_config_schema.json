@@ -112,7 +112,7 @@
       "default": {
         "kind": "json",
         "path": "multirotor/system_config.json",
-        "key": "paper_benchmark.eval_episodes_per_seed"
+        "key": "paper_benchmark.apf_baseline_episodes"
       }
     },
     "benchmark_eval_episodes": {
