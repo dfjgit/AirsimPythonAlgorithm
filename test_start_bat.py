@@ -78,7 +78,7 @@ class StartBatTests(unittest.TestCase):
         self.assertEqual(tracked.returncode, 0, msg=tracked.stderr)
 
         attrs = subprocess.run(
-            ["git", "check-attr", "eol", "--", "start.bat", "start_en.bat"],
+            ["git", "check-attr", "text", "--", "start.bat", "start_en.bat"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -87,8 +87,24 @@ class StartBatTests(unittest.TestCase):
             timeout=8,
         )
         self.assertEqual(attrs.returncode, 0, msg=attrs.stderr)
-        self.assertIn("start.bat: eol: crlf", attrs.stdout)
-        self.assertIn("start_en.bat: eol: crlf", attrs.stdout)
+        self.assertIn("start.bat: text: unset", attrs.stdout)
+        self.assertIn("start_en.bat: text: unset", attrs.stdout)
+
+        for script_name in ("start.bat", "start_en.bat"):
+            indexed = subprocess.run(
+                ["git", "show", f":{script_name}"],
+                capture_output=True,
+                cwd=str(repo_root),
+                timeout=8,
+            )
+            self.assertEqual(indexed.returncode, 0, msg=indexed.stderr.decode("utf-8", errors="replace"))
+            blob = indexed.stdout
+            self.assertIn(b"\r\n", blob, msg=f"{script_name} should keep CRLF in the indexed blob")
+            self.assertEqual(
+                blob.count(b"\n") - blob.count(b"\r\n"),
+                0,
+                msg=f"{script_name} should not keep bare LF in the indexed blob",
+            )
 
     def test_start_bat_comparison_workflow_offers_resume_action_for_unfinished_run(self):
         temp_root = Path(__file__).resolve().parent / ".codex_tmp"
