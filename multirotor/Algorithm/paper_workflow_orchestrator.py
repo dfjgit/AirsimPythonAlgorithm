@@ -111,6 +111,17 @@ class PaperWorkflowOrchestrator:
         save_workflow_state(exp_root, state)
         return state
 
+    def _interrupt_step(self, exp_root: Path, phase: str, reason: str | None = None) -> dict:
+        state = load_workflow_state(exp_root)
+        state["current_phase"] = phase
+        state["status"] = "interrupted"
+        step_state = state.setdefault("steps", {}).setdefault(phase, {})
+        step_state["status"] = "interrupted"
+        if reason:
+            step_state["error"] = str(reason)
+        save_workflow_state(exp_root, state)
+        return state
+
     def _complete_step(self, exp_root: Path, phase: str, *, recommendations=None) -> dict:
         state = load_workflow_state(exp_root)
         state["current_phase"] = phase
@@ -125,6 +136,9 @@ class PaperWorkflowOrchestrator:
         self._mark_step(exp_root, phase, "running")
         try:
             exit_code = self.command_runner(command, cwd=self.workspace_root)
+        except KeyboardInterrupt as exc:
+            self._interrupt_step(exp_root, phase, exc)
+            raise
         except Exception as exc:
             self._fail_step(exp_root, phase, exc)
             raise
@@ -134,6 +148,9 @@ class PaperWorkflowOrchestrator:
         if archive_kwargs:
             try:
                 archive_outputs = self.archive_runner(self.workspace_root, exp_root, **archive_kwargs)
+            except KeyboardInterrupt as exc:
+                self._interrupt_step(exp_root, phase, exc)
+                raise
             except Exception as exc:
                 self._fail_step(exp_root, phase, exc)
                 raise
@@ -197,6 +214,9 @@ class PaperWorkflowOrchestrator:
         self._mark_step(exp_root, "stage02_decision", "running")
         try:
             recommendations = self.recommendation_runner()
+        except KeyboardInterrupt as exc:
+            self._interrupt_step(exp_root, "stage02_decision", exc)
+            raise
         except Exception as exc:
             self._fail_step(exp_root, "stage02_decision", exc)
             raise
@@ -235,6 +255,9 @@ class PaperWorkflowOrchestrator:
             self._mark_step(exp_root, "two_stage_analysis", "running")
             try:
                 analysis_outputs = self.two_stage_analysis_runner(exp_root, refine_mode=refine_mode)
+            except KeyboardInterrupt as exc:
+                self._interrupt_step(exp_root, "two_stage_analysis", exc)
+                raise
             except Exception as exc:
                 self._fail_step(exp_root, "two_stage_analysis", exc)
                 raise
@@ -251,6 +274,9 @@ class PaperWorkflowOrchestrator:
         self._mark_step(exp_root, "real_weighted_refine_decision", "running")
         try:
             recommendation = self.two_stage_recommendation_runner(summary_csv)
+        except KeyboardInterrupt as exc:
+            self._interrupt_step(exp_root, "real_weighted_refine_decision", exc)
+            raise
         except Exception as exc:
             self._fail_step(exp_root, "real_weighted_refine_decision", exc)
             raise

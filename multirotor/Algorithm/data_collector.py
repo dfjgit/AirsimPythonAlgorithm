@@ -186,12 +186,12 @@ class DataCollector:
                 training_csv_filename = data_path / f"{self.training_prefix}_training_{timestamp}.csv"
             
             # 打开 scan_data CSV 文件（表头将在第一次采集数据时写入）
-            self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8')
+            self.csv_file = open(csv_filename, 'w', newline='', encoding='utf-8-sig')
             self.csv_writer = csv.writer(self.csv_file)
             self.csv_filename = csv_filename
             
             # 打开 training CSV 文件并写入表头
-            self.training_csv_file = open(training_csv_filename, 'w', newline='', encoding='utf-8')
+            self.training_csv_file = open(training_csv_filename, 'w', newline='', encoding='utf-8-sig')
             self.training_csv_writer = csv.writer(self.training_csv_file)
             self.training_csv_filename = training_csv_filename
 
@@ -205,7 +205,7 @@ class DataCollector:
                 interrupted_training_csv_filename = (
                     interrupted_dir / f"{self.training_prefix}_training_interrupted_{timestamp}.csv"
                 )
-            self.interrupted_training_csv_file = open(interrupted_training_csv_filename, 'w', newline='', encoding='utf-8')
+            self.interrupted_training_csv_file = open(interrupted_training_csv_filename, 'w', newline='', encoding='utf-8-sig')
             self.interrupted_training_csv_writer = csv.writer(self.interrupted_training_csv_file)
             self.interrupted_training_csv_filename = interrupted_training_csv_filename
                     

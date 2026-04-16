@@ -1,3 +1,4 @@
+import codecs
 import csv
 import os
 import shutil
@@ -61,6 +62,30 @@ class DataCollectorBenchmarkMetadataTests(unittest.TestCase):
             )
         finally:
             self._close_collector_files(collector)
+
+    def test_csv_outputs_include_utf8_bom_for_windows_friendly_chinese_text(self):
+        collector = DataCollector(data_dir=str(self.root))
+        try:
+            collector.csv_writer.writerow(["episode", "reset_reason"])
+            collector.csv_writer.writerow([1, "达到时长上限"])
+            collector.csv_file.flush()
+
+            for path in (
+                collector.csv_filename,
+                collector.training_csv_filename,
+                collector.interrupted_training_csv_filename,
+            ):
+                self.assertTrue(
+                    path.read_bytes().startswith(codecs.BOM_UTF8),
+                    msg=f"{path.name} should start with UTF-8 BOM",
+                )
+
+            with collector.csv_filename.open("r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+        finally:
+            self._close_collector_files(collector)
+
+        self.assertEqual(rows[0]["reset_reason"], "达到时长上限")
 
     def test_stop_routes_interrupted_episode_to_diagnostics_not_training_csv(self):
         collector = DataCollector(data_dir=str(self.root))

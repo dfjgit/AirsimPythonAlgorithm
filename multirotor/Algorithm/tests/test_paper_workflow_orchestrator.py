@@ -119,6 +119,23 @@ class PaperWorkflowOrchestratorTests(unittest.TestCase):
         archive_runner.assert_not_called()
         recommendation_runner.assert_not_called()
 
+    def test_keyboard_interrupt_marks_workflow_as_interrupted(self):
+        command_runner = Mock(side_effect=KeyboardInterrupt())
+        archive_runner = Mock()
+        recommendation_runner = Mock(return_value={})
+        orchestrator = self._create_orchestrator(command_runner, archive_runner, recommendation_runner)
+        exp_root = orchestrator.create_or_resume_experiment(workflow_type="comparison", alias="main-run")
+
+        with self.assertRaises(KeyboardInterrupt):
+            orchestrator.run_comparison_workflow(exp_root)
+
+        state = orchestrator.load_state(exp_root)
+        self.assertEqual(state["status"], "interrupted")
+        self.assertEqual(state["current_phase"], "apf_baseline_sim")
+        self.assertEqual(state["steps"]["apf_baseline_sim"]["status"], "interrupted")
+        archive_runner.assert_not_called()
+        recommendation_runner.assert_not_called()
+
     def test_archive_failure_marks_workflow_as_failed(self):
         command_runner = Mock(return_value=0)
         archive_runner = Mock(side_effect=ValueError("archive failure"))
